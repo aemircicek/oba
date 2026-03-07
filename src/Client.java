@@ -6,7 +6,7 @@ import java.net.Socket;
 public class Client {
     public static void main(String[] args) {
     	
-        String host = "10.0.2.15";
+        String host = "192.168.1.3";
         int port = 5000;
 
         try (Socket socket = new Socket(host, port)) {
