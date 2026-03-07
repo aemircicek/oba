@@ -2,6 +2,8 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 
 public class Client {
     public static void main(String[] args) {
@@ -31,7 +33,7 @@ public class Client {
                     while ((message = in.readLine()) != null) {
                         try {
                         	String decryptedMessage = CryptoUtils.decrypt(message);
-                        	System.out.println("Server: " + decryptedMessage);
+                        	System.out.println(decryptedMessage);
                         } catch (Exception e) {
                         	System.out.println("Received invalid encrypted message.");
                         }
@@ -46,7 +48,8 @@ public class Client {
             String clientMessage;
             while ((clientMessage = keyboard.readLine()) != null) {
                 try {
-                	String fullMessage = username + ": " + clientMessage;
+                	String time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH.mm"));
+                	String fullMessage = "[" + time + "] "  + username + ": " + clientMessage;
                 	String encryptedMessage = CryptoUtils.encrypt(fullMessage);
                 	out.println(encryptedMessage);
                 } catch (Exception e) {
