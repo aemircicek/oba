@@ -58,7 +58,6 @@ public class Client {
                 	String fullMessage = "[" + time + "] "  + username + ": " + clientMessage;
                 	String encryptedMessage = CryptoUtils.encrypt(fullMessage);
                 	out.println(encryptedMessage);
-                	System.out.println("[" + time + "] + you:" + clientMessage);
                 } catch (Exception e) {
                 	System.out.println("Encryption error: " + e.getMessage());
                 }

@@ -60,7 +60,6 @@ public class Server {
                         String fullMessage = "[" + time + "] " + "[host] " + serverUsername + ": " + serverMessage;
                         String encryptedMessage = CryptoUtils.encrypt(fullMessage);
                         out.println(encryptedMessage);
-                        System.out.println("[" + time + "] you: " + serverMessage);
                     } catch (Exception e) {
                         System.out.println("Encryption error: " + e.getMessage());
                     }
