@@ -53,7 +53,7 @@ public class Server {
                 while ((serverMessage = keyboard.readLine()) != null) {
                     try {
                         String time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
-                        String fullMessage = "[" + time + "] " + serverUsername + ": " + serverMessage;
+                        String fullMessage = "[" + time + "] " + "[host]" + serverUsername + ": " + serverMessage;
                         String encryptedMessage = CryptoUtils.encrypt(fullMessage);
                         out.println(encryptedMessage);
                     } catch (Exception e) {
