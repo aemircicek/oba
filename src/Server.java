@@ -17,6 +17,10 @@ public class Server {
 
             System.out.print("Enter server username: ");
             String serverUsername = keyboard.readLine();
+            if (serverUsername.equalsIgnoreCase("admin") || serverUsername.equalsIgnoreCase("you")) {
+            	System.out.println("Username cannot be 'admin' or 'you'!");
+            	return;
+            }
 
             try (ServerSocket serverSocket = new ServerSocket(port)) {
                 System.out.println("Server started on port " + port);
@@ -53,9 +57,10 @@ public class Server {
                 while ((serverMessage = keyboard.readLine()) != null) {
                     try {
                         String time = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
-                        String fullMessage = "[" + time + "] " + "[host]" + serverUsername + ": " + serverMessage;
+                        String fullMessage = "[" + time + "] " + "[host] " + serverUsername + ": " + serverMessage;
                         String encryptedMessage = CryptoUtils.encrypt(fullMessage);
                         out.println(encryptedMessage);
+                        System.out.println("[" + time + "] you: " + serverMessage);
                     } catch (Exception e) {
                         System.out.println("Encryption error: " + e.getMessage());
                     }

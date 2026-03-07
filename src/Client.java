@@ -26,6 +26,10 @@ public class Client {
 			
 			    	System.out.println("Enter username: ");
 			    	String username = keyboard.readLine();
+			    	if (username.equalsIgnoreCase("admin") || username.equalsIgnoreCase("you")) {
+			    		System.out.println("Username cannot be 'admin' or  'you'!");
+			    		return;
+			    	}
 
             Thread receiveThread = new Thread(() -> {
                 try {
@@ -33,7 +37,9 @@ public class Client {
                     while ((message = in.readLine()) != null) {
                         try {
                         	String decryptedMessage = CryptoUtils.decrypt(message);
-                        	System.out.println(decryptedMessage);
+                        	if (!decryptedMessage.contains(username  + ":")) {
+                        		System.out.println(decryptedMessage);
+                        	}
                         } catch (Exception e) {
                         	System.out.println("Received invalid encrypted message.");
                         }
@@ -52,6 +58,7 @@ public class Client {
                 	String fullMessage = "[" + time + "] "  + username + ": " + clientMessage;
                 	String encryptedMessage = CryptoUtils.encrypt(fullMessage);
                 	out.println(encryptedMessage);
+                	System.out.println("[" + time + "] + you:" + clientMessage);
                 } catch (Exception e) {
                 	System.out.println("Encryption error: " + e.getMessage());
                 }
