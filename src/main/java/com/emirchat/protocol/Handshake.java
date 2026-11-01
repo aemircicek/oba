@@ -93,7 +93,7 @@ public final class Handshake {
 
             keys.finish(serverAuth, clientAuth);
             return new Session(new SecureChannel(io, keys.traffic("app c2s"), keys.traffic("app s2c")),
-                    server.name, server.fingerprint);
+                    server.name, server.fingerprint, server.key);
         } finally {
             keys.destroy();
         }
@@ -122,7 +122,7 @@ public final class Handshake {
 
             keys.finish(serverAuth, clientAuth);
             return new Session(new SecureChannel(io, keys.traffic("app s2c"), keys.traffic("app c2s")),
-                    client.name, client.fingerprint);
+                    client.name, client.fingerprint, client.key);
         } finally {
             keys.destroy();
         }
@@ -152,7 +152,7 @@ public final class Handshake {
         return new Wire.Writer().string(name).bytes(key).bytes(signature).toByteArray();
     }
 
-    private record Peer(String name, String fingerprint) {}
+    private record Peer(String name, String fingerprint, byte[] key) {}
 
     private static Peer parseAuth(byte[] message, byte[] context, byte[] transcript) throws ProtocolException {
         Wire.Reader r = new Wire.Reader(message);
@@ -164,7 +164,7 @@ public final class Handshake {
         if (!Identity.verify(key, signedData(context, transcript, name, key), signature)) {
             throw new SecurityException("Peer's handshake signature is invalid");
         }
-        return new Peer(name, Identity.fingerprint(key));
+        return new Peer(name, Identity.fingerprint(key), key);
     }
 
     private static byte[] signedData(byte[] context, byte[] transcript, String name, byte[] key) {

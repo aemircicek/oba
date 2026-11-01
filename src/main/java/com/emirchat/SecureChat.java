@@ -33,14 +33,16 @@ public final class SecureChat {
             "Options:",
             "  --home <dir>   key and known-peers directory (default: ~/.securechat)",
             "",
-            "Type " + ChatSession.QUIT_COMMAND + " to leave a chat.");
+            "Type " + ChatSession.QUIT_COMMAND + " to leave a chat.",
+            "",
+            AccountCli.USAGE);
 
     private SecureChat() {}
 
     public static void main(String[] args) {
         int code;
         try {
-            code = run(args);
+            code = AccountCli.handles(args[0]) ? AccountCli.run(args) : run(args);
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
             System.err.println();
@@ -141,7 +143,7 @@ public final class SecureChat {
                     case "--name" -> name = value(args, ++i, a);
                     case "--bind" -> bind = value(args, ++i, a);
                     case "--home" -> home = Path.of(value(args, ++i, a));
-                    case "--port" -> port = port(value(args, ++i, a));
+                    case "--port" -> port = parsePort(value(args, ++i, a));
                     default -> {
                         if (a.startsWith("--")) throw new IllegalArgumentException("Unknown option: " + a);
                         positional.add(a);
@@ -175,7 +177,7 @@ public final class SecureChat {
             return args[i];
         }
 
-        private static int port(String s) {
+        static int parsePort(String s) {
             try {
                 int p = Integer.parseInt(s);
                 if (p < 1 || p > 65535) throw new NumberFormatException();
