@@ -136,3 +136,7 @@ Honest notes on what this project does **not** do:
 ## Security
 
 See [SECURITY.md](SECURITY.md) for how to report a vulnerability.
+
+## License
+
+[MIT](LICENSE) © 2026 Emir Çiçek
