@@ -281,3 +281,98 @@
 }
 
 .empty-state .label { -fx-text-fill: -sc-text-3; }
+
+/* ================================================================== account app (v3) */
+
+.sidebar {
+    -fx-background-color: -sc-surface;
+    -fx-border-color: transparent -sc-border transparent transparent;
+    -fx-min-width: 300; -fx-pref-width: 300; -fx-max-width: 300;
+}
+.sidebar-header { -fx-padding: 14 14 10 14; -fx-spacing: 10; }
+.sidebar-section { -fx-padding: 0 14 10 14; -fx-spacing: 8; }
+.me-name { -fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
+
+.list-row {
+    -fx-padding: 9 14;
+    -fx-spacing: 11;
+    -fx-background-color: transparent;
+    -fx-cursor: hand;
+}
+.list-row:hover { -fx-background-color: -sc-surface-2; }
+.list-row.selected { -fx-background-color: -sc-accent-weak; }
+.row-title { -fx-font-size: 13.5px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
+.row-sub { -fx-font-size: 12px; -fx-text-fill: -sc-text-2; }
+.row-time { -fx-font-size: 11px; -fx-text-fill: -sc-text-3; }
+.list-heading { -fx-padding: 12 14 4 14; }
+
+.unread-badge {
+    -fx-background-color: -sc-accent;
+    -fx-text-fill: -sc-on-accent;
+    -fx-background-radius: 999;
+    -fx-font-size: 10.5px;
+    -fx-font-weight: bold;
+    -fx-padding: 1 6;
+    -fx-min-width: 18;
+    -fx-alignment: center;
+}
+
+.presence-dot { -fx-background-radius: 999; -fx-min-width: 11; -fx-min-height: 11; -fx-max-width: 11; -fx-max-height: 11;
+    -fx-border-color: -sc-surface; -fx-border-width: 2; -fx-border-radius: 999; }
+.presence-dot.online { -fx-background-color: -sc-accent; }
+.presence-dot.offline { -fx-background-color: -sc-text-3; }
+
+.avatar-sm { -fx-background-radius: 999; -fx-min-width: 40; -fx-min-height: 40; -fx-max-width: 40; -fx-max-height: 40; }
+.avatar-sm .avatar-letter { -fx-font-size: 15px; }
+.avatar-xs { -fx-background-radius: 999; -fx-min-width: 30; -fx-min-height: 30; -fx-max-width: 30; -fx-max-height: 30; }
+.avatar-xs .avatar-letter { -fx-font-size: 12px; }
+
+.button.small { -fx-padding: 6 10; -fx-font-size: 12px; -fx-background-radius: 8; }
+.button.small.primary { -fx-padding: 6 12; -fx-font-size: 12px; }
+
+.content-empty .h2 { -fx-text-fill: -sc-text-2; }
+
+.badge-verified { -fx-text-fill: -sc-accent-text; -fx-font-size: 11.5px; -fx-font-weight: bold; }
+.badge-unverified { -fx-text-fill: -sc-warning; -fx-font-size: 11.5px; -fx-font-weight: bold; -fx-cursor: hand; }
+.badge-unverified:hover { -fx-underline: true; }
+
+.banner-danger {
+    -fx-background-color: -sc-danger-weak;
+    -fx-padding: 10 16;
+    -fx-spacing: 10;
+    -fx-border-color: transparent transparent -sc-border transparent;
+}
+.banner-danger .label { -fx-text-fill: -sc-danger; -fx-font-size: 12.5px; }
+
+.sender-name { -fx-font-size: 11.5px; -fx-font-weight: bold; -fx-padding: 0 0 2 4; }
+.bubble-status { -fx-font-size: 10px; }
+.bubble.own .bubble-status { -fx-text-fill: -sc-own-time; }
+.bubble.own .bubble-status.failed { -fx-text-fill: #ffd2cf; }
+
+.overlay { -fx-background-color: rgba(0, 0, 0, 0.45); }
+.dialog {
+    -fx-background-color: -sc-surface;
+    -fx-background-radius: 16;
+    -fx-padding: 24;
+    -fx-spacing: 16;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.35), 30, 0, 0, 8);
+    -fx-max-width: 440;
+}
+
+.check-box { -fx-text-fill: -sc-text; }
+.check-box .box { -fx-background-color: -sc-surface-2; -fx-border-color: -sc-border; -fx-border-radius: 4; -fx-background-radius: 4; }
+.check-box:selected .box { -fx-background-color: -sc-accent; -fx-border-color: -sc-accent; }
+.check-box:selected .mark { -fx-background-color: -sc-on-accent; }
+
+
+.combo-box {
+    -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 8;
+    -fx-border-color: -sc-border;
+    -fx-border-radius: 8;
+}
+.combo-box .list-cell { -fx-text-fill: -sc-text; -fx-background-color: transparent; }
+.combo-box .arrow { -fx-background-color: -sc-text-2; }
+.combo-box-popup .list-view { -fx-background-color: -sc-surface; -fx-border-color: -sc-border; }
+.combo-box-popup .list-cell { -fx-background-color: -sc-surface; -fx-text-fill: -sc-text; -fx-padding: 6 10; }
+.combo-box-popup .list-cell:hover { -fx-background-color: -sc-surface-2; }

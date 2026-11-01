@@ -12,7 +12,7 @@ import javafx.stage.Stage;
 /** The desktop application. */
 public final class SecureChatApp extends Application {
     private static volatile Path home;
-    private AppController controller;
+    private AppShell shell;
 
     /** Launches the app with keys and known peers stored in {@code homeDirectory}. */
     public static void launchWith(Path homeDirectory) {
@@ -24,15 +24,15 @@ public final class SecureChatApp extends Application {
     public void start(Stage stage) {
         StackPane root = new StackPane();
         Theme.install(root);
-        Scene scene = new Scene(root, 460, 760);
+        Scene scene = new Scene(root, 1040, 720);
 
         stage.setTitle("secure-chat");
-        stage.setMinWidth(400);
+        stage.setMinWidth(420);
         stage.setMinHeight(620);
         stage.setScene(scene);
         try {
-            controller = new AppController(root, home != null ? home : defaultHome());
-            controller.showStart(null);
+            shell = new AppShell(root, home != null ? home : defaultHome());
+            shell.showLogin(null);
         } catch (IOException e) {
             Label error = new Label("Could not load your identity key:\n" + e.getMessage());
             error.getStyleClass().addAll("notice", "error");
@@ -40,7 +40,7 @@ public final class SecureChatApp extends Application {
             root.getChildren().setAll(error);
         }
         stage.setOnCloseRequest(e -> {
-            if (controller != null) controller.shutdown();
+            if (shell != null) shell.shutdown();
             Platform.exit();
         });
         stage.show();
@@ -48,7 +48,7 @@ public final class SecureChatApp extends Application {
 
     @Override
     public void stop() {
-        if (controller != null) controller.shutdown();
+        if (shell != null) shell.shutdown();
     }
 
     private static Path defaultHome() {

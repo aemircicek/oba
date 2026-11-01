@@ -17,6 +17,10 @@ final class Prefs {
         this.node = Preferences.userNodeForPackage(Prefs.class).node(key);
     }
 
+    Preferences node() {
+        return node;
+    }
+
     Saved load() {
         return new Saved(node.get("name", ""), node.get("host", ""),
                 node.getInt("port", Connector.DEFAULT_PORT), node.getBoolean("joining", false));

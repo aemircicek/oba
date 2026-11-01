@@ -67,6 +67,9 @@ public final class ChatClient implements AutoCloseable {
     private final com.emirchat.e2e.GroupKeys groupKeys;
     private final Map<Long, Packet.GroupInfo> groups = new ConcurrentHashMap<>();
     private final Map<String, byte[]> memberKeys = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> online = new ConcurrentHashMap<>();
+    private volatile Packet.FriendList lastFriends = new Packet.FriendList(List.of(), List.of(), List.of());
+    private Path dataDir;
     private final KnownPeers contacts;
     private final String username;
     private final Map<String, byte[]> friendKeys = new ConcurrentHashMap<>();
@@ -106,6 +109,8 @@ public final class ChatClient implements AutoCloseable {
         ChatClient client = new ChatClient(connection, messenger, new com.emirchat.e2e.GroupKeys(dir.resolve("e2e")),
                 contacts, loggedIn.username());
         client.listener = listener;
+        client.dataDir = dir;
+        client.deviceKey = device.publicKeyBytes();
         connection.onPush(p -> client.inbox.execute(() -> client.onPush(p)));
         connection.onClosed(() -> {
             if (!client.closing) client.inbox.execute(() -> client.listener.disconnected());
@@ -146,8 +151,72 @@ public final class ChatClient implements AutoCloseable {
 
     public Packet.FriendList refreshFriends() throws IOException, ApiException {
         Packet.FriendList list = connection.listFriends();
-        for (Packet.Friend f : list.friends()) friendKeys.put(f.username(), f.identityKey());
+        for (Packet.Friend f : list.friends()) {
+            friendKeys.put(f.username(), f.identityKey());
+            online.put(f.username(), f.online());
+        }
+        lastFriends = list;
         return list;
+    }
+
+    /** The friend list as of the last refresh (cheap, no network). */
+    public Packet.FriendList friends() {
+        return lastFriends;
+    }
+
+    public boolean isOnline(String user) {
+        return online.getOrDefault(user, false);
+    }
+
+    private byte[] deviceKey;
+
+    /** This device's Ed25519 identity public key (what friends verify). */
+    public byte[] deviceKey() {
+        return deviceKey.clone();
+    }
+
+    /** This account's local data directory (history, keys, sessions). */
+    public Path dataDir() {
+        return dataDir;
+    }
+
+    /** The key the server currently reports for a friend or group member, or null. */
+    public String currentFingerprint(String user) {
+        byte[] key = knownKey(user);
+        return key == null ? null : Identity.fingerprint(key);
+    }
+
+    /** True if the server now reports a different key than the one pinned for this user. */
+    public boolean keyChanged(String user) {
+        String pinned = contacts.fingerprint(user);
+        String current = currentFingerprint(user);
+        return pinned != null && current != null && !pinned.equals(current);
+    }
+
+    /** True if the user compared fingerprints with this contact and confirmed the currently pinned key. */
+    public boolean isVerified(String user) {
+        String pinned = contacts.fingerprint(user);
+        if (pinned == null) return false;
+        try {
+            Path file = dataDir.resolve("verified");
+            return Files.exists(file) && Files.readAllLines(file).contains(user + " " + pinned);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Records that the user verified this contact out-of-band. Pins the current key first if
+     * nothing was pinned yet; refuses if the key changed (use {@link #trustNewKey}).
+     */
+    public void markVerified(String user) throws IOException, ApiException, KeyChangedException {
+        pinnedKey(user); // pins on first use, throws if changed
+        String line = user + " " + contacts.fingerprint(user);
+        Path file = dataDir.resolve("verified");
+        List<String> lines = Files.exists(file) ? new ArrayList<>(Files.readAllLines(file)) : new ArrayList<>();
+        lines.removeIf(l -> l.startsWith(user + " "));
+        lines.add(line);
+        Files.write(file, lines);
     }
 
     /** Encrypts and sends a text message to a friend. */
@@ -307,12 +376,17 @@ public final class ChatClient implements AutoCloseable {
             case Packet.EnvelopeDelivered d -> listener.delivered(d.id());
             case Packet.FriendAdded a -> {
                 friendKeys.put(a.friend().username(), a.friend().identityKey());
+                online.put(a.friend().username(), a.friend().online());
                 listener.push(packet);
             }
             case Packet.IdentityKeyChanged k -> {
                 friendKeys.put(k.username(), k.identityKey());
                 memberKeys.computeIfPresent(k.username(), (u, old) -> k.identityKey());
                 listener.keyChanged(k.username());
+            }
+            case Packet.PresenceChanged p -> {
+                online.put(p.username(), p.online());
+                listener.push(packet);
             }
             case Packet.GroupUpdated g -> groupChanged(g.group());
             case Packet.GroupRemoved g -> {
