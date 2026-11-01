@@ -16,7 +16,9 @@ public enum ErrorCode {
     NOT_FRIENDS(12),
     INVALID_REQUEST(13),
     LIMIT_REACHED(14),
-    NO_KEYS(15);
+    NO_KEYS(15),
+    GROUP_NOT_FOUND(16),
+    NOT_GROUP_ADMIN(17);
 
     final int code;
 

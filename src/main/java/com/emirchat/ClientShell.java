@@ -25,6 +25,10 @@ final class ClientShell {
             "  add <user>         send a friend request",
             "  accept <user>      accept a request        decline <user>   decline a request",
             "  remove <user>      unfriend / cancel your request",
+            "  groups             list your groups        gmsg <id> <text>  message a group",
+            "  group <name> <user,user,...>   create a group with friends",
+            "  gadd <id> <user>   add a friend (admin)    gremove <id> <user>  remove a member (admin)",
+            "  gleave <id>        leave a group",
             "  verify <user>      show the fingerprint to compare with your friend",
             "  trust <user>       accept a friend's new key after verifying it",
             "  help               this list               quit             leave");
@@ -72,6 +76,41 @@ final class ClientShell {
                         client.connection().removeFriend(arg);
                         System.out.println("Removed " + arg + ".");
                     }
+                    case "groups" -> {
+                        if (client.refreshGroups().isEmpty()) System.out.println("No groups yet.");
+                        for (Packet.GroupInfo g : client.groups()) {
+                            System.out.printf("  #%d %s (admin: %s) — %s%n", g.id(), g.name(), g.owner(),
+                                    String.join(", ", g.members().stream().map(Packet.Member::username).toList()));
+                        }
+                    }
+                    case "group" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: group <name> <user,user,...>");
+                        } else {
+                            Packet.GroupInfo g = client.createGroup(arg, java.util.List.of(parts[2].split("\\s*,\\s*")));
+                            System.out.println("Created group #" + g.id() + " " + g.name() + ".");
+                        }
+                    }
+                    case "gmsg" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: gmsg <id> <text>");
+                        } else {
+                            var skipped = client.sendGroupText(Long.parseLong(arg), parts[2]);
+                            if (!skipped.isEmpty()) System.out.println("! Not delivered to (unverified key): " + skipped);
+                        }
+                    }
+                    case "gadd" -> {
+                        String[] a = (parts.length > 2 ? arg + " " + parts[2] : arg).split("\\s+");
+                        client.addGroupMember(Long.parseLong(a[0]), a[1]);
+                    }
+                    case "gremove" -> {
+                        String[] a = (parts.length > 2 ? arg + " " + parts[2] : arg).split("\\s+");
+                        client.removeGroupMember(Long.parseLong(a[0]), a[1]);
+                    }
+                    case "gleave" -> {
+                        client.leaveGroup(Long.parseLong(arg));
+                        System.out.println("Left the group.");
+                    }
                     case "verify" -> {
                         String fp = client.pinnedFingerprint(arg);
                         System.out.println(fp == null ? "No key pinned for " + arg + " yet (send them a message first)."
@@ -94,6 +133,8 @@ final class ClientShell {
                 System.out.println("! " + e.getMessage());
             } catch (IOException e) {
                 System.out.println("! " + e.getMessage());
+            } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
+                System.out.println("! Check the command format (type help).");
             }
         }
         client.close();
@@ -121,6 +162,19 @@ final class ClientShell {
     private static final class Printer implements ChatClient.Listener {
         @Override public void message(String from, ChatMessage m, long id) {
             show("[" + TIME.format(Instant.ofEpochMilli(m.sentAtMillis())) + "] " + from + ": " + m.text());
+        }
+
+        @Override public void groupMessage(long groupId, String from, ChatMessage m, long id) {
+            show("[" + TIME.format(Instant.ofEpochMilli(m.sentAtMillis())) + "] #" + groupId + " " + from + ": " + m.text());
+        }
+
+        @Override public void groupUpdated(Packet.GroupInfo g) {
+            show("Group #" + g.id() + " " + g.name() + ": " + String.join(", ",
+                    g.members().stream().map(Packet.Member::username).toList()));
+        }
+
+        @Override public void groupRemoved(long groupId) {
+            show("You are no longer in group #" + groupId + ".");
         }
 
         @Override public void undecryptable(String from, String reason) {

@@ -16,7 +16,7 @@ import java.util.Optional;
  * synchronized: one connection, serialised writes, which is plenty for a self-hosted server.
  */
 final class Database implements AutoCloseable {
-    private static final int SCHEMA_VERSION = 3;
+    private static final int SCHEMA_VERSION = 4;
 
     record User(long id, String username, PasswordHasher.Hash password, byte[] identityKey) {}
 
@@ -110,13 +110,147 @@ final class Database implements AutoCloseable {
                 s.execute("PRAGMA user_version = 3");
             }
         }
+        if (version < 4) {
+            try (Statement s = connection.createStatement()) {
+                s.execute("""
+                        CREATE TABLE groups_ (
+                            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name       TEXT    NOT NULL,
+                            owner_id   INTEGER NOT NULL REFERENCES users(id),
+                            created_at INTEGER NOT NULL
+                        )""");
+                s.execute("""
+                        CREATE TABLE group_members (
+                            group_id  INTEGER NOT NULL REFERENCES groups_(id) ON DELETE CASCADE,
+                            user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            joined_at INTEGER NOT NULL,
+                            PRIMARY KEY (group_id, user_id)
+                        )""");
+                s.execute("CREATE INDEX group_members_user ON group_members(user_id)");
+                s.execute("ALTER TABLE envelopes ADD COLUMN group_id INTEGER NOT NULL DEFAULT 0");
+                s.execute("PRAGMA user_version = 4");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ groups
+
+    record Group(long id, String name, long ownerId) {}
+
+    synchronized long createGroup(String name, long ownerId, List<Long> members) throws SQLException {
+        boolean auto = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            long id;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO groups_ (name, owner_id, created_at) VALUES (?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+                ps.setString(1, name);
+                ps.setLong(2, ownerId);
+                ps.setLong(3, System.currentTimeMillis());
+                ps.executeUpdate();
+                try (ResultSet keys = ps.getGeneratedKeys()) {
+                    keys.next();
+                    id = keys.getLong(1);
+                }
+            }
+            for (long m : members) insertMember(id, m);
+            connection.commit();
+            return id;
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(auto);
+        }
+    }
+
+    private void insertMember(long groupId, long userId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT OR IGNORE INTO group_members (group_id, user_id, joined_at) VALUES (?, ?, ?)")) {
+            ps.setLong(1, groupId);
+            ps.setLong(2, userId);
+            ps.setLong(3, System.currentTimeMillis());
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized void addMember(long groupId, long userId) throws SQLException {
+        insertMember(groupId, userId);
+    }
+
+    synchronized void removeMember(long groupId, long userId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM group_members WHERE group_id = ? AND user_id = ?")) {
+            ps.setLong(1, groupId);
+            ps.setLong(2, userId);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized void setOwner(long groupId, long ownerId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE groups_ SET owner_id = ? WHERE id = ?")) {
+            ps.setLong(1, ownerId);
+            ps.setLong(2, groupId);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized void deleteGroup(long groupId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM groups_ WHERE id = ?")) {
+            ps.setLong(1, groupId);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized Optional<Group> group(long groupId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT id, name, owner_id FROM groups_ WHERE id = ?")) {
+            ps.setLong(1, groupId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(new Group(rs.getLong(1), rs.getString(2), rs.getLong(3))) : Optional.empty();
+            }
+        }
+    }
+
+    /** Members ordered by join time (oldest first). */
+    synchronized List<User> members(long groupId) throws SQLException {
+        List<User> result = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT u.id, u.username, u.identity_key FROM group_members m JOIN users u ON u.id = m.user_id "
+                        + "WHERE m.group_id = ? ORDER BY m.joined_at, u.id")) {
+            ps.setLong(1, groupId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) result.add(new User(rs.getLong(1), rs.getString(2), null, rs.getBytes(3)));
+            }
+        }
+        return result;
+    }
+
+    synchronized List<Long> groupsOf(long userId) throws SQLException {
+        List<Long> result = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT group_id FROM group_members WHERE user_id = ? ORDER BY group_id")) {
+            ps.setLong(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) result.add(rs.getLong(1));
+            }
+        }
+        return result;
+    }
+
+    synchronized boolean isMember(long groupId, long userId) throws SQLException {
+        return exists("SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?", groupId, userId);
+    }
+
+    synchronized boolean shareAGroup(long a, long b) throws SQLException {
+        return exists("SELECT 1 FROM group_members x JOIN group_members y ON x.group_id = y.group_id "
+                + "WHERE x.user_id = ? AND y.user_id = ? LIMIT 1", a, b);
     }
 
     // ------------------------------------------------------------------ keys and envelopes
 
     record DeviceKeysRow(byte[] dhIdentity, byte[] dhSig, int spkId, byte[] spk, byte[] spkSig) {}
 
-    record QueuedEnvelope(long id, long senderId, String sender, long sentAt, byte[] body) {}
+    record QueuedEnvelope(long id, long senderId, String sender, long groupId, long sentAt, byte[] body) {}
 
     synchronized void putDeviceKeys(long userId, DeviceKeysRow k) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
@@ -192,14 +326,16 @@ final class Database implements AutoCloseable {
         }
     }
 
-    synchronized long queueEnvelope(long recipientId, long senderId, long sentAt, byte[] body) throws SQLException {
+    synchronized long queueEnvelope(long recipientId, long senderId, long groupId, long sentAt, byte[] body)
+            throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO envelopes (recipient_id, sender_id, sent_at, body) VALUES (?, ?, ?, ?)",
+                "INSERT INTO envelopes (recipient_id, sender_id, group_id, sent_at, body) VALUES (?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, recipientId);
             ps.setLong(2, senderId);
-            ps.setLong(3, sentAt);
-            ps.setBytes(4, body);
+            ps.setLong(3, groupId);
+            ps.setLong(4, sentAt);
+            ps.setBytes(5, body);
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 keys.next();
@@ -215,13 +351,14 @@ final class Database implements AutoCloseable {
     synchronized List<QueuedEnvelope> queuedFor(long recipientId, int limit) throws SQLException {
         List<QueuedEnvelope> result = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT e.id, e.sender_id, u.username, e.sent_at, e.body FROM envelopes e JOIN users u ON u.id = e.sender_id "
+                "SELECT e.id, e.sender_id, u.username, e.group_id, e.sent_at, e.body FROM envelopes e JOIN users u ON u.id = e.sender_id "
                         + "WHERE e.recipient_id = ? ORDER BY e.id LIMIT ?")) {
             ps.setLong(1, recipientId);
             ps.setInt(2, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    result.add(new QueuedEnvelope(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getLong(4), rs.getBytes(5)));
+                    result.add(new QueuedEnvelope(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getLong(4), rs.getLong(5),
+                            rs.getBytes(6)));
                 }
             }
         }

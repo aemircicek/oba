@@ -22,6 +22,8 @@ public sealed interface Packet {
     int MAX_ENVELOPE_BYTES = 40_000;
     int MAX_PREKEYS_PER_UPLOAD = 100;
     int MAX_ACKS = 500;
+    int MAX_GROUP_NAME_BYTES = 64;
+    int MAX_GROUP_MEMBERS = 100;
 
     /** A friend as the server describes it. */
     record Friend(String username, boolean online, byte[] identityKey) {
@@ -83,6 +85,21 @@ public sealed interface Packet {
     /** Asks the server to push every queued envelope; answered with PendingCount. */
     record FetchPending() implements Packet {}
 
+    record CreateGroup(String name, List<String> members) implements Packet {
+        public CreateGroup { members = List.copyOf(members); }
+    }
+
+    record AddGroupMember(long groupId, String username) implements Packet {}
+
+    record RemoveGroupMember(long groupId, String username) implements Packet {}
+
+    record LeaveGroup(long groupId) implements Packet {}
+
+    record ListGroups() implements Packet {}
+
+    /** One body for every member; the server fans it out (members other than the sender). */
+    record SendGroupEnvelope(long groupId, byte[] body) implements Packet {}
+
     record AckEnvelopes(List<Long> ids) implements Packet {
         public AckEnvelopes { ids = List.copyOf(ids); }
     }
@@ -118,9 +135,40 @@ public sealed interface Packet {
 
     record PendingCount(int count) implements Packet {}
 
+    record Member(String username, byte[] identityKey) {
+        public Member { identityKey = identityKey.clone(); }
+
+        @Override public byte[] identityKey() { return identityKey.clone(); }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof Member m && m.username.equals(username) && java.util.Arrays.equals(m.identityKey, identityKey);
+        }
+
+        @Override public int hashCode() { return username.hashCode(); }
+    }
+
+    record GroupInfo(long id, String name, String owner, List<Member> members) implements Packet {
+        public GroupInfo { members = List.copyOf(members); }
+
+        public boolean hasMember(String username) {
+            return members.stream().anyMatch(m -> m.username().equals(username));
+        }
+    }
+
+    record GroupList(List<GroupInfo> groups) implements Packet {
+        public GroupList { groups = List.copyOf(groups); }
+    }
+
     // ------------------------------------------------------------- pushes (server -> client, id 0)
 
-    record Envelope(long id, String sender, long sentAt, byte[] body) {}
+    /** Membership or name changed (or we were added). */
+    record GroupUpdated(GroupInfo group) implements Packet {}
+
+    /** We are no longer in the group (removed, or we left). */
+    record GroupRemoved(long groupId) implements Packet {}
+
+    /** @param groupId 0 for a direct message */
+    record Envelope(long id, String sender, long groupId, long sentAt, byte[] body) {}
 
     record EnvelopeReceived(Envelope envelope) implements Packet {}
 
@@ -176,6 +224,22 @@ public sealed interface Packet {
             case FetchBundle f -> w.u8(23).i64(requestId).string(f.username());
             case SendEnvelope s -> w.u8(24).i64(requestId).string(s.recipient()).bytes(s.body());
             case FetchPending f -> w.u8(25).i64(requestId);
+            case CreateGroup c -> {
+                w.u8(30).i64(requestId).string(c.name());
+                writeNames(w, c.members());
+            }
+            case AddGroupMember a -> w.u8(31).i64(requestId).i64(a.groupId()).string(a.username());
+            case RemoveGroupMember r -> w.u8(32).i64(requestId).i64(r.groupId()).string(r.username());
+            case LeaveGroup l -> w.u8(33).i64(requestId).i64(l.groupId());
+            case ListGroups l -> w.u8(34).i64(requestId);
+            case SendGroupEnvelope s -> w.u8(35).i64(requestId).i64(s.groupId()).bytes(s.body());
+            case GroupInfo g -> writeGroup(w.u8(116).i64(requestId), g);
+            case GroupList l -> {
+                w.u8(117).i64(requestId).u16(l.groups().size());
+                for (GroupInfo g : l.groups()) writeGroup(w, g);
+            }
+            case GroupUpdated g -> writeGroup(w.u8(127).i64(requestId), g.group());
+            case GroupRemoved g -> w.u8(128).i64(requestId).i64(g.groupId());
             case AckEnvelopes a -> {
                 w.u8(26).i64(requestId).u16(a.ids().size());
                 for (long id : a.ids()) w.i64(id);
@@ -201,7 +265,7 @@ public sealed interface Packet {
             case EnvelopeAccepted e -> w.u8(114).i64(requestId).i64(e.id()).i64(e.serverTime());
             case PendingCount p -> w.u8(115).i64(requestId).i64(p.count());
             case EnvelopeReceived e -> w.u8(125).i64(requestId).i64(e.envelope().id()).string(e.envelope().sender())
-                    .i64(e.envelope().sentAt()).bytes(e.envelope().body());
+                    .i64(e.envelope().groupId()).i64(e.envelope().sentAt()).bytes(e.envelope().body());
             case EnvelopeDelivered d -> w.u8(126).i64(requestId).i64(d.id());
             case FriendRequestReceived f -> w.u8(120).i64(requestId).string(f.from());
             case FriendAdded f -> writeFriend(w.u8(121).i64(requestId), f.friend());
@@ -236,6 +300,21 @@ public sealed interface Packet {
             case 23 -> new FetchBundle(r.string(MAX_USERNAME_BYTES));
             case 24 -> new SendEnvelope(r.string(MAX_USERNAME_BYTES), r.bytes(MAX_ENVELOPE_BYTES));
             case 25 -> new FetchPending();
+            case 30 -> new CreateGroup(r.string(MAX_GROUP_NAME_BYTES), readNames(r));
+            case 31 -> new AddGroupMember(r.i64(), r.string(MAX_USERNAME_BYTES));
+            case 32 -> new RemoveGroupMember(r.i64(), r.string(MAX_USERNAME_BYTES));
+            case 33 -> new LeaveGroup(r.i64());
+            case 34 -> new ListGroups();
+            case 35 -> new SendGroupEnvelope(r.i64(), r.bytes(MAX_ENVELOPE_BYTES));
+            case 116 -> readGroup(r);
+            case 117 -> {
+                int n = r.count(MAX_LIST);
+                List<GroupInfo> groups = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) groups.add(readGroup(r));
+                yield new GroupList(groups);
+            }
+            case 127 -> new GroupUpdated(readGroup(r));
+            case 128 -> new GroupRemoved(r.i64());
             case 26 -> {
                 int n = r.count(MAX_ACKS);
                 List<Long> ids = new ArrayList<>(n);
@@ -259,7 +338,7 @@ public sealed interface Packet {
                     r.exactBytes(SIGNATURE), (int) r.i64(), r.bytes(X25519_KEY)));
             case 114 -> new EnvelopeAccepted(r.i64(), r.i64());
             case 115 -> new PendingCount((int) r.i64());
-            case 125 -> new EnvelopeReceived(new Envelope(r.i64(), r.string(MAX_USERNAME_BYTES), r.i64(),
+            case 125 -> new EnvelopeReceived(new Envelope(r.i64(), r.string(MAX_USERNAME_BYTES), r.i64(), r.i64(),
                     r.bytes(MAX_ENVELOPE_BYTES)));
             case 126 -> new EnvelopeDelivered(r.i64());
             case 120 -> new FriendRequestReceived(r.string(MAX_USERNAME_BYTES));
@@ -275,6 +354,24 @@ public sealed interface Packet {
 
     int X25519_KEY = 44;
     int SIGNATURE = 64;
+
+    private static Wire.Writer writeGroup(Wire.Writer w, GroupInfo g) {
+        w.i64(g.id()).string(g.name()).string(g.owner()).u16(g.members().size());
+        for (Member m : g.members()) w.string(m.username()).bytes(m.identityKey());
+        return w;
+    }
+
+    private static GroupInfo readGroup(Wire.Reader r) throws ProtocolException {
+        long id = r.i64();
+        String name = r.string(MAX_GROUP_NAME_BYTES);
+        String owner = r.string(MAX_USERNAME_BYTES);
+        int n = r.count(MAX_GROUP_MEMBERS);
+        List<Member> members = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            members.add(new Member(r.string(MAX_USERNAME_BYTES), r.exactBytes(Identity.ENCODED_PUBLIC_KEY_LENGTH)));
+        }
+        return new GroupInfo(id, name, owner, members);
+    }
 
     private static void writeFriend(Wire.Writer w, Friend f) {
         w.string(f.username()).u8(f.online() ? 1 : 0).bytes(f.identityKey());

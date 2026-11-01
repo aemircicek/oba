@@ -45,7 +45,8 @@ public final class ChatServer implements AutoCloseable {
         Presence presence = new Presence();
         this.services = new ClientConnection.Services(identity,
                 new AccountService(db, config.pbkdf2Iterations(), clock),
-                new FriendService(db, presence, clock), new MessageService(db, presence, clock), presence);
+                new FriendService(db, presence, clock), new MessageService(db, presence, clock),
+                new GroupService(db, presence), presence);
         // Plain TCP by design: ClientConnection runs the authenticated handshake on every socket.
         // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         this.listener = new ServerSocket();

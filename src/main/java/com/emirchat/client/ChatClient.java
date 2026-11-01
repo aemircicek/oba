@@ -34,6 +34,7 @@ public final class ChatClient implements AutoCloseable {
     static final int PREKEY_BATCH = 50;
     static final int PREKEY_LOW_WATER = 20;
     private static final int CONTENT_CHAT = 1;
+    private static final int CONTENT_SENDER_KEY = 2;
 
     /** Everything the UI needs to hear about. All callbacks run on the client's inbox thread. */
     public interface Listener {
@@ -51,10 +52,21 @@ public final class ChatClient implements AutoCloseable {
         default void push(Packet packet) {}
 
         default void disconnected() {}
+
+        default void groupMessage(long groupId, String from, ChatMessage message, long envelopeId) {}
+
+        /** Created, renamed, or members changed (including us being added). */
+        default void groupUpdated(Packet.GroupInfo group) {}
+
+        /** We left or were removed. */
+        default void groupRemoved(long groupId) {}
     }
 
     private final ServerConnection connection;
     private final Messenger messenger;
+    private final com.emirchat.e2e.GroupKeys groupKeys;
+    private final Map<Long, Packet.GroupInfo> groups = new ConcurrentHashMap<>();
+    private final Map<String, byte[]> memberKeys = new ConcurrentHashMap<>();
     private final KnownPeers contacts;
     private final String username;
     private final Map<String, byte[]> friendKeys = new ConcurrentHashMap<>();
@@ -69,7 +81,9 @@ public final class ChatClient implements AutoCloseable {
     private volatile Listener listener = new Listener() {};
     private volatile boolean closing;
 
-    private ChatClient(ServerConnection connection, Messenger messenger, KnownPeers contacts, String username) {
+    private ChatClient(ServerConnection connection, Messenger messenger, com.emirchat.e2e.GroupKeys groupKeys,
+                       KnownPeers contacts, String username) {
+        this.groupKeys = groupKeys;
         this.connection = connection;
         this.messenger = messenger;
         this.contacts = contacts;
@@ -89,7 +103,8 @@ public final class ChatClient implements AutoCloseable {
         Files.createDirectories(dir);
         Messenger messenger = Messenger.open(dir.resolve("e2e"), device);
         KnownPeers contacts = new KnownPeers(dir.resolve("contacts"), (name, fp) -> true); // TOFU, verify later
-        ChatClient client = new ChatClient(connection, messenger, contacts, loggedIn.username());
+        ChatClient client = new ChatClient(connection, messenger, new com.emirchat.e2e.GroupKeys(dir.resolve("e2e")),
+                contacts, loggedIn.username());
         client.listener = listener;
         connection.onPush(p -> client.inbox.execute(() -> client.onPush(p)));
         connection.onClosed(() -> {
@@ -97,6 +112,7 @@ public final class ChatClient implements AutoCloseable {
         });
         client.publishKeys();
         client.refreshFriends();
+        client.refreshGroups();
         connection.fetchPending();
         return client;
     }
@@ -136,10 +152,106 @@ public final class ChatClient implements AutoCloseable {
 
     /** Encrypts and sends a text message to a friend. */
     public Packet.EnvelopeAccepted sendText(String friend, String text) throws IOException, ApiException, KeyChangedException {
-        byte[] key = pinnedKey(friend);
+        return sendPairwise(friend, CONTENT_CHAT, ChatMessage.text(text).encode());
+    }
+
+    private Packet.EnvelopeAccepted sendPairwise(String user, int contentType, byte[] payload)
+            throws IOException, ApiException, KeyChangedException {
+        byte[] key = pinnedKey(user);
+        byte[] plaintext = new Wire.Writer().u8(contentType).bytes(payload).toByteArray();
+        byte[] body = messenger.encrypt(user, key, () -> fetchBundle(user), plaintext);
+        return connection.sendEnvelope(user, body);
+    }
+
+    // ------------------------------------------------------------------ groups
+
+    public List<Packet.GroupInfo> refreshGroups() throws IOException, ApiException {
+        Packet.GroupList list = expectGroups(connection.call(new Packet.ListGroups()));
+        groups.clear();
+        for (Packet.GroupInfo g : list.groups()) remember(g);
+        return list.groups();
+    }
+
+    public List<Packet.GroupInfo> groups() {
+        return List.copyOf(groups.values());
+    }
+
+    public Packet.GroupInfo createGroup(String name, List<String> members) throws IOException, ApiException {
+        Packet response = connection.call(new Packet.CreateGroup(name, members));
+        if (!(response instanceof Packet.GroupInfo g)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        remember(g);
+        return g;
+    }
+
+    public void addGroupMember(long groupId, String user) throws IOException, ApiException {
+        connection.call(new Packet.AddGroupMember(groupId, user));
+    }
+
+    public void removeGroupMember(long groupId, String user) throws IOException, ApiException {
+        connection.call(new Packet.RemoveGroupMember(groupId, user));
+    }
+
+    public void leaveGroup(long groupId) throws IOException, ApiException {
+        connection.call(new Packet.LeaveGroup(groupId));
+        groups.remove(groupId);
+        groupKeys.forgetGroup(groupId);
+    }
+
+    /**
+     * Sends a text to a group: first hands our sender key to members that lack it (over the
+     * pairwise end-to-end channel), then sends one encrypted, signed body for the server to fan out.
+     *
+     * @return members that were skipped because their key changed and is not yet verified
+     */
+    public List<String> sendGroupText(long groupId, String text) throws IOException, ApiException {
+        Packet.GroupInfo group = groups.get(groupId);
+        if (group == null) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
+        List<String> members = group.members().stream().map(Packet.Member::username).toList();
+        List<String> skipped = new ArrayList<>();
+        groupKeys.rotateIfAnyoneLeft(groupId, members);
+        for (String member : groupKeys.needsKey(groupId, members, username)) {
+            try {
+                sendPairwise(member, CONTENT_SENDER_KEY, groupKeys.distribution(groupId));
+                groupKeys.markDistributed(groupId, member);
+            } catch (KeyChangedException e) {
+                skipped.add(member);
+                listener.keyChanged(member);
+            }
+        }
         byte[] plaintext = new Wire.Writer().u8(CONTENT_CHAT).bytes(ChatMessage.text(text).encode()).toByteArray();
-        byte[] body = messenger.encrypt(friend, key, () -> fetchBundle(friend), plaintext);
-        return connection.sendEnvelope(friend, body);
+        connection.call(new Packet.SendGroupEnvelope(groupId, groupKeys.encrypt(groupId, plaintext)));
+        return skipped;
+    }
+
+    private void remember(Packet.GroupInfo g) {
+        groups.put(g.id(), g);
+        for (Packet.Member m : g.members()) memberKeys.put(m.username(), m.identityKey());
+    }
+
+    private static Packet.GroupList expectGroups(Packet p) throws ApiException {
+        if (p instanceof Packet.GroupList l) return l;
+        throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+    }
+
+    /** Membership changed: if anyone left, rotate our sender key so they cannot read what comes next. */
+    private void groupChanged(Packet.GroupInfo now) {
+        Packet.GroupInfo before = groups.get(now.id());
+        remember(now);
+        if (before != null) {
+            try {
+                boolean someoneLeft = false;
+                for (Packet.Member m : before.members()) {
+                    if (!now.hasMember(m.username())) {
+                        someoneLeft = true;
+                        groupKeys.forgetSender(now.id(), m.username());
+                    }
+                }
+                if (someoneLeft) groupKeys.rotate(now.id());
+            } catch (IOException e) {
+                listener.undecryptable("", "could not update group keys: " + e.getMessage());
+            }
+        }
+        listener.groupUpdated(now);
     }
 
     /** Accepts a friend's new key after out-of-band verification, and starts fresh sessions. */
@@ -167,12 +279,13 @@ public final class ChatClient implements AutoCloseable {
 
     /** The friend's key as reported by the server, checked against (or pinned into) local storage. */
     private byte[] pinnedKey(String friend) throws IOException, ApiException, KeyChangedException {
-        byte[] key = friendKeys.get(friend);
+        byte[] key = knownKey(friend);
         if (key == null) {
             refreshFriends();
-            key = friendKeys.get(friend);
+            refreshGroups();
+            key = knownKey(friend);
         }
-        if (key == null) throw new ApiException(ErrorCode.NOT_FRIENDS, friend + " is not your friend.");
+        if (key == null) throw new ApiException(ErrorCode.NOT_FRIENDS, friend + " is not your friend or in your groups.");
         try {
             contacts.check(friend, Identity.fingerprint(key));
         } catch (KeyChangedException e) {
@@ -181,6 +294,11 @@ public final class ChatClient implements AutoCloseable {
             throw new IllegalStateException(e); // contacts auto-accept first use
         }
         return key;
+    }
+
+    private byte[] knownKey(String user) {
+        byte[] key = friendKeys.get(user);
+        return key != null ? key : memberKeys.get(user);
     }
 
     private void onPush(Packet packet) {
@@ -193,7 +311,18 @@ public final class ChatClient implements AutoCloseable {
             }
             case Packet.IdentityKeyChanged k -> {
                 friendKeys.put(k.username(), k.identityKey());
+                memberKeys.computeIfPresent(k.username(), (u, old) -> k.identityKey());
                 listener.keyChanged(k.username());
+            }
+            case Packet.GroupUpdated g -> groupChanged(g.group());
+            case Packet.GroupRemoved g -> {
+                groups.remove(g.groupId());
+                try {
+                    groupKeys.forgetGroup(g.groupId());
+                } catch (IOException ignored) {
+                    // keys of a group we are no longer in are useless anyway
+                }
+                listener.groupRemoved(g.groupId());
             }
             default -> listener.push(packet);
         }
@@ -203,14 +332,21 @@ public final class ChatClient implements AutoCloseable {
         if (seen.put(envelope.id(), Boolean.TRUE) != null) return; // live push and queue fetch can overlap
         boolean ack = true;
         try {
+            if (envelope.groupId() != 0) {
+                receiveGroup(envelope);
+                return;
+            }
             byte[] key = pinnedKey(envelope.sender());
             byte[] plaintext = messenger.decrypt(envelope.sender(), key, envelope.body());
             Wire.Reader r = new Wire.Reader(plaintext);
             int contentType = r.u8();
-            if (contentType != CONTENT_CHAT) throw new ProtocolException("Unknown content type " + contentType);
-            ChatMessage message = ChatMessage.decode(r.bytes(ChatMessage.MAX_TEXT_BYTES + 64));
+            byte[] payload = r.bytes(ChatMessage.MAX_TEXT_BYTES + 256);
             r.expectEnd();
-            listener.message(envelope.sender(), message, envelope.id());
+            switch (contentType) {
+                case CONTENT_CHAT -> listener.message(envelope.sender(), ChatMessage.decode(payload), envelope.id());
+                case CONTENT_SENDER_KEY -> acceptSenderKey(envelope.sender(), payload);
+                default -> throw new ProtocolException("Unknown content type " + contentType);
+            }
         } catch (KeyChangedException e) {
             // Keep it queued on the server: once the user verifies the new key it can be read.
             ack = false;
@@ -222,6 +358,42 @@ public final class ChatClient implements AutoCloseable {
             // Otherwise acknowledge either way: a message that cannot be decrypted now never will be.
             if (ack) connection.ackAsync(List.of(envelope.id()));
         }
+    }
+
+    private void receiveGroup(Packet.Envelope envelope) throws IOException, ApiException, KeyChangedException {
+        Packet.GroupInfo group = groups.get(envelope.groupId());
+        if (group == null) {
+            refreshGroups();
+            group = groups.get(envelope.groupId());
+        }
+        if (group == null || !group.hasMember(envelope.sender())) {
+            throw new SecurityException(envelope.sender() + " is not a member of that group");
+        }
+        byte[] plaintext = groupKeys.decrypt(envelope.groupId(), envelope.sender(), envelope.body());
+        Wire.Reader r = new Wire.Reader(plaintext);
+        if (r.u8() != CONTENT_CHAT) throw new ProtocolException("Unknown group content");
+        ChatMessage message = ChatMessage.decode(r.bytes(ChatMessage.MAX_TEXT_BYTES + 64));
+        r.expectEnd();
+        listener.groupMessage(envelope.groupId(), envelope.sender(), message, envelope.id());
+    }
+
+    /** A sender key arrived over the pairwise channel; only accepted from a current member of that group. */
+    private void acceptSenderKey(String sender, byte[] distribution) throws IOException, ApiException {
+        long groupId;
+        try {
+            Wire.Reader r = new Wire.Reader(distribution);
+            r.u8();
+            groupId = r.i64();
+        } catch (ProtocolException e) {
+            throw new SecurityException("Malformed sender key");
+        }
+        Packet.GroupInfo group = groups.get(groupId);
+        if (group == null || !group.hasMember(sender)) {
+            refreshGroups();
+            group = groups.get(groupId);
+        }
+        if (group == null || !group.hasMember(sender)) throw new SecurityException(sender + " sent a key for a group they are not in");
+        groupKeys.acceptDistribution(groupId, sender, distribution);
     }
 
     @Override

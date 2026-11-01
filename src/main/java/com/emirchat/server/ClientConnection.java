@@ -28,7 +28,7 @@ final class ClientConnection {
 
     /** Everything a connection needs from the server. */
     record Services(Identity identity, AccountService accounts, FriendService friends, MessageService messages,
-                    Presence presence) {}
+                    GroupService groups, Presence presence) {}
 
     private final Socket socket;
     private final Services services;
@@ -148,6 +148,21 @@ final class ClientConnection {
             case Packet.FetchBundle f -> new Packet.Bundle(services.messages().bundle(me(), f.username()));
             case Packet.SendEnvelope s -> services.messages().send(me(), s.recipient(), s.body());
             case Packet.FetchPending f -> new Packet.PendingCount(services.messages().pushPending(me(), this));
+            case Packet.CreateGroup c -> services.groups().create(me(), c.name(), c.members());
+            case Packet.AddGroupMember a -> {
+                services.groups().add(me(), a.groupId(), a.username());
+                yield new Packet.Ok();
+            }
+            case Packet.RemoveGroupMember r -> {
+                services.groups().remove(me(), r.groupId(), r.username());
+                yield new Packet.Ok();
+            }
+            case Packet.LeaveGroup l -> {
+                services.groups().leave(me(), l.groupId());
+                yield new Packet.Ok();
+            }
+            case Packet.ListGroups l -> services.groups().list(me());
+            case Packet.SendGroupEnvelope s -> services.messages().sendToGroup(me(), s.groupId(), s.body());
             case Packet.AckEnvelopes a -> {
                 services.messages().ack(me(), a.ids());
                 yield new Packet.Ok();

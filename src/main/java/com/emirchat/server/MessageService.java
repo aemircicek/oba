@@ -95,15 +95,43 @@ final class MessageService {
         long now = clock.millis();
         long id;
         try {
-            if (db.queuedCount(recipient.id()) >= MAX_QUEUED_PER_RECIPIENT) {
-                throw new ApiException(ErrorCode.LIMIT_REACHED, recipient.username() + "'s inbox is full.");
-            }
-            id = db.queueEnvelope(recipient.id(), me.id(), now, body);
+            id = queue(recipient, me, 0, now, body);
         } catch (SQLException e) {
             throw storage();
         }
-        presence.push(recipient.id(), new Packet.EnvelopeReceived(new Packet.Envelope(id, me.username(), now, body)));
         return new Packet.EnvelopeAccepted(id, now);
+    }
+
+    /** Fans one group envelope out to every other member; the body is the same opaque ciphertext for all. */
+    Packet.EnvelopeAccepted sendToGroup(Database.User me, long groupId, byte[] body) throws ApiException {
+        long now = clock.millis();
+        long last = 0;
+        try {
+            if (!db.isMember(groupId, me.id())) {
+                throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
+            }
+            for (Database.User member : db.members(groupId)) {
+                if (member.id() == me.id()) continue;
+                try {
+                    last = queue(member, me, groupId, now, body);
+                } catch (ApiException full) {
+                    // one member's full inbox must not block the whole group
+                }
+            }
+        } catch (SQLException e) {
+            throw storage();
+        }
+        return new Packet.EnvelopeAccepted(last, now);
+    }
+
+    private long queue(Database.User recipient, Database.User sender, long groupId, long now, byte[] body)
+            throws SQLException, ApiException {
+        if (db.queuedCount(recipient.id()) >= MAX_QUEUED_PER_RECIPIENT) {
+            throw new ApiException(ErrorCode.LIMIT_REACHED, recipient.username() + "'s inbox is full.");
+        }
+        long id = db.queueEnvelope(recipient.id(), sender.id(), groupId, now, body);
+        presence.push(recipient.id(), new Packet.EnvelopeReceived(new Packet.Envelope(id, sender.username(), groupId, now, body)));
+        return id;
     }
 
     /** Queues pushes for everything waiting for this user; returns how many. */
@@ -111,7 +139,7 @@ final class MessageService {
         try {
             List<Database.QueuedEnvelope> queued = db.queuedFor(me.id(), PUSH_BATCH);
             for (Database.QueuedEnvelope e : queued) {
-                to.push(new Packet.EnvelopeReceived(new Packet.Envelope(e.id(), e.sender(), e.sentAt(), e.body())));
+                to.push(new Packet.EnvelopeReceived(new Packet.Envelope(e.id(), e.sender(), e.groupId(), e.sentAt(), e.body())));
             }
             return queued.size();
         } catch (SQLException e) {
@@ -145,12 +173,16 @@ final class MessageService {
         try {
             if (AccountService.USERNAME.matcher(name).matches()) {
                 Optional<Database.User> u = db.findUser(name);
-                if (u.isPresent() && db.areFriends(me.id(), u.get().id())) return u.get();
+                // Pairwise channels are allowed between friends and between members of a common group
+                // (group sender keys travel over them).
+                if (u.isPresent() && (db.areFriends(me.id(), u.get().id()) || db.shareAGroup(me.id(), u.get().id()))) {
+                    return u.get();
+                }
             }
         } catch (SQLException e) {
             throw storage();
         }
-        throw new ApiException(ErrorCode.NOT_FRIENDS, "You can only message friends.");
+        throw new ApiException(ErrorCode.NOT_FRIENDS, "You can only message friends and members of your groups.");
     }
 
     private static ApiException storage() {
