@@ -129,6 +129,24 @@ public final class ServerConnection implements AutoCloseable {
         return expect(call(new Packet.Login(username, password)), Packet.LoggedIn.class);
     }
 
+    /** @return true if this made you friends at once (they had already asked you) */
+    public boolean sendFriendRequest(String username) throws IOException, ApiException {
+        return expect(call(new Packet.SendFriendRequest(username)), Packet.FriendRequestResult.class).nowFriends();
+    }
+
+    public void respondFriendRequest(String username, boolean accept) throws IOException, ApiException {
+        expect(call(new Packet.RespondFriendRequest(username, accept)), Packet.Ok.class);
+    }
+
+    /** Unfriends, or cancels your own pending request. */
+    public void removeFriend(String username) throws IOException, ApiException {
+        expect(call(new Packet.RemoveFriend(username)), Packet.Ok.class);
+    }
+
+    public Packet.FriendList listFriends() throws IOException, ApiException {
+        return expect(call(new Packet.ListFriends()), Packet.FriendList.class);
+    }
+
     private static <T extends Packet> T expect(Packet response, Class<T> type) throws ApiException {
         if (!type.isInstance(response)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response " + response);
         return type.cast(response);

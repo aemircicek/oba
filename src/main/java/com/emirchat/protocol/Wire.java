@@ -25,6 +25,12 @@ public final class Wire {
             return this;
         }
 
+        public Writer u16(int value) {
+            if (value < 0 || value > 0xFFFF) throw new IllegalArgumentException("u16 out of range");
+            try { data.writeShort(value); } catch (IOException e) { throw new UncheckedIOException(e); }
+            return this;
+        }
+
         public Writer i64(long value) {
             try { data.writeLong(value); } catch (IOException e) { throw new UncheckedIOException(e); }
             return this;
@@ -61,6 +67,17 @@ public final class Wire {
 
         public int u8() throws ProtocolException {
             try { return data.readUnsignedByte(); } catch (IOException e) { throw truncated(); }
+        }
+
+        public int u16() throws ProtocolException {
+            try { return data.readUnsignedShort(); } catch (IOException e) { throw truncated(); }
+        }
+
+        /** A list length, rejected above {@code max} before anything is allocated. */
+        public int count(int max) throws ProtocolException {
+            int n = u16();
+            if (n > max) throw new ProtocolException("List of " + n + " exceeds " + max);
+            return n;
         }
 
         public long i64() throws ProtocolException {

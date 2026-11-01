@@ -10,7 +10,12 @@ public enum ErrorCode {
     RATE_LIMITED(6),
     NOT_LOGGED_IN(7),
     ALREADY_LOGGED_IN(8),
-    INTERNAL(9);
+    INTERNAL(9),
+    USER_NOT_FOUND(10),
+    ALREADY_FRIENDS(11),
+    NOT_FRIENDS(12),
+    INVALID_REQUEST(13),
+    LIMIT_REACHED(14);
 
     final int code;
 

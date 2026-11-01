@@ -24,12 +24,14 @@ final class AccountCli {
             "  secure-chat server   [--port " + ChatServer.DEFAULT_PORT + "] [--bind 0.0.0.0] [--data ~/.securechat-server]",
             "  secure-chat register --server <host[:port]> --username <name> [--home <dir>]",
             "  secure-chat login    --server <host[:port]> --username <name> [--home <dir>]",
+            "  secure-chat client   --server <host[:port]> --username <name> [--home <dir>]   (interactive)",
             "  (add --password-stdin to read the password from standard input in scripts)");
 
     private AccountCli() {}
 
     static boolean handles(String command) {
-        return command.equals("server") || command.equals("register") || command.equals("login");
+        return command.equals("server") || command.equals("register") || command.equals("login")
+                || command.equals("client");
     }
 
     static int run(String[] args) {
@@ -64,7 +66,7 @@ final class AccountCli {
             if (command.equals("server")) return serve(data, bind, port);
             if (server == null) throw new IllegalArgumentException("--server is required");
             if (username == null) throw new IllegalArgumentException("--username is required");
-            return account(command.equals("register"), server, username, home, passwordStdin);
+            return account(command, server, username, home, passwordStdin);
         } catch (IOException e) {
             System.err.println("Error: " + e.getMessage());
             return 1;
@@ -89,8 +91,9 @@ final class AccountCli {
         return 0;
     }
 
-    private static int account(boolean register, String server, String username, Path home, boolean passwordStdin)
+    private static int account(String command, String server, String username, Path home, boolean passwordStdin)
             throws IOException {
+        boolean register = command.equals("register");
         String host = server;
         int port = ChatServer.DEFAULT_PORT;
         int colon = server.lastIndexOf(':');
@@ -120,6 +123,7 @@ final class AccountCli {
             if (result.newDevice()) {
                 System.out.println("Note: this account is now bound to this computer's key; your friends will be told.");
             }
+            if (command.equals("client")) return ClientShell.run(connection, stdin);
             return 0;
         } catch (KeyChangedException e) {
             System.err.println(e.getMessage().replace("IDENTITY KEY FOR", "SERVER KEY FOR"));

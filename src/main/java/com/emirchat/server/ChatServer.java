@@ -28,7 +28,7 @@ public final class ChatServer implements AutoCloseable {
 
     private final Identity identity;
     private final Database db;
-    private final AccountService accounts;
+    private final ClientConnection.Services services;
     private final ServerSocket listener;
     private final ExecutorService connections = Executors.newVirtualThreadPerTaskExecutor();
     private volatile boolean closed;
@@ -41,7 +41,11 @@ public final class ChatServer implements AutoCloseable {
         } catch (SQLException e) {
             throw new IOException("Could not open the database: " + e.getMessage(), e);
         }
-        this.accounts = new AccountService(db, config.pbkdf2Iterations(), Clock.systemUTC());
+        Clock clock = Clock.systemUTC();
+        Presence presence = new Presence();
+        this.services = new ClientConnection.Services(identity,
+                new AccountService(db, config.pbkdf2Iterations(), clock),
+                new FriendService(db, presence, clock), presence);
         // Plain TCP by design: ClientConnection runs the authenticated handshake on every socket.
         // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         this.listener = new ServerSocket();
@@ -74,7 +78,7 @@ public final class ChatServer implements AutoCloseable {
         while (!closed) {
             try {
                 Socket socket = listener.accept();
-                connections.submit(new ClientConnection(socket, identity, accounts)::run);
+                connections.submit(new ClientConnection(socket, services)::run);
             } catch (IOException e) {
                 if (!closed) System.err.println("accept failed: " + e.getMessage());
             }
