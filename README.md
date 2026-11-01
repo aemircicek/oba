@@ -12,7 +12,7 @@ protection, and SSH-style trust-on-first-use for identity keys.
 
 ```
 $ secure-chat host --name emir
-Listening on 0.0.0.0:5000 as 'emir'.
+Listening on 0.0.0.0:5055 as 'emir'.
 Your fingerprint: e41e 2a9a 3ac4 3c70 63a4 4763 0f75 8bcf d9de 0cc6 ea75 2ea2 3b87 1461 37da c02a
 Waiting for a peer...
 Connected to /192.168.1.7:52458, authenticating...
@@ -33,11 +33,11 @@ Requires Java 21+ and Maven.
 ```sh
 mvn verify                      # build + 27 tests
 java -jar target/secure-chat.jar fingerprint                       # show your identity key
-java -jar target/secure-chat.jar host --name emir                  # wait for a peer on port 5000
+java -jar target/secure-chat.jar host --name emir                  # wait for a peer on port 5055
 java -jar target/secure-chat.jar connect 192.168.1.3 --name efe    # connect to a host
 ```
 
-Options: `--port <n>` (default 5000), `--bind <addr>` (host only, default `0.0.0.0`),
+Options: `--port <n>` (default 5055; 5000 is taken by AirPlay on macOS), `--bind <addr>` (host only, default `0.0.0.0`),
 `--home <dir>` (keys and known peers, default `~/.securechat`). Type `/quit` to leave.
 
 On first contact each side is shown the other's fingerprint. **Compare it over another channel**

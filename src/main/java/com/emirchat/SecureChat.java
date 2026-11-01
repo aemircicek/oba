@@ -11,6 +11,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
+import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -22,13 +23,13 @@ import java.util.List;
 
 /** Command-line entry point. */
 public final class SecureChat {
-    static final int DEFAULT_PORT = 5000;
+    static final int DEFAULT_PORT = 5055;
     private static final int HANDSHAKE_TIMEOUT_MS = 120_000;
 
     private static final String USAGE = String.join("\n",
             "Usage:",
-            "  secure-chat host    --name <name> [--port 5000] [--bind 0.0.0.0]",
-            "  secure-chat connect <host> --name <name> [--port 5000]",
+            "  secure-chat host    --name <name> [--port 5055] [--bind 0.0.0.0]",
+            "  secure-chat connect <host> --name <name> [--port 5055]",
             "  secure-chat fingerprint",
             "",
             "Options:",
@@ -83,7 +84,13 @@ public final class SecureChat {
         // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         try (ServerSocket server = new ServerSocket()) {
             server.setReuseAddress(true); // avoids "Address already in use" right after a restart
-            server.bind(new InetSocketAddress(o.bind, o.port));
+            try {
+                server.bind(new InetSocketAddress(o.bind, o.port));
+            } catch (BindException e) {
+                throw new IOException("Port " + o.port + " is already in use by another program"
+                        + " (on macOS, AirPlay Receiver occupies 5000 and 7000). Try another one, e.g. --port "
+                        + (o.port == DEFAULT_PORT ? DEFAULT_PORT + 1 : DEFAULT_PORT), e);
+            }
             System.out.println("Listening on " + o.bind + ":" + o.port + " as '" + o.name + "'.");
             System.out.println("Your fingerprint: " + Identity.pretty(identity.fingerprint()).replace('\n', ' '));
             System.out.println("Waiting for a peer...");
