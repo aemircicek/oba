@@ -19,6 +19,9 @@ public sealed interface Packet {
     int MAX_PASSWORD_BYTES = 256;
     int MAX_MESSAGE_BYTES = 512;
     int MAX_LIST = 1000;
+    int MAX_ENVELOPE_BYTES = 40_000;
+    int MAX_PREKEYS_PER_UPLOAD = 100;
+    int MAX_ACKS = 500;
 
     /** A friend as the server describes it. */
     record Friend(String username, boolean online, byte[] identityKey) {
@@ -60,6 +63,30 @@ public sealed interface Packet {
 
     record ListFriends() implements Packet {}
 
+    /** Publishes this device's X3DH identity and signed prekey (signatures are checked by the server). */
+    record UploadKeys(byte[] dhIdentity, byte[] dhIdentitySignature, int signedPrekeyId, byte[] signedPrekey,
+                      byte[] signedPrekeySignature) implements Packet {}
+
+    record Prekey(int id, byte[] key) {}
+
+    record UploadPrekeys(List<Prekey> prekeys) implements Packet {
+        public UploadPrekeys { prekeys = List.copyOf(prekeys); }
+    }
+
+    record KeyStatus() implements Packet {}
+
+    record FetchBundle(String username) implements Packet {}
+
+    /** An end-to-end encrypted message; the server only sees the recipient and an opaque body. */
+    record SendEnvelope(String recipient, byte[] body) implements Packet {}
+
+    /** Asks the server to push every queued envelope; answered with PendingCount. */
+    record FetchPending() implements Packet {}
+
+    record AckEnvelopes(List<Long> ids) implements Packet {
+        public AckEnvelopes { ids = List.copyOf(ids); }
+    }
+
     // ------------------------------------------------------------- responses (server -> client)
 
     record Ok() implements Packet {}
@@ -82,7 +109,23 @@ public sealed interface Packet {
         }
     }
 
+    /** @param signedPrekeyId -1 if this device has not published keys yet */
+    record KeyStatusResult(boolean hasKeys, int signedPrekeyId, int oneTimePrekeys) implements Packet {}
+
+    record Bundle(com.emirchat.e2e.PrekeyBundle bundle) implements Packet {}
+
+    record EnvelopeAccepted(long id, long serverTime) implements Packet {}
+
+    record PendingCount(int count) implements Packet {}
+
     // ------------------------------------------------------------- pushes (server -> client, id 0)
+
+    record Envelope(long id, String sender, long sentAt, byte[] body) {}
+
+    record EnvelopeReceived(Envelope envelope) implements Packet {}
+
+    /** The recipient's device received (and acknowledged) one of our envelopes. */
+    record EnvelopeDelivered(long id) implements Packet {}
 
     record FriendRequestReceived(String from) implements Packet {}
 
@@ -123,6 +166,20 @@ public sealed interface Packet {
             case RespondFriendRequest r -> w.u8(11).i64(requestId).string(r.username()).u8(r.accept() ? 1 : 0);
             case RemoveFriend r -> w.u8(12).i64(requestId).string(r.username());
             case ListFriends l -> w.u8(13).i64(requestId);
+            case UploadKeys k -> w.u8(20).i64(requestId).bytes(k.dhIdentity()).bytes(k.dhIdentitySignature())
+                    .i64(k.signedPrekeyId()).bytes(k.signedPrekey()).bytes(k.signedPrekeySignature());
+            case UploadPrekeys u -> {
+                w.u8(21).i64(requestId).u16(u.prekeys().size());
+                for (Prekey p : u.prekeys()) w.i64(p.id()).bytes(p.key());
+            }
+            case KeyStatus k -> w.u8(22).i64(requestId);
+            case FetchBundle f -> w.u8(23).i64(requestId).string(f.username());
+            case SendEnvelope s -> w.u8(24).i64(requestId).string(s.recipient()).bytes(s.body());
+            case FetchPending f -> w.u8(25).i64(requestId);
+            case AckEnvelopes a -> {
+                w.u8(26).i64(requestId).u16(a.ids().size());
+                for (long id : a.ids()) w.i64(id);
+            }
             case Ok o -> w.u8(100).i64(requestId);
             case Error e -> w.u8(101).i64(requestId).u8(e.code().code).string(truncate(e.message()));
             case LoggedIn l -> w.u8(102).i64(requestId).string(l.username()).u8(l.newDevice() ? 1 : 0);
@@ -134,6 +191,18 @@ public sealed interface Packet {
                 writeNames(w, f.incoming());
                 writeNames(w, f.outgoing());
             }
+            case KeyStatusResult k -> w.u8(112).i64(requestId).u8(k.hasKeys() ? 1 : 0).i64(k.signedPrekeyId()).i64(k.oneTimePrekeys());
+            case Bundle b -> {
+                var x = b.bundle();
+                w.u8(113).i64(requestId).bytes(x.identityKey()).bytes(x.dhIdentity()).bytes(x.dhIdentitySignature())
+                        .i64(x.signedPrekeyId()).bytes(x.signedPrekey()).bytes(x.signedPrekeySignature())
+                        .i64(x.oneTimePrekeyId()).bytes(x.oneTimePrekey());
+            }
+            case EnvelopeAccepted e -> w.u8(114).i64(requestId).i64(e.id()).i64(e.serverTime());
+            case PendingCount p -> w.u8(115).i64(requestId).i64(p.count());
+            case EnvelopeReceived e -> w.u8(125).i64(requestId).i64(e.envelope().id()).string(e.envelope().sender())
+                    .i64(e.envelope().sentAt()).bytes(e.envelope().body());
+            case EnvelopeDelivered d -> w.u8(126).i64(requestId).i64(d.id());
             case FriendRequestReceived f -> w.u8(120).i64(requestId).string(f.from());
             case FriendAdded f -> writeFriend(w.u8(121).i64(requestId), f.friend());
             case FriendRemoved f -> w.u8(122).i64(requestId).string(f.username());
@@ -155,6 +224,24 @@ public sealed interface Packet {
             case 11 -> new RespondFriendRequest(r.string(MAX_USERNAME_BYTES), bool(r.u8()));
             case 12 -> new RemoveFriend(r.string(MAX_USERNAME_BYTES));
             case 13 -> new ListFriends();
+            case 20 -> new UploadKeys(r.exactBytes(X25519_KEY), r.exactBytes(SIGNATURE), (int) r.i64(),
+                    r.exactBytes(X25519_KEY), r.exactBytes(SIGNATURE));
+            case 21 -> {
+                int n = r.count(MAX_PREKEYS_PER_UPLOAD);
+                List<Prekey> keys = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) keys.add(new Prekey((int) r.i64(), r.exactBytes(X25519_KEY)));
+                yield new UploadPrekeys(keys);
+            }
+            case 22 -> new KeyStatus();
+            case 23 -> new FetchBundle(r.string(MAX_USERNAME_BYTES));
+            case 24 -> new SendEnvelope(r.string(MAX_USERNAME_BYTES), r.bytes(MAX_ENVELOPE_BYTES));
+            case 25 -> new FetchPending();
+            case 26 -> {
+                int n = r.count(MAX_ACKS);
+                List<Long> ids = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) ids.add(r.i64());
+                yield new AckEnvelopes(ids);
+            }
             case 100 -> new Ok();
             case 101 -> new Error(ErrorCode.of(r.u8()), r.string(MAX_MESSAGE_BYTES));
             case 102 -> new LoggedIn(r.string(MAX_USERNAME_BYTES), bool(r.u8()));
@@ -166,6 +253,15 @@ public sealed interface Packet {
                 for (int i = 0; i < n; i++) friends.add(readFriend(r));
                 yield new FriendList(friends, readNames(r), readNames(r));
             }
+            case 112 -> new KeyStatusResult(bool(r.u8()), (int) r.i64(), (int) r.i64());
+            case 113 -> new Bundle(new com.emirchat.e2e.PrekeyBundle(r.exactBytes(Identity.ENCODED_PUBLIC_KEY_LENGTH),
+                    r.exactBytes(X25519_KEY), r.exactBytes(SIGNATURE), (int) r.i64(), r.exactBytes(X25519_KEY),
+                    r.exactBytes(SIGNATURE), (int) r.i64(), r.bytes(X25519_KEY)));
+            case 114 -> new EnvelopeAccepted(r.i64(), r.i64());
+            case 115 -> new PendingCount((int) r.i64());
+            case 125 -> new EnvelopeReceived(new Envelope(r.i64(), r.string(MAX_USERNAME_BYTES), r.i64(),
+                    r.bytes(MAX_ENVELOPE_BYTES)));
+            case 126 -> new EnvelopeDelivered(r.i64());
             case 120 -> new FriendRequestReceived(r.string(MAX_USERNAME_BYTES));
             case 121 -> new FriendAdded(readFriend(r));
             case 122 -> new FriendRemoved(r.string(MAX_USERNAME_BYTES));
@@ -176,6 +272,9 @@ public sealed interface Packet {
         r.expectEnd();
         return new Frame(id, packet);
     }
+
+    int X25519_KEY = 44;
+    int SIGNATURE = 64;
 
     private static void writeFriend(Wire.Writer w, Friend f) {
         w.string(f.username()).u8(f.online() ? 1 : 0).bytes(f.identityKey());

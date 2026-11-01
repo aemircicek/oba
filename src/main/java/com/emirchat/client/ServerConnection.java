@@ -147,6 +147,35 @@ public final class ServerConnection implements AutoCloseable {
         return expect(call(new Packet.ListFriends()), Packet.FriendList.class);
     }
 
+    public Packet.KeyStatusResult keyStatus() throws IOException, ApiException {
+        return expect(call(new Packet.KeyStatus()), Packet.KeyStatusResult.class);
+    }
+
+    public void uploadKeys(Packet.UploadKeys keys) throws IOException, ApiException {
+        expect(call(keys), Packet.Ok.class);
+    }
+
+    public void uploadPrekeys(java.util.List<Packet.Prekey> prekeys) throws IOException, ApiException {
+        expect(call(new Packet.UploadPrekeys(prekeys)), Packet.Ok.class);
+    }
+
+    public com.emirchat.e2e.PrekeyBundle fetchBundle(String username) throws IOException, ApiException {
+        return expect(call(new Packet.FetchBundle(username)), Packet.Bundle.class).bundle();
+    }
+
+    public Packet.EnvelopeAccepted sendEnvelope(String recipient, byte[] body) throws IOException, ApiException {
+        return expect(call(new Packet.SendEnvelope(recipient, body)), Packet.EnvelopeAccepted.class);
+    }
+
+    public int fetchPending() throws IOException, ApiException {
+        return expect(call(new Packet.FetchPending()), Packet.PendingCount.class).count();
+    }
+
+    /** Fire-and-forget acknowledgement; safe to call from any thread. */
+    public void ackAsync(java.util.List<Long> ids) {
+        request(new Packet.AckEnvelopes(ids));
+    }
+
     private static <T extends Packet> T expect(Packet response, Class<T> type) throws ApiException {
         if (!type.isInstance(response)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response " + response);
         return type.cast(response);

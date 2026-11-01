@@ -27,7 +27,8 @@ final class ClientConnection {
     private static final byte[] CLOSE = new byte[0];
 
     /** Everything a connection needs from the server. */
-    record Services(Identity identity, AccountService accounts, FriendService friends, Presence presence) {}
+    record Services(Identity identity, AccountService accounts, FriendService friends, MessageService messages,
+                    Presence presence) {}
 
     private final Socket socket;
     private final Services services;
@@ -135,6 +136,22 @@ final class ClientConnection {
                 yield new Packet.Ok();
             }
             case Packet.ListFriends l -> services.friends().list(me());
+            case Packet.UploadKeys k -> {
+                services.messages().uploadKeys(me(), session.peerIdentityKey(), k);
+                yield new Packet.Ok();
+            }
+            case Packet.UploadPrekeys u -> {
+                services.messages().uploadPrekeys(me(), u.prekeys());
+                yield new Packet.Ok();
+            }
+            case Packet.KeyStatus k -> services.messages().status(me());
+            case Packet.FetchBundle f -> new Packet.Bundle(services.messages().bundle(me(), f.username()));
+            case Packet.SendEnvelope s -> services.messages().send(me(), s.recipient(), s.body());
+            case Packet.FetchPending f -> new Packet.PendingCount(services.messages().pushPending(me(), this));
+            case Packet.AckEnvelopes a -> {
+                services.messages().ack(me(), a.ids());
+                yield new Packet.Ok();
+            }
             default -> throw new ApiException(ErrorCode.PROTOCOL, "Unexpected packet from client");
         };
     }
@@ -153,6 +170,9 @@ final class ClientConnection {
         socket.setSoTimeout(0); // authenticated sessions may stay idle
         user = u;
         if (services.presence().add(u.id(), this)) services.friends().onlineChanged(u, true);
-        if (newDevice) services.friends().deviceChanged(u, session.peerIdentityKey());
+        if (newDevice) {
+            services.messages().deviceChanged(u);
+            services.friends().deviceChanged(u, session.peerIdentityKey());
+        }
     }
 }

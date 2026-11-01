@@ -118,12 +118,15 @@ final class AccountCli {
                     return 1;
                 }
             }
+            if (command.equals("client")) {
+                Path accounts = home.resolve("accounts").resolve(host.replace(':', '_') + "_" + port);
+                return ClientShell.run(connection, device, accounts, username, password, stdin);
+            }
             Packet.LoggedIn result = register ? connection.register(username, password) : connection.login(username, password);
             System.out.println((register ? "Account created. " : "") + "Logged in as " + result.username() + ".");
             if (result.newDevice()) {
                 System.out.println("Note: this account is now bound to this computer's key; your friends will be told.");
             }
-            if (command.equals("client")) return ClientShell.run(connection, stdin);
             return 0;
         } catch (KeyChangedException e) {
             System.err.println(e.getMessage().replace("IDENTITY KEY FOR", "SERVER KEY FOR"));

@@ -64,6 +64,21 @@ public final class KnownPeers implements TrustPolicy {
         }
     }
 
+    /** The pinned fingerprint for a name, or null. */
+    public synchronized String fingerprint(String peerName) {
+        return peers.get(peerName);
+    }
+
+    /** Re-pins a name to a new fingerprint (after out-of-band verification) and rewrites the file. */
+    public synchronized void replace(String peerName, String fingerprint) throws java.io.IOException {
+        if (!FINGERPRINT.matcher(fingerprint).matches()) throw new IllegalArgumentException("Invalid fingerprint");
+        peers.put(peerName, fingerprint);
+        StringBuilder sb = new StringBuilder();
+        peers.forEach((n, fp) -> sb.append(n).append(' ').append(fp).append(System.lineSeparator()));
+        if (file.getParent() != null) Files.createDirectories(file.getParent());
+        Files.writeString(file, sb.toString(), StandardCharsets.UTF_8);
+    }
+
     public Path file() {
         return file;
     }

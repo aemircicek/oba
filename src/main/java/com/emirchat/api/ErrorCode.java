@@ -15,7 +15,8 @@ public enum ErrorCode {
     ALREADY_FRIENDS(11),
     NOT_FRIENDS(12),
     INVALID_REQUEST(13),
-    LIMIT_REACHED(14);
+    LIMIT_REACHED(14),
+    NO_KEYS(15);
 
     final int code;
 
