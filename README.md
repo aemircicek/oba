@@ -2,20 +2,60 @@
 
 [![CI](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml)
 
-An end-to-end encrypted, mutually authenticated 1:1 terminal chat written in Java,
-using only the JDK's standard cryptography (no third-party crypto libraries).
+End-to-end encrypted, mutually authenticated 1:1 chat for the desktop and the terminal,
+written in Java using only the JDK's standard cryptography (no third-party crypto libraries).
+
+<p align="center">
+  <img src="docs/screenshots/start-light.png" width="250" alt="Start screen">
+  <img src="docs/screenshots/verify-dark.png" width="250" alt="Fingerprint verification">
+  <img src="docs/screenshots/chat-dark.png" width="250" alt="Encrypted chat">
+</p>
 
 It started as a small socket chat that "encrypted" messages with a hard-coded AES key in ECB
 mode. Version 2 replaces that with a modern design: an authenticated key exchange
 (SIGMA-I style, X25519 + Ed25519), HKDF key derivation, AES-256-GCM records with replay
-protection, and SSH-style trust-on-first-use for identity keys.
+protection, and SSH-style trust-on-first-use for identity keys. Version 2.1 adds a desktop app.
+
+## Quick start
+
+Download the jar for your platform from the [latest release](https://github.com/aemircicek/secure-chat/releases/latest)
+(Java 21+ required), or build it yourself with `mvn verify`.
+
+```sh
+java -jar secure-chat.jar                                   # desktop app
+java -jar secure-chat.jar host --name emir                  # terminal: wait for a peer on port 5055
+java -jar secure-chat.jar connect 192.168.1.3 --name efe    # terminal: connect to a host
+java -jar secure-chat.jar fingerprint                       # show your identity key
+```
+
+Options: `--port <n>` (default 5055; 5000 is taken by AirPlay on macOS), `--bind <addr>` (host only,
+default `0.0.0.0`), `--home <dir>` (keys and known peers, default `~/.securechat`; also works with
+`gui`, handy for running two identities on one machine). Type `/quit` to leave a terminal chat.
+The desktop app and the terminal speak the same protocol and can talk to each other.
+
+### Desktop app
+
+- **Host / Join**: one person hosts and sees the LAN addresses to share; the other joins.
+- **Fingerprint verification**: on first contact both sides see each other's key as a colour
+  pattern plus hex code. Compare them on a call; a mismatch is visible at a glance.
+- **Key-change warning**: if a trusted peer ever presents a different key, the connection is
+  blocked with a full-screen warning showing the old and new keys.
+- **Session details**: click *Verified · end-to-end encrypted* in a chat to see both keys and the protocol.
+- Follows the system's light/dark appearance.
+
+<p align="center">
+  <img src="docs/screenshots/chat-light.png" width="250" alt="Chat in light mode">
+  <img src="docs/screenshots/key-changed-dark.png" width="250" alt="Key change warning">
+</p>
+
+### Terminal
 
 ```
 $ secure-chat host --name emir
 Listening on 0.0.0.0:5055 as 'emir'.
 Your fingerprint: e41e 2a9a 3ac4 3c70 63a4 4763 0f75 8bcf d9de 0cc6 ea75 2ea2 3b87 1461 37da c02a
 Waiting for a peer...
-Connected to /192.168.1.7:52458, authenticating...
+Peer connected from /192.168.1.7:52458, authenticating...
 
 First connection to 'efe'. Their identity fingerprint is:
 0087 200b 470b e8b0 5f87 a136 041e 436c
@@ -25,20 +65,6 @@ Trust and remember this key? [y/N] y
 Secure session established with 'efe' (X25519 + Ed25519, AES-256-GCM). Type /quit to leave.
 [17:49] efe: Merhaba Emir
 ```
-
-## Quick start
-
-Requires Java 21+ and Maven.
-
-```sh
-mvn verify                      # build + 27 tests
-java -jar target/secure-chat.jar fingerprint                       # show your identity key
-java -jar target/secure-chat.jar host --name emir                  # wait for a peer on port 5055
-java -jar target/secure-chat.jar connect 192.168.1.3 --name efe    # connect to a host
-```
-
-Options: `--port <n>` (default 5055; 5000 is taken by AirPlay on macOS), `--bind <addr>` (host only, default `0.0.0.0`),
-`--home <dir>` (keys and known peers, default `~/.securechat`). Type `/quit` to leave.
 
 On first contact each side is shown the other's fingerprint. **Compare it over another channel**
 (read it out on a phone call, or in person) before answering `y`. After that the key is pinned
@@ -63,7 +89,7 @@ computers) are trusted.
 | Reflection protection | Separate keys for each direction |
 | Identity hiding (passive) | Names and identity keys are sent encrypted |
 | Sender spoofing | The display name comes from the authenticated handshake, never from message text |
-| Terminal injection | Control characters, ANSI escapes and bidi overrides from the peer are neutralised |
+| Terminal / display injection | Control characters, ANSI escapes and bidi overrides from the peer are neutralised |
 | Resource exhaustion | 64 KiB frame limit, 4 KiB message limit, 120 s handshake timeout |
 
 ### Handshake
@@ -102,15 +128,22 @@ authentication and the connection is closed.
 | `com.emirchat.crypto` | `Hkdf` (RFC 5869), `Identity` (Ed25519 keys, fingerprints, owner-only key files) |
 | `com.emirchat.protocol` | `FrameIO` (bounded framing), `Wire` (strict encoding), `Handshake`, `SecureChannel` |
 | `com.emirchat.trust` | `KnownPeers` (TOFU store) |
-| `com.emirchat.chat` | `ChatMessage`, `ChatSession`, `TerminalSanitizer` |
-| `com.emirchat` | `SecureChat` command-line interface |
+| `com.emirchat.net` | `Connector` (host/connect + handshake, cancellable), `LocalAddresses` |
+| `com.emirchat.chat` | `Conversation` (UI-independent chat), `ChatMessage`, `TerminalSanitizer`, `ChatSession` (terminal) |
+| `com.emirchat.ui` | JavaFX desktop app: screens, theme (`app.css`), fingerprint art |
+| `com.emirchat` | `Main` (desktop or CLI), `SecureChat` command-line interface |
 
 ### Tests
 
-`mvn verify` runs 27 tests, including RFC 5869 test vectors and attack scenarios: tampered,
+`mvn verify` runs 34 tests, including RFC 5869 test vectors and attack scenarios: tampered,
 replayed, reordered and reflected records; an impersonator presenting a different key for a
-pinned name; bit-flips on the wire during the handshake (through a relay); and a server that
-rejects the client (the client must not report success). CI also runs a Semgrep security scan.
+pinned name; bit-flips on the wire during the handshake (through a relay); a server that
+rejects the client (the client must not report success); and conversations ending cleanly or
+by connection loss. CI also runs a Semgrep security scan.
+
+`src/test/java/com/emirchat/ui/UiPreview.java` drives the real desktop UI through a full session
+against a scripted peer (host, verify, chat, key-change attack, error) and saves a screenshot of
+every step; the images above come from it.
 
 ## Limitations
 
@@ -130,7 +163,7 @@ Honest notes on what this project does **not** do:
 - Passphrase-encrypted identity key (PBKDF2/Argon2 + AES-GCM)
 - Group chat with per-member keys
 - Rekeying after N messages and a ratchet for post-compromise security
-- JavaFX desktop interface
+- Native installers (jpackage) with code signing
 - Fuzzing the decoders (Jazzer)
 
 ## Security
@@ -139,4 +172,4 @@ See [SECURITY.md](SECURITY.md) for how to report a vulnerability.
 
 ## License
 
-[MIT](LICENSE) © 2026 Emir Çiçek
+[MIT](LICENSE) © 2026 Emir Çiçek. Icons adapted from [Feather](https://github.com/feathericons/feather) (MIT).

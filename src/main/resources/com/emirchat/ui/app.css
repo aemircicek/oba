@@ -1,0 +1,283 @@
+/*
+ * secure-chat desktop theme.
+ * Palettes are looked-up colours on .root; .root.dark / .root.light swap them, following the
+ * operating system's appearance. Everything else references the palette, never raw colours.
+ */
+
+.root.light {
+    -sc-bg: #f5f7f9;
+    -sc-surface: #ffffff;
+    -sc-surface-2: #eef1f4;
+    -sc-surface-3: #e3e8ed;
+    -sc-border: #d9dfe5;
+    -sc-text: #16191d;
+    -sc-text-2: #545e6a;
+    -sc-text-3: #86909b;
+    -sc-accent: #13824f;
+    -sc-accent-hover: #0f7044;
+    -sc-on-accent: #ffffff;
+    -sc-accent-weak: #e2f3ea;
+    -sc-accent-text: #0f6e42;
+    -sc-own-bubble: #13824f;
+    -sc-on-own-bubble: #ffffff;
+    -sc-own-time: rgba(255, 255, 255, 0.72);
+    -sc-peer-bubble: #ffffff;
+    -sc-danger: #c93a32;
+    -sc-danger-weak: #fbe9e7;
+    -sc-warning: #9a6700;
+    -sc-shadow: rgba(16, 24, 32, 0.08);
+    -sc-segment-selected: #ffffff;
+}
+
+.root.dark {
+    -sc-bg: #0d1014;
+    -sc-surface: #151a20;
+    -sc-surface-2: #1c232b;
+    -sc-surface-3: #252e38;
+    -sc-border: #29323d;
+    -sc-text: #e8edf2;
+    -sc-text-2: #a0abb7;
+    -sc-text-3: #6d7884;
+    -sc-accent: #34c27f;
+    -sc-accent-hover: #46d08f;
+    -sc-on-accent: #04170d;
+    -sc-accent-weak: #13281f;
+    -sc-accent-text: #5ad69a;
+    -sc-own-bubble: #1d7a4d;
+    -sc-on-own-bubble: #f2fbf6;
+    -sc-own-time: rgba(242, 251, 246, 0.66);
+    -sc-peer-bubble: #1c232b;
+    -sc-danger: #f0605a;
+    -sc-danger-weak: #2c1716;
+    -sc-warning: #d9a440;
+    -sc-shadow: rgba(0, 0, 0, 0.35);
+    -sc-segment-selected: #2b3540;
+}
+
+.root {
+    -fx-font-family: "System";
+    -fx-font-size: 13px;
+    -fx-background-color: -sc-bg;
+    -fx-focus-color: -sc-accent;
+    -fx-faint-focus-color: transparent;
+    -fx-accent: -sc-accent;
+    -fx-text-background-color: -sc-text;
+}
+
+/* ------------------------------------------------------------------ typography */
+
+.h1 { -fx-font-size: 22px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
+.h2 { -fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
+.body { -fx-font-size: 13px; -fx-text-fill: -sc-text-2; -fx-line-spacing: 2px; }
+.caption { -fx-font-size: 11.5px; -fx-text-fill: -sc-text-3; }
+.overline { -fx-font-size: 10.5px; -fx-font-weight: bold; -fx-text-fill: -sc-text-3; }
+.mono { -fx-font-family: "Menlo", "SF Mono", "Consolas", "DejaVu Sans Mono", monospace; -fx-text-fill: -sc-text; }
+.mono-large { -fx-font-size: 15px; }
+.mono-small { -fx-font-size: 11px; -fx-text-fill: -sc-text-2; }
+.accent-text { -fx-text-fill: -sc-accent-text; }
+.danger-text { -fx-text-fill: -sc-danger; }
+.field-label { -fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: -sc-text-2; }
+
+/* ------------------------------------------------------------------ surfaces */
+
+.screen { -fx-padding: 32 28 28 28; }
+
+.card {
+    -fx-background-color: -sc-surface;
+    -fx-background-radius: 16;
+    -fx-border-color: -sc-border;
+    -fx-border-radius: 16;
+    -fx-padding: 20;
+    -fx-effect: dropshadow(gaussian, -sc-shadow, 18, 0, 0, 4);
+}
+
+.card-flat {
+    -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 12;
+    -fx-padding: 14;
+}
+
+.icon-badge { -fx-background-radius: 999; -fx-min-width: 56; -fx-min-height: 56; -fx-max-width: 56; -fx-max-height: 56; }
+.icon-badge.accent { -fx-background-color: -sc-accent-weak; }
+.icon-badge.danger { -fx-background-color: -sc-danger-weak; }
+
+.separator-line { -fx-background-color: -sc-border; -fx-min-height: 1; -fx-max-height: 1; }
+
+/* ------------------------------------------------------------------ icons */
+
+.icon { -fx-fill: transparent; -fx-stroke: -sc-text-2; -fx-stroke-width: 2; -fx-stroke-line-cap: round; -fx-stroke-line-join: round; }
+.icon.accent { -fx-stroke: -sc-accent; }
+.icon.danger { -fx-stroke: -sc-danger; }
+.icon.on-accent { -fx-stroke: -sc-on-accent; }
+.icon.muted { -fx-stroke: -sc-text-3; }
+
+/* ------------------------------------------------------------------ controls */
+
+.text-field {
+    -fx-background-color: -sc-surface;
+    -fx-background-radius: 10;
+    -fx-border-color: -sc-border;
+    -fx-border-radius: 10;
+    -fx-border-width: 1;
+    -fx-padding: 10 12;
+    -fx-text-fill: -sc-text;
+    -fx-prompt-text-fill: -sc-text-3;
+    -fx-highlight-fill: -sc-accent;
+    -fx-highlight-text-fill: -sc-on-accent;
+    -fx-font-size: 13.5px;
+}
+.text-field:focused { -fx-border-color: -sc-accent; -fx-border-width: 1.5; -fx-padding: 9.5 11.5; }
+.text-field.invalid { -fx-border-color: -sc-danger; }
+
+.button {
+    -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 10;
+    -fx-border-color: transparent;
+    -fx-text-fill: -sc-text;
+    -fx-font-size: 13px;
+    -fx-font-weight: bold;
+    -fx-padding: 10 16;
+    -fx-cursor: hand;
+    -fx-background-insets: 0;
+}
+.button:hover { -fx-background-color: -sc-surface-3; }
+.button:focused { -fx-border-color: -sc-accent; -fx-border-radius: 10; -fx-border-width: 1.5; }
+.button:disabled { -fx-opacity: 0.45; }
+
+.button.primary { -fx-background-color: -sc-accent; -fx-text-fill: -sc-on-accent; -fx-padding: 12 18; -fx-font-size: 13.5px; }
+.button.primary:hover { -fx-background-color: -sc-accent-hover; }
+.button.primary:focused { -fx-border-color: -sc-text; }
+
+.button.danger-ghost { -fx-background-color: transparent; -fx-text-fill: -sc-danger; -fx-border-color: -sc-border; -fx-border-radius: 10; }
+.button.danger-ghost:hover { -fx-background-color: -sc-danger-weak; }
+
+.button.link { -fx-background-color: transparent; -fx-text-fill: -sc-accent-text; -fx-padding: 2 4; -fx-font-size: 12px; }
+.button.link:hover { -fx-underline: true; }
+
+.button.icon-button { -fx-background-color: transparent; -fx-padding: 6; -fx-background-radius: 8; }
+.button.icon-button:hover { -fx-background-color: -sc-surface-2; }
+
+.button.send {
+    -fx-background-color: -sc-accent;
+    -fx-background-radius: 999;
+    -fx-min-width: 40; -fx-min-height: 40; -fx-max-width: 40; -fx-max-height: 40;
+    -fx-padding: 0;
+}
+.button.send:hover { -fx-background-color: -sc-accent-hover; }
+
+/* Segmented control (Host | Join) */
+.segmented {
+    -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 11;
+    -fx-padding: 3;
+    -fx-spacing: 3;
+}
+.segmented .toggle-button {
+    -fx-background-color: transparent;
+    -fx-background-radius: 8;
+    -fx-text-fill: -sc-text-2;
+    -fx-font-weight: bold;
+    -fx-padding: 8 0;
+    -fx-cursor: hand;
+    -fx-border-color: transparent;
+}
+.segmented .toggle-button:hover { -fx-text-fill: -sc-text; }
+.segmented .toggle-button:selected {
+    -fx-background-color: -sc-segment-selected;
+    -fx-text-fill: -sc-text;
+    -fx-effect: dropshadow(gaussian, -sc-shadow, 6, 0, 0, 1);
+}
+
+.progress-indicator { -fx-progress-color: -sc-accent; }
+
+/* Notices */
+.notice { -fx-background-radius: 10; -fx-padding: 10 12; -fx-font-size: 12.5px; }
+.notice.error { -fx-background-color: -sc-danger-weak; -fx-text-fill: -sc-danger; }
+.notice.info { -fx-background-color: -sc-surface-2; -fx-text-fill: -sc-text-2; }
+
+/* Address chips on the waiting screen */
+.chip {
+    -fx-background-color: -sc-surface;
+    -fx-border-color: -sc-border;
+    -fx-background-radius: 10;
+    -fx-border-radius: 10;
+    -fx-padding: 6 6 6 14;
+}
+
+/* Tooltip */
+.tooltip { -fx-background-color: -sc-surface-3; -fx-text-fill: -sc-text; -fx-background-radius: 6; -fx-font-size: 11.5px; }
+
+/* Scroll panes and bars */
+.scroll-pane, .scroll-pane > .viewport { -fx-background-color: transparent; -fx-background-insets: 0; -fx-padding: 0; }
+.scroll-bar:vertical { -fx-background-color: transparent; -fx-pref-width: 10; }
+.scroll-bar .thumb { -fx-background-color: -sc-surface-3; -fx-background-radius: 999; -fx-background-insets: 2; }
+.scroll-bar .increment-button, .scroll-bar .decrement-button { -fx-padding: 0; -fx-pref-height: 0; }
+.scroll-bar .increment-arrow, .scroll-bar .decrement-arrow { -fx-shape: " "; -fx-padding: 0; }
+.scroll-bar .track { -fx-background-color: transparent; }
+
+/* ------------------------------------------------------------------ chat */
+
+.chat-header {
+    -fx-background-color: -sc-surface;
+    -fx-border-color: transparent transparent -sc-border transparent;
+    -fx-padding: 12 16;
+    -fx-spacing: 12;
+}
+.avatar { -fx-background-radius: 999; -fx-min-width: 38; -fx-min-height: 38; -fx-max-width: 38; -fx-max-height: 38; }
+.avatar-letter { -fx-text-fill: #ffffff; -fx-font-weight: bold; -fx-font-size: 16px; }
+
+.secure-badge { -fx-cursor: hand; -fx-spacing: 5; }
+.secure-badge .label { -fx-text-fill: -sc-accent-text; -fx-font-size: 11.5px; -fx-font-weight: bold; }
+
+.details {
+    -fx-background-color: -sc-surface;
+    -fx-border-color: transparent transparent -sc-border transparent;
+    -fx-padding: 14 16 16 16;
+    -fx-spacing: 12;
+}
+
+.messages { -fx-padding: 16 16 8 16; }
+
+.bubble { -fx-background-radius: 16; -fx-padding: 8 12 6 12; -fx-spacing: 2; }
+.bubble.own { -fx-background-color: -sc-own-bubble; -fx-background-radius: 16 16 5 16; }
+.bubble.own.continued { -fx-background-radius: 16 5 5 16; }
+.bubble.peer {
+    -fx-background-color: -sc-peer-bubble;
+    -fx-background-radius: 16 16 16 5;
+    -fx-border-color: -sc-border;
+    -fx-border-radius: 16 16 16 5;
+}
+.bubble.peer.continued { -fx-background-radius: 5 16 16 5; -fx-border-radius: 5 16 16 5; }
+.bubble-text { -fx-font-size: 13.5px; -fx-line-spacing: 1px; }
+.bubble.own .bubble-text { -fx-text-fill: -sc-on-own-bubble; }
+.bubble.peer .bubble-text { -fx-text-fill: -sc-text; }
+.bubble-time { -fx-font-size: 10px; }
+.bubble.own .bubble-time { -fx-text-fill: -sc-own-time; }
+.bubble.peer .bubble-time { -fx-text-fill: -sc-text-3; }
+
+.system-line {
+    -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 999;
+    -fx-padding: 5 12;
+    -fx-font-size: 11.5px;
+    -fx-text-fill: -sc-text-2;
+}
+.system-line.danger { -fx-background-color: -sc-danger-weak; -fx-text-fill: -sc-danger; }
+
+.composer {
+    -fx-background-color: -sc-surface;
+    -fx-border-color: -sc-border transparent transparent transparent;
+    -fx-padding: 12 14;
+    -fx-spacing: 10;
+}
+.composer .text-field { -fx-background-radius: 999; -fx-border-radius: 999; -fx-padding: 10 16; -fx-background-color: -sc-surface-2; -fx-border-color: transparent; }
+.composer .text-field:focused { -fx-border-color: -sc-accent; -fx-padding: 9.5 15.5; }
+
+.ended-bar {
+    -fx-background-color: -sc-surface;
+    -fx-border-color: -sc-border transparent transparent transparent;
+    -fx-padding: 14 16;
+    -fx-spacing: 12;
+}
+
+.empty-state .label { -fx-text-fill: -sc-text-3; }

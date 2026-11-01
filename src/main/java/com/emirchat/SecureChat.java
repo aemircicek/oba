@@ -1,18 +1,15 @@
 package com.emirchat;
 
 import com.emirchat.chat.ChatSession;
+import com.emirchat.chat.Conversation;
 import com.emirchat.crypto.Identity;
-import com.emirchat.protocol.FrameIO;
-import com.emirchat.protocol.Handshake;
-import com.emirchat.protocol.Session;
+import com.emirchat.net.Connector;
 import com.emirchat.trust.KnownPeers;
 import com.emirchat.trust.PeerRejectedException;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
-import java.net.BindException;
-import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
@@ -21,21 +18,22 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Command-line entry point. */
+/** Command-line interface. */
 public final class SecureChat {
-    static final int DEFAULT_PORT = 5055;
-    private static final int HANDSHAKE_TIMEOUT_MS = 120_000;
+    static final int DEFAULT_PORT = Connector.DEFAULT_PORT;
 
-    private static final String USAGE = String.join("\n",
+    static final String USAGE = String.join("\n",
             "Usage:",
-            "  secure-chat host    --name <name> [--port 5055] [--bind 0.0.0.0]",
-            "  secure-chat connect <host> --name <name> [--port 5055]",
+            "  secure-chat                         open the desktop app",
+            "  secure-chat gui     [--home <dir>]  open the desktop app",
+            "  secure-chat host    --name <name> [--port " + DEFAULT_PORT + "] [--bind 0.0.0.0]",
+            "  secure-chat connect <host> --name <name> [--port " + DEFAULT_PORT + "]",
             "  secure-chat fingerprint",
             "",
             "Options:",
             "  --home <dir>   key and known-peers directory (default: ~/.securechat)",
             "",
-            "Type /quit to leave a chat.");
+            "Type " + ChatSession.QUIT_COMMAND + " to leave a chat.");
 
     private SecureChat() {}
 
@@ -57,72 +55,33 @@ public final class SecureChat {
         BufferedReader keyboard = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
         try {
             Identity identity = Identity.loadOrCreate(o.home);
-            switch (o.command) {
-                case "fingerprint" -> {
-                    System.out.println("Your identity fingerprint:");
-                    System.out.println(Identity.pretty(identity.fingerprint()));
-                    return 0;
-                }
-                case "host" -> {
-                    return host(o, identity, keyboard);
-                }
-                case "connect" -> {
-                    return connect(o, identity, keyboard);
-                }
-                default -> throw new IllegalArgumentException("Unknown command: " + o.command);
+            if (o.command.equals("fingerprint")) {
+                System.out.println("Your identity fingerprint:");
+                System.out.println(Identity.pretty(identity.fingerprint()));
+                return 0;
             }
-        } catch (IOException | UncheckedIOException e) {
-            System.err.println("Error: " + e.getMessage());
-            return 1;
-        }
-    }
-
-    private static int host(Options o, Identity identity, BufferedReader keyboard) throws IOException {
-        Socket socket;
-        // Plain TCP by design: every byte after the handshake is protected by the authenticated
-        // AES-GCM channel in com.emirchat.protocol, so TLS would add no security here.
-        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
-        try (ServerSocket server = new ServerSocket()) {
-            server.setReuseAddress(true); // avoids "Address already in use" right after a restart
-            try {
-                server.bind(new InetSocketAddress(o.bind, o.port));
-            } catch (BindException e) {
-                throw new IOException("Port " + o.port + " is already in use by another program"
-                        + " (on macOS, AirPlay Receiver occupies 5000 and 7000). Try another one, e.g. --port "
-                        + (o.port == DEFAULT_PORT ? DEFAULT_PORT + 1 : DEFAULT_PORT), e);
-            }
-            System.out.println("Listening on " + o.bind + ":" + o.port + " as '" + o.name + "'.");
-            System.out.println("Your fingerprint: " + Identity.pretty(identity.fingerprint()).replace('\n', ' '));
-            System.out.println("Waiting for a peer...");
-            socket = server.accept(); // one peer per session; the listening socket closes right after
-        }
-        return chat(socket, true, o, identity, keyboard);
-    }
-
-    private static int connect(Options o, Identity identity, BufferedReader keyboard) throws IOException {
-        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
-        Socket socket = new Socket(); // encrypted at the application layer, see host()
-        socket.connect(new InetSocketAddress(o.host, o.port), 10_000);
-        return chat(socket, false, o, identity, keyboard);
-    }
-
-    private static int chat(Socket socket, boolean isServer, Options o, Identity identity, BufferedReader keyboard)
-            throws IOException {
-        try {
-            System.out.println("Connected to " + socket.getRemoteSocketAddress() + ", authenticating...");
-            socket.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
             KnownPeers trust = new KnownPeers(o.home.resolve("known_peers"), (name, fp) -> confirm(keyboard, name, fp));
-            FrameIO io = new FrameIO(socket.getInputStream(), socket.getOutputStream());
-            Session session = isServer
-                    ? Handshake.asServer(io, identity, o.name, trust)
-                    : Handshake.asClient(io, identity, o.name, trust);
-            socket.setSoTimeout(0);
+            Connector.Progress progress = new Connector.Progress() {
+                @Override
+                public void listening(ServerSocket server) {
+                    System.out.println("Listening on " + o.bind + ":" + o.port + " as '" + o.name + "'.");
+                    System.out.println("Your fingerprint: " + Identity.pretty(identity.fingerprint()).replace('\n', ' '));
+                    System.out.println("Waiting for a peer...");
+                }
 
-            System.out.println("Secure session established with '" + session.peerName() + "'"
-                    + " (X25519 + Ed25519, AES-256-GCM). Type " + ChatSession.QUIT_COMMAND + " to leave.");
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> closeQuietly(socket)));
-            new ChatSession(session, socket, keyboard, System.out, () -> System.exit(0)).run();
-            return 0;
+                @Override
+                public void socket(Socket socket) {
+                    if (socket.isConnected()) {
+                        System.out.println("Peer connected from " + socket.getRemoteSocketAddress() + ", authenticating...");
+                    } else {
+                        System.out.println("Connecting to " + o.host + ":" + o.port + " and authenticating...");
+                    }
+                }
+            };
+            Connector.Established established = o.command.equals("host")
+                    ? Connector.host(identity, o.name, o.bind, o.port, trust, progress)
+                    : Connector.connect(identity, o.name, o.host, o.port, trust, progress);
+            return chat(established, keyboard);
         } catch (PeerRejectedException e) {
             System.err.println(e.getMessage());
             return 3;
@@ -132,9 +91,20 @@ public final class SecureChat {
         } catch (SocketTimeoutException e) {
             System.err.println("Handshake timed out.");
             return 1;
-        } finally {
-            closeQuietly(socket);
+        } catch (IOException | UncheckedIOException e) {
+            System.err.println("Error: " + e.getMessage());
+            return 1;
         }
+    }
+
+    private static int chat(Connector.Established established, BufferedReader keyboard) throws IOException {
+        Socket socket = established.socket();
+        System.out.println("Secure session established with '" + established.session().peerName() + "'"
+                + " (X25519 + Ed25519, AES-256-GCM). Type " + ChatSession.QUIT_COMMAND + " to leave.");
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> Connector.closeQuietly(socket)));
+        Conversation conversation = new Conversation(established.session(), socket);
+        new ChatSession(conversation, keyboard, System.out, () -> System.exit(0)).run();
+        return 0;
     }
 
     private static boolean confirm(BufferedReader keyboard, String name, String fingerprint) {
@@ -152,15 +122,11 @@ public final class SecureChat {
         }
     }
 
-    private static void closeQuietly(Socket socket) {
-        try {
-            socket.close();
-        } catch (IOException ignored) {
-            // already closed
-        }
-    }
-
     record Options(String command, String host, String name, int port, String bind, Path home) {
+        static Path defaultHome() {
+            return Path.of(System.getProperty("user.home"), ".securechat");
+        }
+
         static Options parse(String[] args) {
             if (args.length == 0) throw new IllegalArgumentException("Missing command");
             String command = args[0];
@@ -168,7 +134,7 @@ public final class SecureChat {
             String name = null;
             String bind = "0.0.0.0";
             int port = DEFAULT_PORT;
-            Path home = Path.of(System.getProperty("user.home"), ".securechat");
+            Path home = defaultHome();
             for (int i = 1; i < args.length; i++) {
                 String a = args[i];
                 switch (a) {
@@ -184,7 +150,7 @@ public final class SecureChat {
             }
             String host = null;
             switch (command) {
-                case "fingerprint" -> {
+                case "fingerprint", "gui" -> {
                     if (!positional.isEmpty()) throw new IllegalArgumentException("Unexpected argument");
                 }
                 case "host", "connect" -> {
@@ -195,7 +161,7 @@ public final class SecureChat {
                         throw new IllegalArgumentException("Unexpected argument: " + positional.get(0));
                     }
                     if (name == null) throw new IllegalArgumentException("--name is required");
-                    if (!Handshake.isValidName(name)) {
+                    if (!com.emirchat.protocol.Handshake.isValidName(name)) {
                         throw new IllegalArgumentException("--name must be 1-32 chars of letters, digits, '_', '.', '-'");
                     }
                 }
