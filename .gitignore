@@ -1,5 +1,7 @@
+target/
 *.class
 bin/
 out/
 .idea/
 .vscode/
+.DS_Store
