@@ -7,7 +7,8 @@ import javafx.stage.Stage;
 
 /** App-wide settings (not per account) and the window's last position. Never holds secrets. */
 final class AppPrefs {
-    private static final Preferences NODE = Preferences.userNodeForPackage(AppPrefs.class).node("app");
+    private static final Preferences NODE = Preferences.userNodeForPackage(AppPrefs.class)
+            .node(Boolean.getBoolean("securechat.preview") ? "preview-app" : "app"); // the preview tool never touches real settings
 
     private AppPrefs() {}
 
@@ -27,6 +28,15 @@ final class AppPrefs {
 
     static void setTrayHintShown() {
         NODE.putBoolean("tray-hint-shown", true);
+    }
+
+    /** Look for a newer release on GitHub after signing in. */
+    static boolean checkUpdates() {
+        return NODE.getBoolean("check-updates", true);
+    }
+
+    static void setCheckUpdates(boolean on) {
+        NODE.putBoolean("check-updates", on);
     }
 
     static boolean welcomeShown() {

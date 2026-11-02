@@ -42,6 +42,7 @@ public final class SecureChatApp extends Application {
     public void start(Stage stage) {
         this.stage = stage;
         Path dataDir = home != null ? home : com.emirchat.AppInfo.defaultHome();
+        AppLog.init(dataDir);
         boolean handedOver;
         try {
             instance = SingleInstance.acquire(dataDir, openFile != null ? "open" : "show",
@@ -56,6 +57,8 @@ public final class SecureChatApp extends Application {
             return;
         }
 
+        AppLog.info(com.emirchat.AppInfo.NAME + " " + com.emirchat.AppInfo.version() + " started on "
+                + System.getProperty("os.name") + ", Java " + System.getProperty("java.version"));
         StackPane root = new StackPane();
         Theme.install(root);
         Scene scene = new Scene(root, 1040, 720);

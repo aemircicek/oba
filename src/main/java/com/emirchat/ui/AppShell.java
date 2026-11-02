@@ -206,6 +206,7 @@ final class AppShell {
                 s.attach(client);
                 rememberChoice(text, user, r.remember(), r.password());
                 AccountSession ready = s;
+                AppLog.info("Signed in as " + user + " on " + address);
                 Platform.runLater(() -> openMain(ready, login));
             } catch (KeyChangedException e) {
                 fail(screen, s, login.isDefault(defaults) && defaults.hasFingerprint()
@@ -264,6 +265,7 @@ final class AppShell {
     }
 
     private void fail(LoginScreen screen, AccountSession s, String message) {
+        AppLog.info("Sign-in failed: " + message);
         if (s != null) s.close();
         Platform.runLater(() -> {
             show(screen.root());
@@ -312,6 +314,7 @@ final class AppShell {
             for (int attempt = 0; session == s && !s.isClosed(); attempt++) {
                 int delay = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
                 Platform.runLater(() -> s.reconnecting(delay));
+                if (attempt == 0) AppLog.info("Connection lost; reconnecting");
                 try {
                     Thread.sleep(delay * 1000L);
                 } catch (InterruptedException e) {
@@ -324,6 +327,7 @@ final class AppShell {
                             new String(login.password()), false, s);
                     s.attach(client);
                     if (old != null) old.close();
+                    AppLog.info("Reconnected after " + (attempt + 1) + " attempt(s)");
                     Platform.runLater(s::reconnected);
                     return;
                 } catch (ApiException e) {

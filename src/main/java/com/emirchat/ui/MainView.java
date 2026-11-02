@@ -52,6 +52,7 @@ final class MainView implements AccountSession.View {
     private final TextField search = new TextField();
 
     private boolean focusHooked;
+    private final HBox updateBanner = new HBox(8);
     private final Label connectionLabel = UiKit.label("● " + I18n.t("main.connected"), "row-sub", "accent-text");
 
     MainView(AccountSession session, Runnable onLogout) {
@@ -114,7 +115,9 @@ final class MainView implements AccountSession.View {
         listScroll.setFitToWidth(true);
         listScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         VBox.setVgrow(listScroll, Priority.ALWAYS);
-        VBox sidebar = new VBox(header, tabBox, listScroll);
+        updateBanner.managedProperty().bind(updateBanner.visibleProperty());
+        updateBanner.setVisible(false);
+        VBox sidebar = new VBox(header, updateBanner, tabBox, listScroll);
         sidebar.getStyleClass().add("sidebar");
 
         showEmpty();
@@ -123,6 +126,107 @@ final class MainView implements AccountSession.View {
         stack.getChildren().add(frame);
         refreshSidebar();
         session.setView(this);
+        if (AppPrefs.checkUpdates()) {
+            session.downloads().execute(() -> UpdateCheck.newerVersion().ifPresent(v -> Platform.runLater(() -> showUpdate(v))));
+        }
+        if (!AppPrefs.welcomeShown()) Platform.runLater(() -> openWelcome(0));
+    }
+
+    private void showUpdate(String version) {
+        AppLog.info("Update available: " + version);
+        Label text = UiKit.label(I18n.t("update.available", version), "row-sub");
+        text.setWrapText(true);
+        Button get = new Button(I18n.t("update.download"));
+        get.getStyleClass().addAll("small", "primary");
+        get.setId("update-download");
+        get.setOnAction(e -> browse(UpdateCheck.RELEASES));
+        updateBanner.getChildren().setAll(Icons.of(Icons.DOWNLOAD, 16, "accent"), text, UiKit.grow(), get);
+        updateBanner.getStyleClass().setAll("update-banner");
+        updateBanner.setAlignment(Pos.CENTER_LEFT);
+        updateBanner.setVisible(true);
+    }
+
+    /** Opens a web page in the default browser (off the UI thread: AWT may need a moment). */
+    static void browse(String url) {
+        new Thread(() -> {
+            try {
+                java.awt.Desktop.getDesktop().browse(java.net.URI.create(url));
+            } catch (Exception e) {
+                AppLog.warn("Could not open " + url, e);
+            }
+        }, "browse").start();
+    }
+
+    private static void openFolder(java.nio.file.Path folder) {
+        new Thread(() -> {
+            try {
+                java.awt.Desktop.getDesktop().open(folder.toFile());
+            } catch (Exception e) {
+                AppLog.warn("Could not open " + folder, e);
+            }
+        }, "open-folder").start();
+    }
+
+    // ------------------------------------------------------------------ first start
+
+    /** A short tour the first time someone signs in. */
+    private void openWelcome(int page) {
+        String[][] pages = {
+                {Icons.LOCK, "welcome.title1", "welcome.body1"},
+                {Icons.SHIELD_CHECK, "welcome.title2", "welcome.body2"},
+                {Icons.KEY, "welcome.title3", "welcome.body3"}};
+        String[] p = pages[page];
+        StackPane badge = new StackPane(Icons.of(p[0], 28, "accent"));
+        badge.getStyleClass().addAll("icon-badge", "accent");
+        Label body = UiKit.label(I18n.t(p[2]), "body");
+        body.setWrapText(true);
+        body.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        Label step = UiKit.label((page + 1) + " / " + pages.length, "caption");
+        Button back = new Button(I18n.t("welcome.back"));
+        back.setVisible(page > 0);
+        back.setOnAction(e -> openWelcome(page - 1));
+        boolean last = page == pages.length - 1;
+        Button next = new Button(last ? I18n.t("welcome.start") : I18n.t("welcome.next"));
+        next.getStyleClass().add("primary");
+        next.setId("welcome-next");
+        next.setDefaultButton(true);
+        next.setOnAction(e -> {
+            if (last) {
+                AppPrefs.setWelcomeShown();
+                overlay.close();
+            } else {
+                openWelcome(page + 1);
+            }
+        });
+        VBox box = Overlay.dialog(I18n.t(p[1]), badge, body, new HBox(10, step, UiKit.grow(), back, next));
+        box.setId("welcome-dialog");
+        overlay.show(box);
+    }
+
+    private void openAbout() {
+        javafx.scene.image.ImageView logo = new javafx.scene.image.ImageView(
+                new javafx.scene.image.Image(MainView.class.getResourceAsStream("icons/icon-128.png")));
+        logo.setFitWidth(72);
+        logo.setPreserveRatio(true);
+        Label name = UiKit.label(com.emirchat.AppInfo.NAME + " " + com.emirchat.AppInfo.version(), "h2");
+        Label what = UiKit.label(I18n.t("about.description"), "body");
+        what.setWrapText(true);
+        Label license = UiKit.label(I18n.t("about.license"), "caption");
+        license.setWrapText(true);
+        Button site = new Button(I18n.t("about.website"));
+        site.getStyleClass().add("link");
+        site.setOnAction(e -> browse(com.emirchat.AppInfo.WEBSITE));
+        Button notices = new Button(I18n.t("about.notices"));
+        notices.getStyleClass().add("link");
+        notices.setOnAction(e -> browse(com.emirchat.AppInfo.WEBSITE + "/blob/main/THIRD-PARTY-NOTICES.md"));
+        Button close = new Button(I18n.t("common.close"));
+        close.getStyleClass().add("primary");
+        close.setOnAction(e -> overlay.close());
+        VBox head = new VBox(8, logo, name, what);
+        head.setAlignment(Pos.CENTER);
+        VBox box = Overlay.dialog(I18n.t("about.title"), head, license, new HBox(10, site, notices, UiKit.grow(), close));
+        box.setId("about-dialog");
+        overlay.show(box);
     }
 
     Parent root() {
@@ -197,6 +301,8 @@ final class MainView implements AccountSession.View {
             toggles.getChildren().add(appToggle(I18n.t("settings.keepRunning"), I18n.t("settings.keepRunningHint"),
                     "setting-keep-running", AppPrefs.keepRunning(), AppPrefs::setKeepRunning));
         }
+        toggles.getChildren().add(appToggle(I18n.t("settings.updates"), I18n.t("settings.updatesHint"),
+                "setting-updates", AppPrefs.checkUpdates(), AppPrefs::setCheckUpdates));
         if (Autostart.supported()) {
             toggles.getChildren().add(appToggle(I18n.t("settings.autostart"), I18n.t("settings.autostartHint"),
                     "setting-autostart", Autostart.enabled(), on -> {
@@ -224,6 +330,16 @@ final class MainView implements AccountSession.View {
         HBox languageRow = new HBox(10, UiKit.label(I18n.t("settings.language"), "field-label"), language, restartNote);
         languageRow.setAlignment(Pos.CENTER_LEFT);
         toggles.getChildren().add(0, languageRow);
+        Button about = new Button(I18n.t("about.title"));
+        about.getStyleClass().add("link");
+        about.setId("about");
+        about.setOnAction(e -> openAbout());
+        Button logs = new Button(I18n.t("settings.openLogs"));
+        logs.getStyleClass().add("link");
+        logs.setVisible(AppLog.folder() != null);
+        logs.managedProperty().bind(logs.visibleProperty());
+        logs.setOnAction(e -> openFolder(AppLog.folder()));
+        toggles.getChildren().add(new HBox(14, about, logs));
         Button backup = new Button(I18n.t("backup.button"));
         backup.setId("backup");
         backup.setOnAction(e -> openBackup());

@@ -111,6 +111,8 @@ public final class AccountPreview {
         theme = args.length > 1 ? args[1] : "dark";
         System.setProperty("securechat.theme", theme);
         I18n.use(System.getProperty("preview.language", "en"));
+        System.setProperty("securechat.preview", "true");
+        java.util.prefs.Preferences.userNodeForPackage(AppPrefs.class).node("preview-app").clear();
         Files.createDirectories(out);
         work = Files.createTempDirectory("securechat-account-preview");
         server = new ChatServer(new ChatServer.Config(work.resolve("server"), "127.0.0.1", 0, 1_000)).start();
@@ -152,6 +154,10 @@ public final class AccountPreview {
         snap("02-verify-server");
         fx(() -> { ((Button) find("#server-trust")).fire(); return null; });
         waitFor("#tab-chats");
+        waitFor("#welcome-dialog");
+        pause();
+        snap("03a-welcome");
+        for (int i = 0; i < 3; i++) fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
         pause();
         snap("03-main-empty");
 
