@@ -1,9 +1,11 @@
 name: Release
 
-# Publishing a GitHub release builds, for each OS: a runnable jar (JavaFX ships native libraries,
-# so each OS needs its own) and a package with a bundled Java runtime (Windows: portable zip,
-# macOS: dmg, Linux: deb). Every file gets a signed build-provenance attestation (Sigstore), and a
-# SHA256SUMS file is added at the end.
+# Publishing a GitHub release builds Scorpion for each OS with jpackage (Java included):
+#   Windows: installer (.exe, per-user, shortcuts, .scbackup association) and a portable .zip
+#   macOS:   .dmg
+#   Linux:   .deb
+# plus the runnable jar per OS (JavaFX ships native libraries). Every file gets a signed
+# build-provenance attestation (Sigstore), and a SHA256SUMS file is added at the end.
 on:
   release:
     types: [published]
@@ -13,6 +15,9 @@ permissions:
   id-token: write      # sign attestations with the workflow's identity
   attestations: write
 
+env:
+  WIN_UPGRADE_UUID: 3b9f6c1e-6a52-4f0e-9a51-6c0f2c7e5a11   # never change: lets new versions replace old ones
+
 jobs:
   package:
     strategy:
@@ -21,13 +26,10 @@ jobs:
         include:
           - os: macos-latest
             platform: macos-arm64
-            type: dmg
           - os: windows-latest
             platform: windows-x64
-            type: app-image
           - os: ubuntu-latest
             platform: linux-x64
-            type: deb
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,31 +40,50 @@ jobs:
           cache: maven
       - name: Build and test
         run: mvn -B verify
+      - name: Tools for the Windows installer (WiX 3)
+        if: runner.os == 'Windows'
+        run: choco install wixtoolset --version 3.14.1 -y --no-progress
       - name: Tools for .deb packages
-        if: matrix.type == 'deb'
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fakeroot
+      - name: macOS icon
+        if: runner.os == 'macOS'
+        run: iconutil -c icns packaging/macos/scorpion.iconset -o packaging/macos/scorpion.icns
       - name: Package
         shell: bash
         env:
           TAG: ${{ github.event.release.tag_name }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
           mkdir -p dist input
           cp target/secure-chat.jar input/
-          cp target/secure-chat.jar "dist/secure-chat-${{ matrix.platform }}.jar"
-          EXTRA=()
-          if [ "${{ matrix.type }}" = "deb" ]; then EXTRA=(--linux-shortcut --linux-menu-group Network); fi
-          jpackage --type "${{ matrix.type }}" --name secure-chat --input input --main-jar secure-chat.jar \
-            --main-class com.emirchat.Main --app-version "$VERSION" --vendor "Emir Cicek" \
-            --description "End-to-end encrypted messenger" --dest pkg ${EXTRA[@]+"${EXTRA[@]}"}
-          case "${{ matrix.type }}" in
-            app-image)
-              ZIP="dist/secure-chat-${VERSION}-${{ matrix.platform }}.zip"
-              if command -v 7z > /dev/null; then (cd pkg && 7z a -tzip "../$ZIP" secure-chat > /dev/null)
-              else powershell -NoProfile -Command "Compress-Archive -Path pkg/secure-chat -DestinationPath '$ZIP'"; fi ;;
-            dmg)       cp pkg/*.dmg "dist/secure-chat-${VERSION}-${{ matrix.platform }}.dmg" ;;
-            deb)       cp pkg/*.deb "dist/secure-chat-${VERSION}-${{ matrix.platform }}.deb" ;;
+          cp target/secure-chat.jar "dist/Scorpion-${VERSION}-${PLATFORM}.jar"
+          COMMON=(--name Scorpion --input input --main-jar secure-chat.jar --main-class com.emirchat.Main
+                  --app-version "$VERSION" --vendor "Emir Cicek" --copyright "(c) 2026 Emir Cicek, MIT License"
+                  --description "End-to-end encrypted messenger")
+          INSTALLER=(--about-url "https://github.com/aemircicek/secure-chat")   # not valid for app-image
+          case "$RUNNER_OS" in
+            Windows)
+              jpackage "${COMMON[@]}" "${INSTALLER[@]}" --type exe --icon packaging/windows/scorpion.ico --dest pkg \
+                --win-per-user-install --win-menu --win-menu-group Scorpion --win-shortcut --win-shortcut-prompt \
+                --win-dir-chooser --win-upgrade-uuid "$WIN_UPGRADE_UUID" --file-associations packaging/scbackup.properties
+              cp pkg/*.exe "dist/Scorpion-${VERSION}-${PLATFORM}.exe"
+              jpackage "${COMMON[@]}" --type app-image --icon packaging/windows/scorpion.ico --dest portable
+              ZIP="dist/Scorpion-${VERSION}-${PLATFORM}-portable.zip"
+              if command -v 7z > /dev/null; then (cd portable && 7z a -tzip "../$ZIP" Scorpion > /dev/null)
+              else powershell -NoProfile -Command "Compress-Archive -Path portable/Scorpion -DestinationPath '$ZIP'"; fi ;;
+            macOS)
+              jpackage "${COMMON[@]}" "${INSTALLER[@]}" --type dmg --icon packaging/macos/scorpion.icns --dest pkg \
+                --mac-package-identifier org.scorpion.app --mac-package-name Scorpion \
+                --file-associations packaging/scbackup.properties
+              cp pkg/*.dmg "dist/Scorpion-${VERSION}-${PLATFORM}.dmg" ;;
+            Linux)
+              jpackage "${COMMON[@]}" "${INSTALLER[@]}" --type deb --icon packaging/linux/scorpion.png --dest pkg \
+                --linux-package-name scorpion --linux-shortcut --linux-menu-group Network --linux-app-category net \
+                --file-associations packaging/scbackup.properties
+              cp pkg/*.deb "dist/Scorpion-${VERSION}-${PLATFORM}.deb" ;;
           esac
           ls -l dist
       - name: Attest build provenance
@@ -86,7 +107,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir assets && cd assets
-          gh release download "$TAG" -R "${{ github.repository }}" --pattern 'secure-chat-*'
-          sha256sum secure-chat-* > SHA256SUMS
+          gh release download "$TAG" -R "${{ github.repository }}" --pattern 'Scorpion-*'
+          sha256sum Scorpion-* > SHA256SUMS
           cat SHA256SUMS
           gh release upload "$TAG" SHA256SUMS -R "${{ github.repository }}" --clobber
