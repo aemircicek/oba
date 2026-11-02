@@ -50,7 +50,7 @@ final class MainView implements AccountSession.View {
     private final Label friendsBadge = UiKit.label("", "unread-badge");
     private ConversationView current;
     private final TextField search = new TextField();
-    private final Notifier notifier = new Notifier();
+
     private boolean focusHooked;
     private final Label connectionLabel = UiKit.label("● " + I18n.t("main.connected"), "row-sub", "accent-text");
 
@@ -137,6 +137,7 @@ final class MainView implements AccountSession.View {
         friendsBadge.setText(String.valueOf(requests));
         friendsBadge.setVisible(requests > 0);
         list.getChildren().clear();
+        showUnread();
         if (!chatsTab.isSelected()) buildFriends(friends);
         else if (!search.getText().isBlank()) buildSearch(search.getText());
         else buildChats();
@@ -192,6 +193,20 @@ final class MainView implements AccountSession.View {
                         AccountSession.NOTIFICATIONS),
                 toggle(I18n.t("settings.preview"), I18n.t("settings.previewHint"),
                         AccountSession.NOTIFICATION_PREVIEW));
+        if (Tray.get().available()) {
+            toggles.getChildren().add(appToggle(I18n.t("settings.keepRunning"), I18n.t("settings.keepRunningHint"),
+                    "setting-keep-running", AppPrefs.keepRunning(), AppPrefs::setKeepRunning));
+        }
+        if (Autostart.supported()) {
+            toggles.getChildren().add(appToggle(I18n.t("settings.autostart"), I18n.t("settings.autostartHint"),
+                    "setting-autostart", Autostart.enabled(), on -> {
+                        try {
+                            Autostart.set(on);
+                        } catch (IOException ex) {
+                            showError(ex.getMessage());
+                        }
+                    }));
+        }
         Button done = new Button(I18n.t("common.done"));
         done.getStyleClass().add("primary");
         done.setId("settings-done");
@@ -272,6 +287,18 @@ final class MainView implements AccountSession.View {
         box.setId("backup-dialog");
         overlay.show(box);
         Platform.runLater(pass::requestFocus);
+    }
+
+    /** A switch for an app-wide setting (not stored per account). */
+    private Node appToggle(String title, String explanation, String id, boolean value, Consumer<Boolean> change) {
+        CheckBox box = new CheckBox(title);
+        box.setId(id);
+        box.setSelected(value);
+        box.selectedProperty().addListener((o, a, b) -> change.accept(b));
+        Label hint = UiKit.label(explanation, "caption");
+        hint.setWrapText(true);
+        hint.setPadding(new Insets(0, 0, 0, 26));
+        return new VBox(2, box, hint);
     }
 
     private Node toggle(String title, String explanation, String key) {
@@ -813,7 +840,7 @@ final class MainView implements AccountSession.View {
         String body = session.setting(AccountSession.NOTIFICATION_PREVIEW)
                 ? (m.file() != null ? "📎 " + m.text() : m.text())
                 : I18n.t("notify.newMessage");
-        notifier.show(title, body);
+        Tray.get().notify(title, body);
     }
 
     /** Called once the view is in a window: report reads when the window comes back into focus. */
@@ -826,7 +853,26 @@ final class MainView implements AccountSession.View {
     }
 
     void dispose() {
-        notifier.close();
+        Tray.get().setUnread(0);
+        if (stack.getScene() != null && stack.getScene().getWindow() instanceof javafx.stage.Stage s) {
+            s.setTitle(com.emirchat.AppInfo.NAME);
+        }
+    }
+
+    /** Unread messages in the window title and the tray tooltip. */
+    private void showUnread() {
+        int unread = 0;
+        try {
+            for (History.Summary s : session.history().summaries()) {
+                if (current == null || !current.conversation().equals(s.conversation())) unread += s.unread();
+            }
+        } catch (IOException ignored) {
+            // leave the title as it is
+        }
+        Tray.get().setUnread(unread);
+        if (stack.getScene() != null && stack.getScene().getWindow() instanceof javafx.stage.Stage s) {
+            s.setTitle(unread > 0 ? "(" + unread + ") " + com.emirchat.AppInfo.NAME : com.emirchat.AppInfo.NAME);
+        }
     }
 
     @Override

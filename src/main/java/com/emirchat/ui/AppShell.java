@@ -103,7 +103,20 @@ final class AppShell {
                     }
                 });
         show(screen[0].root());
+        loginScreen = screen[0];
         return screen[0];
+    }
+
+    private LoginScreen loginScreen;
+
+    /** A backup file was opened (double-click or "Open with"): restore it from the login screen. */
+    void openBackupFile(Path file) {
+        if (session != null) {
+            if (mainView != null) mainView.notice(I18n.t("restore.logOutFirst"), true);
+            return;
+        }
+        if (loginScreen == null) showLogin(null);
+        restoreBackup(loginScreen, file);
     }
 
     private static String account(String server, String user) {
