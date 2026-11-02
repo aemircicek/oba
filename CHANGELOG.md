@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (3.2.0)
+## 3.2.0 (2026-11-02)
 
 ### Added
 - **Scorpion desktop app**: new name and icon; installers with Java included (Windows installer
@@ -38,7 +38,7 @@
 - New messages use a format with message ids; 3.1 messages are still read. Update all clients
   together.
 
-## Unreleased (3.1.0)
+## 3.1.0 (unreleased, included in 3.2.0)
 
 ### Added
 - **Encrypted file and image sharing** in direct messages and groups, up to 25 MB per file. Each
