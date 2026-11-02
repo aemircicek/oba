@@ -2,136 +2,214 @@
 
 [![CI](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml)
 
-An end-to-end encrypted, mutually authenticated 1:1 terminal chat written in Java,
-using only the JDK's standard cryptography (no third-party crypto libraries).
+End-to-end encrypted messenger for the desktop and the terminal: accounts, friends, direct
+messages and groups, written in Java using only the JDK's standard cryptography (no
+third-party crypto libraries). The server relays and stores messages it cannot read.
+
+<p align="center">
+  <img src="docs/screenshots/account-dm-dark.png" width="420" alt="Encrypted direct messages">
+  <img src="docs/screenshots/account-group-light.png" width="420" alt="Encrypted group chat">
+</p>
 
 It started as a small socket chat that "encrypted" messages with a hard-coded AES key in ECB
-mode. Version 2 replaces that with a modern design: an authenticated key exchange
-(SIGMA-I style, X25519 + Ed25519), HKDF key derivation, AES-256-GCM records with replay
-protection, and SSH-style trust-on-first-use for identity keys.
-
-```
-$ secure-chat host --name emir
-Listening on 0.0.0.0:5055 as 'emir'.
-Your fingerprint: e41e 2a9a 3ac4 3c70 63a4 4763 0f75 8bcf d9de 0cc6 ea75 2ea2 3b87 1461 37da c02a
-Waiting for a peer...
-Connected to /192.168.1.7:52458, authenticating...
-
-First connection to 'efe'. Their identity fingerprint is:
-0087 200b 470b e8b0 5f87 a136 041e 436c
-c1ea 0979 e741 e968 85ad 33c6 19a0 d62b
-Compare it with efe over another channel (in person, phone call).
-Trust and remember this key? [y/N] y
-Secure session established with 'efe' (X25519 + Ed25519, AES-256-GCM). Type /quit to leave.
-[17:49] efe: Merhaba Emir
-```
+mode. Version 2 replaced that with an authenticated key exchange (SIGMA-I style, X25519 +
+Ed25519) between two peers. **Version 3** turns it into a messenger with a server, using the
+same ideas as Signal: X3DH to start sessions with offline users, the Double Ratchet for every
+direct message, and Sender Keys for groups.
 
 ## Quick start
 
-Requires Java 21+ and Maven.
+Download the jar for your platform from the [latest release](https://github.com/aemircicek/secure-chat/releases/latest)
+(Java 21+ required), or build it yourself with `mvn verify`.
 
 ```sh
-mvn verify                      # build + 27 tests
-java -jar target/secure-chat.jar fingerprint                       # show your identity key
-java -jar target/secure-chat.jar host --name emir                  # wait for a peer on port 5055
-java -jar target/secure-chat.jar connect 192.168.1.3 --name efe    # connect to a host
+java -jar secure-chat.jar server                    # run a server on port 5056
+java -jar secure-chat.jar                           # desktop app: register or log in
 ```
 
-Options: `--port <n>` (default 5055; 5000 is taken by AirPlay on macOS), `--bind <addr>` (host only, default `0.0.0.0`),
-`--home <dir>` (keys and known peers, default `~/.securechat`). Type `/quit` to leave.
+In the desktop app, enter the server address (for example `localhost:5056`, or the server's LAN
+address), then register a username and password. To try it alone on one machine, open two app
+windows with different key directories:
 
-On first contact each side is shown the other's fingerprint. **Compare it over another channel**
-(read it out on a phone call, or in person) before answering `y`. After that the key is pinned
-in `~/.securechat/known_peers`, and any change is refused with a loud warning.
+```sh
+java -jar secure-chat.jar gui --home ./alice
+java -jar secure-chat.jar gui --home ./bob
+```
+
+### Desktop app
+
+- **Accounts**: register and log in with a username and password.
+- **Server verification**: on first connection the app shows the server's key fingerprint; after
+  that it is pinned and a different key is refused.
+- **Friends**: send, accept and decline requests; see who is online.
+- **Direct messages**: end-to-end encrypted, delivered later if your friend is offline, with
+  ✓ sent / ✓✓ delivered marks and unread counts.
+- **Groups**: create a group from your friends, add and remove members, leave; the owner role
+  passes to the longest-standing member if the owner leaves.
+- **Contact verification**: compare a friend's key as a colour pattern and hex code, then mark
+  them verified.
+- **Key-change warning**: if a friend's key changes (new device, or an attack), messages to them
+  are held back until you verify the new key.
+- **Encrypted history**: messages are stored on disk encrypted under a key derived from your password.
+- Light and dark themes, following the system.
+
+<p align="center">
+  <img src="docs/screenshots/account-login-light.png" width="280" alt="Login">
+  <img src="docs/screenshots/account-verify-dark.png" width="280" alt="Contact verification">
+  <img src="docs/screenshots/account-key-changed-dark.png" width="280" alt="Key change warning">
+</p>
+
+### Terminal
+
+```sh
+java -jar secure-chat.jar server [--port 5056] [--bind 0.0.0.0] [--data ~/.securechat-server]
+java -jar secure-chat.jar register --server localhost:5056 --username emir
+java -jar secure-chat.jar client   --server localhost:5056 --username emir
+```
+
+`client` opens an interactive shell (`msg`, `friends`, `add`, `accept`, `group`, `gmsg`,
+`verify`, `trust`, ...; type `help` for the full list). The desktop app and the terminal client
+use the same protocol and can talk to each other.
+
+### Direct mode (no server)
+
+The version 2 peer-to-peer mode is still available: one person hosts, the other connects
+directly, and nothing is stored anywhere. In the desktop app, choose *Direct connection without
+an account* on the login screen; in the terminal:
+
+```sh
+java -jar secure-chat.jar host --name emir                  # wait for a peer on port 5055
+java -jar secure-chat.jar connect 192.168.1.3 --name efe    # connect to a host
+java -jar secure-chat.jar fingerprint                       # show your identity key
+```
 
 ## Security design
 
 ### Threat model
 
 The attacker controls the network: they can read, drop, modify, replay, reorder and inject
-packets, and can impersonate either endpoint at the TCP level. Endpoints themselves (the two
-computers) are trusted.
+packets. **The server is not trusted with message content**: a malicious or compromised server
+must not be able to read or forge messages. User devices are trusted.
 
 | Goal | How it is achieved |
 |---|---|
-| Confidentiality | AES-256-GCM with keys from an ephemeral X25519 exchange |
-| Integrity | GCM authentication tag on every record and handshake message |
-| Mutual authentication | Each side signs the handshake transcript with its long-term Ed25519 key |
-| No MITM | Identity keys are verified out-of-band once, then pinned (TOFU) |
-| Forward secrecy | Fresh X25519 keys per session; stealing `identity.key` later does not decrypt past chats |
-| Replay / reorder / drop protection | Implicit per-direction 64-bit counters as GCM nonces |
-| Reflection protection | Separate keys for each direction |
-| Identity hiding (passive) | Names and identity keys are sent encrypted |
-| Sender spoofing | The display name comes from the authenticated handshake, never from message text |
-| Terminal injection | Control characters, ANSI escapes and bidi overrides from the peer are neutralised |
-| Resource exhaustion | 64 KiB frame limit, 4 KiB message limit, 120 s handshake timeout |
+| Confidentiality against the server | Messages are encrypted on the sender's device; the server stores and relays opaque bytes |
+| Confidentiality and integrity on the wire | Every connection is a SIGMA-I channel (X25519 + Ed25519, AES-256-GCM); the server's key is pinned on first use |
+| Asynchronous session setup | X3DH with signed prekeys (rotated weekly) and one-time prekeys (deleted after use) |
+| Forward secrecy | Double Ratchet: every message has its own key, which is deleted after use |
+| Post-compromise security | Double Ratchet DH steps: a stolen session state stops working once both sides send again |
+| No fake keys from the server | Every published key is signed by the user's Ed25519 identity; friends' keys are pinned (TOFU) and can be verified by fingerprint |
+| Key changes | A changed key holds outgoing messages until the user verifies it |
+| Group confidentiality | Sender Keys: each member's chain key is sent to other members over the pairwise encrypted channel |
+| Group authenticity | Each group message is signed with the sender's group signing key; members cannot forge each other |
+| Removed members | Everyone rotates to a fresh sender key that departed members never receive; new members cannot read earlier messages |
+| Replay | Ratchet and chain keys only move forward; decryption is transactional, so a forged or replayed message cannot corrupt state |
+| Password storage | PBKDF2-HMAC-SHA256, 600,000 iterations, 16-byte random salt per user |
+| Online guessing | 5 failed logins per username and 20 per IP address in 15 minutes |
+| Username enumeration on login | Same error and same hashing cost for unknown usernames |
+| Stolen disk | Message history encrypted with AES-256-GCM under a key from the account password (PBKDF2, 600k) |
+| Resource exhaustion | Frame and message size limits, offline queue and prekey caps, prekey-fetch rate limits |
 
-### Handshake
+### Direct messages: X3DH and the Double Ratchet
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
+    participant A as Alice
     participant S as Server
-    C->>S: HELLO(version, X25519 eph_c, nonce_c)
-    S->>C: HELLO(version, X25519 eph_s, nonce_s)
-    Note over C,S: shared = X25519(eph, peer eph)<br/>th = SHA-256(label ‖ HELLO_c ‖ HELLO_s)<br/>handshake keys = HKDF(salt=th, ikm=shared)
-    S->>C: {AUTH_s: name, Ed25519 key, Sig_s(th, name, key)}  (encrypted)
-    Note over C: verify signature, check known_peers
-    C->>S: {AUTH_c: name, Ed25519 key, Sig_c(th, AUTH_s, name, key)}  (encrypted)
-    Note over S: verify signature, check known_peers
-    S->>C: {FINISHED}  (encrypted)
-    Note over C,S: traffic keys = HKDF(salt=SHA-256(th ‖ AUTH_s ‖ AUTH_c), ikm=shared)<br/>one key per direction
+    participant B as Bob
+    B->>S: publish identity keys, signed prekey, one-time prekeys (all signed)
+    A->>S: fetch Bob's prekey bundle
+    S->>A: bundle (Bob's signatures checked by Alice)
+    Note over A: X3DH: 4 DH operations → shared secret<br/>start Double Ratchet
+    A->>S: prekey message (ephemeral key, prekey ids, first ciphertext)
+    S->>B: deliver now, or when Bob comes online
+    Note over B: X3DH with the same keys → same secret<br/>delete the one-time prekey
+    B->>S: ✓✓ delivery receipt (relayed to Alice)
 ```
 
-This follows the SIGMA-I pattern used by IKEv2 and TLS 1.3: signatures cover the full
-transcript, so an attacker cannot swap the ephemeral keys, and because the AUTH messages are
-encrypted under keys derived from the shared secret, a valid AUTH also proves the sender
-completed the same key exchange. Low-order X25519 points (all-zero shared secret) are rejected.
+This follows Signal's X3DH (revision 1) and Double Ratchet (revision 4) specifications, with one
+change taken from Matrix's Olm: the Ed25519 signing identity and the X25519 agreement identity are
+separate keys, and the X25519 key is signed by the Ed25519 one. Every signature is checked before
+any DH is computed. The associated data of every message is both parties' identity keys, so a
+ciphertext cannot be moved into a session between different people.
 
-### Record layer
+### Groups: Sender Keys
 
-Every chat message is a binary record `type ‖ timestamp ‖ text` encrypted with AES-256-GCM.
-The 96-bit nonce is `0x00000000 ‖ counter` and the counter is never sent: the receiver expects
-exactly the next value, so a replayed, reordered, dropped or modified record fails
-authentication and the connection is closed.
+Each member owns a sender key per group: a hash chain (each message key is used once and the
+chain only moves forward) and an Ed25519 signing key. A message is encrypted once, signed, and
+fanned out by the server. When anyone leaves or is removed, every remaining member rotates to a
+new sender key. Removal is also checked at send time, so a member removed while you were offline
+does not receive your next message.
+
+### Transport
+
+Clients and the server talk over the same SIGMA-I channel as the direct mode: an ephemeral X25519
+exchange, Ed25519 signatures over the transcript, HKDF-SHA256 keys per direction, and AES-256-GCM
+records with implicit counters, so replayed, reordered or modified records close the connection.
+Users then authenticate with their password inside the channel. Low-order X25519 points are rejected.
 
 ### Code map
 
 | Package | Responsibility |
 |---|---|
-| `com.emirchat.crypto` | `Hkdf` (RFC 5869), `Identity` (Ed25519 keys, fingerprints, owner-only key files) |
-| `com.emirchat.protocol` | `FrameIO` (bounded framing), `Wire` (strict encoding), `Handshake`, `SecureChannel` |
-| `com.emirchat.trust` | `KnownPeers` (TOFU store) |
-| `com.emirchat.chat` | `ChatMessage`, `ChatSession`, `TerminalSanitizer` |
-| `com.emirchat` | `SecureChat` command-line interface |
+| `com.emirchat.crypto` | `Hkdf` (RFC 5869), `Identity` (Ed25519 keys, fingerprints), `X25519` |
+| `com.emirchat.protocol` | `FrameIO` (bounded framing), `Wire` (strict encoding), `Handshake` (SIGMA-I), `SecureChannel` |
+| `com.emirchat.e2e` | `X3dh`, `DoubleRatchet`, `GroupKeys` (Sender Keys), `Messenger`, `DeviceKeys`, `PrekeyBundle` |
+| `com.emirchat.server` | `ChatServer`, accounts, friends, groups, offline queue, `PasswordHasher`, `RateLimiter`, SQLite |
+| `com.emirchat.client` | `ChatClient`, `ServerConnection`, encrypted `History` |
+| `com.emirchat.api` | `Packet` (client–server messages), error codes |
+| `com.emirchat.trust` | `KnownPeers` (TOFU store for servers and contacts) |
+| `com.emirchat.ui` | JavaFX desktop app: screens, theme, fingerprint art |
+| `com.emirchat.net`, `com.emirchat.chat` | Direct mode: connect/host, conversation, terminal sanitising |
+| `com.emirchat` | `Main`, `SecureChat` and `AccountCli` command lines, `ClientShell` |
 
 ### Tests
 
-`mvn verify` runs 27 tests, including RFC 5869 test vectors and attack scenarios: tampered,
-replayed, reordered and reflected records; an impersonator presenting a different key for a
-pinned name; bit-flips on the wire during the handshake (through a relay); and a server that
-rejects the client (the client must not report success). CI also runs a Semgrep security scan.
+`mvn verify` runs 97 tests, including RFC 5869 test vectors and attack scenarios:
+
+- **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
+  server presenting a different key; tampered handshake messages.
+- **Direct messages**: out-of-order delivery, replays, tampering that must not break the session,
+  authenticated headers, a prekey bundle for a different identity, forged signed prekeys,
+  one-time prekeys used only once, simultaneous first messages, sessions surviving a restart.
+- **Groups**: removed members cannot read after rotation (even if the removal happened while a
+  member was offline), new members cannot read old messages, members cannot forge each other,
+  redistributing an old chain state cannot enable replays.
+- **Server**: registration and login rules, identical errors for wrong password and unknown user,
+  brute-force limits, friend and group permissions, the offline queue in order, delivery
+  receipts, a tampering server being caught, and the server storing only ciphertext.
+
+CI also runs a Semgrep security scan. `src/test/java/com/emirchat/ui/AccountPreview.java` drives
+the real desktop app against an in-process server and scripted users and saves a screenshot of
+every step; the images above come from it.
 
 ## Limitations
 
 Honest notes on what this project does **not** do:
 
 - **Not audited.** It is a learning and portfolio project. For real-world secrecy use Signal.
-- **Identity key at rest is unencrypted** (protected only by `0600` file permissions).
-- **TOFU trusts names the user accepts.** An attacker can still present a *new* name; the user
-  must actually compare fingerprints on first contact.
-- **Server identity is visible to an active attacker** (as in SIGMA-I); the client's is not.
-- **No post-compromise security / ratcheting** (unlike Signal's Double Ratchet). One key pair per session.
-- **One peer per host session**, and a connecting attacker can occupy the slot until the handshake times out.
+- **The server sees metadata**: who is friends with whom, who messages whom and when, group names
+  and member lists, and online status. It cannot see message content.
+- **The server can hide or delay messages**, and can claim a user has a new device. The app then
+  shows a key-change warning; users must compare fingerprints to detect a fake key.
+- **TOFU trusts first contact.** Until friends compare fingerprints, a malicious server could
+  present a fake key on the very first exchange.
+- **One device per account.** Logging in on a new device replaces the old key.
+- **Keys at rest are not encrypted**: identity keys and ratchet sessions are protected only by
+  owner-only file permissions (message history is encrypted).
+- **Registration reveals whether a username is taken.**
 - **Best-effort key wiping** only: the JVM may keep copies of key material in memory.
 
 ## Roadmap
 
-- Passphrase-encrypted identity key (PBKDF2/Argon2 + AES-GCM)
-- Group chat with per-member keys
-- Rekeying after N messages and a ratchet for post-compromise security
-- JavaFX desktop interface
+- Encrypted file and image sharing
+- Disappearing messages
+- Encrypting group names and descriptions with the group key
+- Passphrase-encrypted identity keys and session state
+- QR-code contact verification
 - Fuzzing the decoders (Jazzer)
+- Deployment guide for a VPS (Docker, firewall)
+- Multiple devices per account; voice messages
 
 ## Security
 
@@ -139,4 +217,4 @@ See [SECURITY.md](SECURITY.md) for how to report a vulnerability.
 
 ## License
 
-[MIT](LICENSE) © 2026 Emir Çiçek
+[MIT](LICENSE) © 2026 Emir Çiçek. Icons adapted from [Feather](https://github.com/feathericons/feather) (MIT).

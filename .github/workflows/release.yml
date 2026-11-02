@@ -1,0 +1,39 @@
+name: Release
+
+# Publishing a GitHub release builds one runnable jar per platform (JavaFX ships native
+# libraries, so each OS needs its own) and attaches them to the release.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  jar:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos-arm64
+          - os: windows-latest
+            platform: windows-x64
+          - os: ubuntu-latest
+            platform: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build and test
+        run: mvn -B verify
+      - name: Attach jar to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/secure-chat.jar "secure-chat-${{ matrix.platform }}.jar"
+          gh release upload "${{ github.event.release.tag_name }}" "secure-chat-${{ matrix.platform }}.jar" --clobber
