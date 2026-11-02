@@ -45,4 +45,15 @@ final class Presence {
         }
         for (ClientConnection c : targets) c.push(packet);
     }
+
+    /** Like {@link #push}, but dropped rather than queued when a device is behind (live audio). */
+    void pushDroppable(long userId, Packet packet) {
+        List<ClientConnection> targets;
+        synchronized (this) {
+            Set<ClientConnection> set = online.get(userId);
+            if (set == null) return;
+            targets = List.copyOf(set);
+        }
+        for (ClientConnection c : targets) c.pushDroppable(packet);
+    }
 }

@@ -30,6 +30,8 @@ public sealed interface Packet {
     int KIND_COMMUNITY = 1;
     int KIND_CHANNEL = 2;
     int MAX_INVITE_CODE_BYTES = 64;
+    /** Call id and one encrypted audio packet (20 ms of μ-law speech is 160 bytes; leave room). */
+    int MAX_CALL_AUDIO_BYTES = 1024;
     /** Attachment upload and download chunk size (well under the 64 KiB frame limit). */
     int MAX_CHUNK_BYTES = 32 * 1024;
     int ATTACHMENT_ID_BYTES = com.emirchat.e2e.Attachments.ID_LENGTH;
@@ -120,6 +122,19 @@ public sealed interface Packet {
 
     /** Makes every invite code of a community stop working. */
     record RevokeInvites(long communityId) implements Packet {}
+
+    /**
+     * One encrypted audio packet of a call, for a friend. Sent with request id 0 and never
+     * answered or stored: the server relays it if the friend is online, otherwise drops it.
+     */
+    record CallAudio(String peer, byte[] data) implements Packet {
+        @Override public String toString() { return "CallAudio[" + peer + ", " + data.length + " bytes]"; }
+    }
+
+    /** A friend's audio packet, relayed by the server. */
+    record CallAudioIn(String from, byte[] data) implements Packet {
+        @Override public String toString() { return "CallAudioIn[" + from + ", " + data.length + " bytes]"; }
+    }
 
     /** @param code shown once; the server keeps only its hash */
     record InviteCreated(String code) implements Packet {
@@ -418,6 +433,8 @@ public sealed interface Packet {
             case CreateInvite i -> w.u8(45).i64(requestId).i64(i.communityId()).i64(i.maxUses()).i64(i.hours());
             case JoinCommunity j -> w.u8(46).i64(requestId).string(j.code());
             case RevokeInvites r -> w.u8(47).i64(requestId).i64(r.communityId());
+            case CallAudio a -> w.u8(48).i64(requestId).string(a.peer()).bytes(a.data());
+            case CallAudioIn a -> w.u8(130).i64(requestId).string(a.from()).bytes(a.data());
             case InviteCreated i -> w.u8(129).i64(requestId).string(i.code());
             case RemoveGroupMember r -> w.u8(32).i64(requestId).i64(r.groupId()).string(r.username());
             case LeaveGroup l -> w.u8(33).i64(requestId).i64(l.groupId());
@@ -506,6 +523,8 @@ public sealed interface Packet {
             case 45 -> new CreateInvite(r.i64(), (int) r.i64(), (int) r.i64());
             case 46 -> new JoinCommunity(r.string(MAX_INVITE_CODE_BYTES));
             case 47 -> new RevokeInvites(r.i64());
+            case 48 -> new CallAudio(r.string(MAX_USERNAME_BYTES), r.bytes(MAX_CALL_AUDIO_BYTES));
+            case 130 -> new CallAudioIn(r.string(MAX_USERNAME_BYTES), r.bytes(MAX_CALL_AUDIO_BYTES));
             case 129 -> new InviteCreated(r.string(MAX_INVITE_CODE_BYTES));
             case 32 -> new RemoveGroupMember(r.i64(), r.string(MAX_USERNAME_BYTES));
             case 33 -> new LeaveGroup(r.i64());

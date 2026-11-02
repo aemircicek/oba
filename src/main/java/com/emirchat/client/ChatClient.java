@@ -55,6 +55,8 @@ public final class ChatClient implements AutoCloseable {
     private static final int CONTENT_MESSAGE = 7;
     /** Refers to an earlier message: u8 action ‖ bytes target (0 or 16) ‖ string value. */
     private static final int CONTENT_ACTION = 8;
+    /** Call signalling: u8 kind ‖ 16-byte call id ‖ bytes call key (offer and answer). */
+    private static final int CONTENT_CALL = 9;
     private static final int KIND_TEXT = 1;
     private static final int KIND_FILE = 2;
     public static final int MESSAGE_ID_BYTES = 16;
@@ -183,6 +185,9 @@ public final class ChatClient implements AutoCloseable {
         }
 
         default void action(Action action) {}
+
+        /** A voice call started, rang, connected, changed or ended (runs on the calls thread). */
+        default void call(com.emirchat.call.Calls.Call call) {}
     }
 
     // ------------------------------------------------------------------ rich messages
@@ -339,7 +344,26 @@ public final class ChatClient implements AutoCloseable {
         client.groupNames = new GroupNames(dir.resolve("e2e"));
         client.loadHandled();
         client.deviceKey = device.publicKeyBytes();
-        connection.onPush(p -> client.inbox.execute(() -> client.onPush(p)));
+        client.calls = new com.emirchat.call.Calls(new com.emirchat.call.Calls.Transport() {
+            @Override public void signal(String peer, int kind, byte[] callId, byte[] callKey) throws Exception {
+                client.sendPairwise(peer, new Content(CONTENT_CALL,
+                        new Wire.Writer().u8(kind).bytes(callId).bytes(callKey).toByteArray()));
+            }
+
+            @Override public void audio(String peer, byte[] data) {
+                connection.sendAudio(peer, data);
+            }
+        }, () -> client.audioDevices.get(), call -> client.listener.call(call));
+        connection.onPush(p -> {
+            if (p instanceof Packet.CallAudioIn a) client.calls.audio(a.from(), a.data()); // live: skip the inbox queue
+            else {
+                try {
+                    client.inbox.execute(() -> client.onPush(p));
+                } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                    // logging out: the server delivers anything unacknowledged again next time
+                }
+            }
+        });
         connection.onClosed(() -> {
             if (!client.closing) client.inbox.execute(() -> client.listener.disconnected());
         });
@@ -1037,6 +1061,14 @@ public final class ChatClient implements AutoCloseable {
                         deliver(envelope.sender(), 0, contentType, payload, envelope.id());
                 case CONTENT_SENDER_KEY -> acceptSenderKey(envelope.sender(), payload);
                 case CONTENT_GROUP_NAME_KEY -> acceptGroupNameKey(envelope.sender(), payload);
+                case CONTENT_CALL -> {
+                    Wire.Reader call = new Wire.Reader(payload);
+                    int kind = call.u8();
+                    byte[] callId = call.exactBytes(com.emirchat.call.CallCrypto.CALL_ID_LENGTH);
+                    byte[] callKey = call.bytes(64);
+                    call.expectEnd();
+                    calls.signal(envelope.sender(), kind, callId, callKey, envelope.sentAt());
+                }
                 default -> throw new ProtocolException("Unknown content type " + contentType);
             }
         } catch (KeyChangedException e) {
@@ -1187,9 +1219,24 @@ public final class ChatClient implements AutoCloseable {
      * handled and acknowledged), so closing right after a message arrives does not make the
      * server deliver it again.
      */
+    private com.emirchat.call.Calls calls;
+    private volatile java.util.function.Supplier<com.emirchat.call.AudioDevice> audioDevices =
+            com.emirchat.call.SoundDevice::new;
+
+    /** Voice calls with friends. */
+    public com.emirchat.call.Calls calls() {
+        return calls;
+    }
+
+    /** Replaces the microphone and speaker (tests, or a device chosen in settings). */
+    public void useAudioDevices(java.util.function.Supplier<com.emirchat.call.AudioDevice> devices) {
+        audioDevices = devices;
+    }
+
     @Override
     public void close() {
         closing = true; // a deliberate logout is not reported as a lost connection
+        if (calls != null) calls.close(); // hangs up a call going on
         inbox.shutdown();
         if (!Thread.currentThread().getName().equals("inbox")) {
             try {

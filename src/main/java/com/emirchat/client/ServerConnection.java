@@ -103,6 +103,15 @@ public final class ServerConnection implements AutoCloseable {
         return result;
     }
 
+    /** Sends one call audio packet; never answered, so nothing to wait for. Lost packets are fine. */
+    public void sendAudio(String peer, byte[] data) {
+        try {
+            session.channel().send(Packet.encode(0, new Packet.CallAudio(peer, data)));
+        } catch (IOException | SecurityException ignored) {
+            // the connection is going away; the call ends with it
+        }
+    }
+
     /** Sends a request and waits for the answer; server errors become {@link ApiException}. */
     public Packet call(Packet packet) throws IOException, ApiException {
         try {
