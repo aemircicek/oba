@@ -48,6 +48,35 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
         /** A new message arrived (after it was stored); used for notifications. */
         default void notifyIncoming(History.Message message) {}
+
+        /** Online again ({@code online}), or offline and retrying in {@code retryInSeconds}. */
+        default void connection(boolean online, int retryInSeconds) {}
+    }
+
+    private volatile Runnable onConnectionLost;
+    private volatile boolean closed;
+
+    /** What to do when the connection drops (the shell reconnects in the background). */
+    void onConnectionLost(Runnable action) {
+        this.onConnectionLost = action;
+    }
+
+    boolean isClosed() {
+        return closed;
+    }
+
+    /** Called on the JavaFX thread while reconnecting. */
+    void reconnecting(int retryInSeconds) {
+        View v = view;
+        if (v != null) v.connection(false, retryInSeconds);
+    }
+
+    /** Called on the JavaFX thread once a new connection is up. */
+    void reconnected() {
+        View v = view;
+        if (v != null) v.connection(true, 0);
+        refreshFriendsLater();
+        fx(View::groupsChanged);
     }
 
     /** Setting keys (stored per account in the history database). */
@@ -81,17 +110,14 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     static final long[] TIMER_CHOICES = {0, 5 * 60, 3600, 24 * 3600, 7 * 24 * 3600};
 
     static String timerLabel(long seconds) {
-        if (seconds <= 0) return "Off";
-        if (seconds % (7 * 24 * 3600) == 0) return plural(seconds / (7 * 24 * 3600), "week");
-        if (seconds % (24 * 3600) == 0) return plural(seconds / (24 * 3600), "day");
-        if (seconds % 3600 == 0) return plural(seconds / 3600, "hour");
-        if (seconds % 60 == 0) return plural(seconds / 60, "minute");
-        return plural(seconds, "second");
+        if (seconds <= 0) return I18n.t("timer.off");
+        if (seconds % (7 * 24 * 3600) == 0) return I18n.plural(seconds / (7 * 24 * 3600), "week");
+        if (seconds % (24 * 3600) == 0) return I18n.plural(seconds / (24 * 3600), "day");
+        if (seconds % 3600 == 0) return I18n.plural(seconds / 3600, "hour");
+        if (seconds % 60 == 0) return I18n.plural(seconds / 60, "minute");
+        return I18n.plural(seconds, "second");
     }
 
-    private static String plural(long n, String unit) {
-        return n + " " + unit + (n == 1 ? "" : "s");
-    }
 
     private final History history;
     private final ExecutorService background = Executors.newSingleThreadExecutor(r -> {
@@ -252,7 +278,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                 }
             }
         } catch (IOException e) {
-            fx(v -> v.problem("Could not apply a change from " + a.from() + ": " + e.getMessage()));
+            fx(v -> v.problem(I18n.t("session.actionFailed", a.from(), e.getMessage())));
         }
     }
 
@@ -262,7 +288,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         try {
             history.setTimer(conversation, seconds);
         } catch (IOException e) {
-            fx(v -> v.problem("Could not save the timer: " + e.getMessage()));
+            fx(v -> v.problem(I18n.t("session.timerFailed", e.getMessage())));
             return;
         }
         fx(v -> v.timerChanged(conversation, from, seconds));
@@ -281,7 +307,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                 v.notifyIncoming(stored);
             });
         } catch (IOException e) {
-            fx(v -> v.problem("Could not save a file message: " + e.getMessage()));
+            fx(v -> v.problem(I18n.t("session.saveFailed", e.getMessage())));
         }
     }
 
@@ -298,7 +324,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                 v.notifyIncoming(stored);
             });
         } catch (IOException e) {
-            fx(v -> v.problem("Could not save a message: " + e.getMessage()));
+            fx(v -> v.problem(I18n.t("session.saveFailed", e.getMessage())));
         }
     }
 
@@ -318,7 +344,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
     @Override
     public void undecryptable(String from, String reason) {
-        fx(v -> v.problem("A message from " + from + " could not be decrypted (" + reason + ")."));
+        fx(v -> v.problem(I18n.t("session.undecryptable", from, reason)));
     }
 
     @Override
@@ -343,7 +369,12 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
     @Override
     public void disconnected() {
-        fx(View::disconnected);
+        Runnable reconnect = onConnectionLost;
+        if (reconnect != null && !closed) {
+            reconnect.run();
+        } else {
+            fx(View::disconnected);
+        }
     }
 
     /** Friend pushes carry partial information; re-read the list off the inbox thread. */
@@ -368,6 +399,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
     @Override
     public void close() {
+        closed = true;
         ChatClient c = client;
         if (c != null) c.close();
         background.shutdownNow();

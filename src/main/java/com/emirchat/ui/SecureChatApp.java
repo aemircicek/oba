@@ -36,9 +36,9 @@ public final class SecureChatApp extends Application {
         stage.setScene(scene);
         try {
             shell = new AppShell(root, home != null ? home : defaultHome());
-            shell.showLogin(null);
+            shell.start();
         } catch (IOException e) {
-            Label error = new Label("Could not load your identity key:\n" + e.getMessage());
+            Label error = new Label(I18n.t("app.identityError", e.getMessage()));
             error.getStyleClass().addAll("notice", "error");
             error.setWrapText(true);
             root.getChildren().setAll(error);

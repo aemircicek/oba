@@ -42,7 +42,7 @@ final class StartScreen {
         badge.getStyleClass().addAll("icon-badge", "accent");
         Label title = new Label(com.emirchat.AppInfo.NAME);
         title.getStyleClass().add("h1");
-        Label tagline = new Label("End-to-end encrypted chat between two computers.\nNo servers, no accounts.");
+        Label tagline = new Label(I18n.t("start.tagline"));
         tagline.getStyleClass().add("body");
         tagline.setWrapText(true);
         tagline.setStyle("-fx-text-alignment: center;");
@@ -51,8 +51,8 @@ final class StartScreen {
 
         // Mode switch
         ToggleGroup group = new ToggleGroup();
-        ToggleButton hostToggle = segment("Host", group);
-        ToggleButton joinToggle = segment("Join", group);
+        ToggleButton hostToggle = segment(I18n.t("start.host"), group);
+        ToggleButton joinToggle = segment(I18n.t("start.join"), group);
         hostToggle.setId("mode-host");
         joinToggle.setId("mode-join");
         HBox segmented = new HBox(hostToggle, joinToggle);
@@ -63,7 +63,7 @@ final class StartScreen {
         (saved.joining() ? joinToggle : hostToggle).setSelected(true);
 
         // Fields
-        TextField name = field("e.g. emir", saved.name());
+        TextField name = field(I18n.t("login.usernamePrompt"), saved.name());
         name.setId("name");
         TextField address = field("192.168.1.3", saved.host());
         address.setId("address");
@@ -71,9 +71,9 @@ final class StartScreen {
         port.setId("port");
         port.setPrefColumnCount(6);
 
-        VBox nameBox = labelled("Your name", name);
-        VBox addressBox = labelled("Host address", address);
-        VBox portBox = labelled("Port", port);
+        VBox nameBox = labelled(I18n.t("start.name"), name);
+        VBox addressBox = labelled(I18n.t("start.address"), address);
+        VBox portBox = labelled(I18n.t("start.port"), port);
         HBox.setHgrow(addressBox, Priority.ALWAYS);
         HBox addressRow = new HBox(10, addressBox, portBox);
 
@@ -99,12 +99,12 @@ final class StartScreen {
 
         Runnable refresh = () -> {
             boolean hosting = hostToggle.isSelected();
-            go.setText(hosting ? "Start hosting" : "Connect");
+            go.setText(hosting ? I18n.t("start.startHosting") : I18n.t("start.connect"));
             addressBox.setVisible(!hosting);
             addressBox.setManaged(!hosting);
             modeHint.setText(hosting
-                    ? "Your computer waits for a peer on your local network. You'll see the address to share."
-                    : "Enter the address shown on your peer's screen.");
+                    ? I18n.t("start.hostHint")
+                    : I18n.t("start.joinHint"));
         };
         hostToggle.selectedProperty().addListener((obs, o, n) -> refresh.run());
         refresh.run();
@@ -115,7 +115,7 @@ final class StartScreen {
             port.getStyleClass().remove("invalid");
             String n = name.getText().strip();
             if (!Handshake.isValidName(n)) {
-                fail(error, name, "Use 1-32 letters, digits, '.', '_' or '-' for your name (no spaces).");
+                fail(error, name, I18n.t("start.badName"));
                 return;
             }
             int p = Connector.DEFAULT_PORT;
@@ -124,7 +124,7 @@ final class StartScreen {
                     p = Integer.parseInt(port.getText().strip());
                     if (p < 1 || p > 65535) throw new NumberFormatException();
                 } catch (NumberFormatException ex) {
-                    fail(error, port, "The port must be a number between 1 and 65535.");
+                    fail(error, port, I18n.t("start.badPort"));
                     return;
                 }
             }
@@ -132,7 +132,7 @@ final class StartScreen {
             if (joinToggle.isSelected()) {
                 h = address.getText().strip();
                 if (h.isEmpty() || h.contains(" ")) {
-                    fail(error, address, "Enter the host's address, for example 192.168.1.3.");
+                    fail(error, address, I18n.t("start.noAddress"));
                     return;
                 }
             }
@@ -151,17 +151,17 @@ final class StartScreen {
         }
 
         // Identity footer
-        Label idTitle = new Label("YOUR IDENTITY");
+        Label idTitle = new Label(I18n.t("start.identity"));
         idTitle.getStyleClass().add("overline");
-        Button copy = new Button("Copy fingerprint");
+        Button copy = new Button(I18n.t("start.copy"));
         copy.getStyleClass().add("link");
         copy.setOnAction(e -> {
             ClipboardContent content = new ClipboardContent();
             content.putString(myFingerprint);
             Clipboard.getSystemClipboard().setContent(content);
-            copy.setText("Copied");
+            copy.setText(I18n.t("start.copied"));
         });
-        copy.setTooltip(new Tooltip("Copies the full 64-character fingerprint"));
+        copy.setTooltip(new Tooltip(I18n.t("start.copyTip")));
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
         HBox idHeader = new HBox(idTitle, spacer, copy);

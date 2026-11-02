@@ -103,7 +103,7 @@ final class ConversationView {
         send.setId("send");
         send.getStyleClass().add("send");
         send.setGraphic(Icons.of(Icons.SEND, 17, "on-accent"));
-        send.setTooltip(new Tooltip("Send (Enter)"));
+        send.setTooltip(new Tooltip(I18n.t("conv.sendTip")));
         send.disableProperty().bind(input.textProperty().isEmpty());
         input.setOnAction(e -> send());
         send.setOnAction(e -> send());
@@ -111,7 +111,7 @@ final class ConversationView {
         attach.setId("attach");
         attach.getStyleClass().add("attach");
         attach.setGraphic(Icons.of(Icons.PAPERCLIP, 19, "muted"));
-        attach.setTooltip(new Tooltip("Send a file (encrypted, up to " + Attachments.MAX_FILE_BYTES / (1024 * 1024) + " MB)"));
+        attach.setTooltip(new Tooltip(I18n.t("conv.attachTip", Attachments.MAX_FILE_BYTES / (1024 * 1024))));
         attach.setOnAction(e -> chooseFile());
         HBox composer = new HBox(attach, input, send);
         composer.getStyleClass().add("composer");
@@ -173,23 +173,23 @@ final class ConversationView {
         header.setAlignment(Pos.CENTER_LEFT);
         VBox titles = new VBox(2);
         if (peer != null) {
-            input.setPromptText("Message " + peer);
+            input.setPromptText(I18n.t("conv.prompt", peer));
             header.getChildren().add(UiKit.avatarWithPresence(peer, client.isOnline(peer)));
             presence.getStyleClass().setAll("label", "row-sub");
             refreshPresence();
             Label status = presence;
             Label badge = client.isVerified(peer) && !client.keyChanged(peer)
-                    ? UiKit.label("✓ Verified", "badge-verified")
-                    : UiKit.label("Not verified", "badge-unverified");
+                    ? UiKit.label("✓ " + I18n.t("conv.verified"), "badge-verified")
+                    : UiKit.label(I18n.t("conv.notVerified"), "badge-unverified");
             badge.setId("verify-badge");
             badge.setOnMouseClicked(e -> actions.openContact(peer));
             titles.getChildren().addAll(UiKit.label(peer, "h2"), new HBox(8, status, UiKit.label("·", "row-sub"), badge));
         } else {
             Packet.GroupInfo g = group();
-            String name = g == null ? "Group" : g.name();
-            input.setPromptText("Message " + name);
+            String name = g == null ? I18n.t("conv.group") : groupName(g);
+            input.setPromptText(I18n.t("conv.prompt", name));
             header.getChildren().add(UiKit.avatar(name, "avatar-sm", true));
-            Label members = UiKit.label(g == null ? "" : g.members().size() + " members · end-to-end encrypted", "badge-verified");
+            Label members = UiKit.label(g == null ? "" : I18n.t("conv.members", g.members().size()), "badge-verified");
             members.setId("group-info-link");
             members.setStyle("-fx-cursor: hand;");
             members.setOnMouseClicked(e -> actions.openGroupInfo(groupId));
@@ -199,18 +199,18 @@ final class ConversationView {
         }
         header.getChildren().addAll(titles, UiKit.grow(), timerButton());
         if (peer == null) {
-            Button info = new Button("Group info");
+            Button info = new Button(I18n.t("conv.groupInfo"));
             info.getStyleClass().add("small");
             info.setOnAction(e -> actions.openGroupInfo(groupId));
             header.getChildren().add(info);
         }
         top.getChildren().setAll(header);
         if (peer != null && client.keyChanged(peer)) {
-            Button verify = new Button("Verify");
+            Button verify = new Button(I18n.t("conv.verify"));
             verify.getStyleClass().addAll("small", "danger-ghost");
             verify.setId("banner-verify");
             verify.setOnAction(e -> actions.openContact(peer));
-            Label text = UiKit.label(peer + "'s security key changed (new device?). Messages are paused until you verify it.");
+            Label text = UiKit.label(I18n.t("conv.keyBanner", peer));
             text.setWrapText(true);
             HBox banner = new HBox(Icons.of(Icons.ALERT, 16, "danger"), text, UiKit.grow(), verify);
             banner.getStyleClass().add("banner-danger");
@@ -229,8 +229,8 @@ final class ConversationView {
         if (current > 0) button.getStyleClass().add("active");
         button.setGraphic(Icons.of(Icons.CLOCK, 15, current > 0 ? "accent" : "muted"));
         button.setTooltip(new Tooltip(current > 0
-                ? "Disappearing messages: new messages are deleted " + AccountSession.timerLabel(current).toLowerCase(java.util.Locale.ROOT) + " after they arrive"
-                : "Disappearing messages: off"));
+                ? I18n.t("conv.timerOnTip", AccountSession.timerLabel(current))
+                : I18n.t("conv.timerOffTip")));
         for (long seconds : AccountSession.TIMER_CHOICES) {
             MenuItem item = new MenuItem((seconds == current ? "✓ " : "   ") + AccountSession.timerLabel(seconds));
             item.setId("timer-" + seconds);
@@ -249,13 +249,13 @@ final class ConversationView {
                     session.client().setTimer(peer, seconds);
                 } else {
                     List<String> skipped = session.client().setGroupTimer(groupId, seconds);
-                    if (!skipped.isEmpty()) problem = "Not changed for " + String.join(", ", skipped) + " until their new key is verified.";
+                    if (!skipped.isEmpty()) problem = I18n.t("conv.notChangedFor", String.join(", ", skipped));
                 }
                 session.history().setTimer(conversation, seconds);
             } catch (KeyChangedException e) {
-                problem = peer + "'s key changed. Verify it first.";
+                problem = I18n.t("conv.keyChangedFirst", peer);
             } catch (Exception e) {
-                problem = "Could not change the timer: " + e.getMessage();
+                problem = I18n.t("session.timerFailed", e.getMessage());
             }
             String finalProblem = problem;
             Platform.runLater(() -> {
@@ -267,10 +267,10 @@ final class ConversationView {
 
     /** Someone (or we) changed the timer: note it in the chat and update the header. */
     void timerChanged(String by, long seconds) {
-        String who = by.equals(session.client().username()) ? "You" : by;
+        boolean mine = by.equals(session.client().username());
         systemLine(seconds > 0
-                ? who + " turned on disappearing messages. New messages disappear " + AccountSession.timerLabel(seconds) + " after they arrive."
-                : who + " turned off disappearing messages.", false);
+                ? (mine ? I18n.t("conv.timerOnYou", AccountSession.timerLabel(seconds)) : I18n.t("conv.timerOn", by, AccountSession.timerLabel(seconds)))
+                : (mine ? I18n.t("conv.timerOffYou") : I18n.t("conv.timerOff", by)), false);
         refreshHeader();
     }
 
@@ -287,11 +287,11 @@ final class ConversationView {
     /** "online"/"offline" for a friend, or "… is typing" while someone types. */
     private void refreshPresence() {
         if (typingWho != null) {
-            presence.setText(peer != null ? "typing…" : typingWho + " is typing…");
+            presence.setText(peer != null ? I18n.t("conv.typing") : I18n.t("conv.typingWho", typingWho));
             if (!presence.getStyleClass().contains("typing")) presence.getStyleClass().add("typing");
         } else {
             presence.getStyleClass().remove("typing");
-            presence.setText(peer != null ? (session.client().isOnline(peer) ? "online" : "offline") : "");
+            presence.setText(peer != null ? (session.client().isOnline(peer) ? I18n.t("conv.online") : I18n.t("conv.offline")) : "");
         }
     }
 
@@ -321,6 +321,13 @@ final class ConversationView {
         return peer != null ? ChatClient.Chat.dm(peer) : ChatClient.Chat.group(groupId);
     }
 
+    /** A group's name, or a translated placeholder while its name key has not arrived yet. */
+    static String groupName(Packet.GroupInfo g) {
+        if (g.name().equals(ChatClient.ENCRYPTED_GROUP_NAME)) return I18n.t("conv.encryptedGroup");
+        if (g.name().equals("New group")) return I18n.t("conv.newGroup");
+        return g.name();
+    }
+
     private Packet.GroupInfo group() {
         return session.client().groups().stream().filter(g -> g.id() == groupId).findFirst().orElse(null);
     }
@@ -332,8 +339,8 @@ final class ConversationView {
             List<History.Message> list = session.history().load(conversation, 300);
             if (list.isEmpty()) {
                 Label hint = UiKit.label(peer != null
-                        ? "Messages to " + peer + " are end-to-end encrypted. Only the two of you can read them."
-                        : "Messages in this group are end-to-end encrypted for its members.", "system-line");
+                        ? I18n.t("conv.hintDm", peer)
+                        : I18n.t("conv.hintGroup"), "system-line");
                 hint.setWrapText(true);
                 HBox row = new HBox(hint);
                 row.setAlignment(Pos.CENTER);
@@ -344,7 +351,7 @@ final class ConversationView {
             for (History.Message m : list) append(m);
             session.history().markRead(conversation);
         } catch (IOException e) {
-            messages.getChildren().add(UiKit.label("Could not load history: " + e.getMessage(), "system-line", "danger"));
+            messages.getChildren().add(UiKit.label(I18n.t("conv.loadFailed", e.getMessage()), "system-line", "danger"));
         }
     }
 
@@ -401,7 +408,7 @@ final class ConversationView {
         if (m.replyTo().length > 0 && !m.deleted()) bubble.getChildren().add(quote(m.replyTo()));
         Node body;
         if (m.deleted()) {
-            body = UiKit.label("🚫 " + History.DELETED_TEXT, "bubble-text", "bubble-deleted");
+            body = UiKit.label("🚫 " + I18n.t("conv.deleted"), "bubble-text", "bubble-deleted");
         } else if (m.file() != null) {
             body = fileCard(m.file());
         } else {
@@ -410,10 +417,10 @@ final class ConversationView {
             body = text;
         }
         HBox meta = new HBox(5, UiKit.label(UiKit.clock(m.sentAt()), "bubble-time"));
-        if (m.edited()) meta.getChildren().add(0, UiKit.label("edited", "bubble-time"));
+        if (m.edited()) meta.getChildren().add(0, UiKit.label(I18n.t("conv.edited"), "bubble-time"));
         if (m.expiresAt() > 0) {
             Label timer = UiKit.label("⏱", "bubble-time");
-            Tooltip.install(timer, new Tooltip("Disappears at " + UiKit.clock(m.expiresAt())));
+            Tooltip.install(timer, new Tooltip(I18n.t("conv.disappearsAt", UiKit.clock(m.expiresAt()))));
             meta.getChildren().add(0, timer);
         }
         meta.setAlignment(Pos.CENTER_RIGHT);
@@ -453,11 +460,11 @@ final class ConversationView {
         String text;
         try {
             History.Message original = session.history().find(conversation, target);
-            who = original == null ? "" : original.outgoing() ? "You" : original.sender();
-            text = original == null ? "Message not available" : original.text();
+            who = original == null ? "" : original.outgoing() ? I18n.t("conv.you") : original.sender();
+            text = original == null ? I18n.t("conv.unavailable") : original.deleted() ? I18n.t("conv.deleted") : original.text();
         } catch (IOException e) {
             who = "";
-            text = "Message not available";
+            text = I18n.t("conv.unavailable");
         }
         Label sender = UiKit.label(who, "quote-sender");
         Label snippet = UiKit.label(text, "quote-text");
@@ -476,7 +483,7 @@ final class ConversationView {
         byEmoji.forEach((emoji, people) -> {
             Label chip = UiKit.label(emoji + (people.size() > 1 ? " " + people.size() : ""), "reaction-chip");
             if (people.contains(me)) chip.getStyleClass().add("mine");
-            Tooltip.install(chip, new Tooltip(String.join(", ", people.stream().map(p -> p.equals(me) ? "you" : p).toList())));
+            Tooltip.install(chip, new Tooltip(String.join(", ", people.stream().map(p -> p.equals(me) ? I18n.t("conv.youLower") : p).toList())));
             chip.setOnMouseClicked(e -> react(m, people.contains(me) ? "" : emoji));
             chips.getChildren().add(chip);
         });
@@ -485,10 +492,10 @@ final class ConversationView {
 
     private javafx.scene.control.ContextMenu menu(History.Message m) {
         javafx.scene.control.ContextMenu menu = new javafx.scene.control.ContextMenu();
-        MenuItem reply = new MenuItem("Reply");
+        MenuItem reply = new MenuItem(I18n.t("conv.reply"));
         reply.setId("menu-reply");
         reply.setOnAction(e -> startReply(m));
-        javafx.scene.control.Menu react = new javafx.scene.control.Menu("React");
+        javafx.scene.control.Menu react = new javafx.scene.control.Menu(I18n.t("conv.react"));
         String mine = AccountSession.displayEmoji(reactions.getOrDefault(m.id(), Map.of()).getOrDefault(session.client().username(), ""));
         for (String emoji : AccountSession.REACTIONS) {
             MenuItem item = new MenuItem(emoji.equals(mine) ? emoji + "  ✓" : emoji);
@@ -498,7 +505,7 @@ final class ConversationView {
         }
         menu.getItems().addAll(reply, react);
         if (m.file() == null) {
-            MenuItem copy = new MenuItem("Copy text");
+            MenuItem copy = new MenuItem(I18n.t("conv.copy"));
             copy.setOnAction(e -> {
                 javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
                 content.putString(m.text());
@@ -508,12 +515,12 @@ final class ConversationView {
         }
         if (m.outgoing()) {
             if (m.file() == null) {
-                MenuItem edit = new MenuItem("Edit");
+                MenuItem edit = new MenuItem(I18n.t("conv.edit"));
                 edit.setId("menu-edit");
                 edit.setOnAction(e -> startEdit(m));
                 menu.getItems().add(edit);
             }
-            MenuItem delete = new MenuItem("Delete for everyone");
+            MenuItem delete = new MenuItem(I18n.t("conv.delete"));
             delete.setId("menu-delete");
             delete.setOnAction(e -> deleteForEveryone(m));
             menu.getItems().add(delete);
@@ -539,15 +546,15 @@ final class ConversationView {
     private void startReply(History.Message m) {
         editing = null;
         replyTo = m.uid();
-        String who = m.outgoing() ? "yourself" : m.sender();
-        showContext("↩ Replying to " + who + ": " + m.text());
+        String who = m.outgoing() ? I18n.t("conv.yourself") : m.sender();
+        showContext("↩ " + I18n.t("conv.replyingTo", who) + ": " + m.text());
         input.requestFocus();
     }
 
     private void startEdit(History.Message m) {
         replyTo = null;
         editing = m;
-        showContext("✎ Editing message");
+        showContext("✎ " + I18n.t("conv.editing"));
         input.setText(m.text());
         input.positionCaret(input.getText().length());
         input.requestFocus();
@@ -595,9 +602,9 @@ final class ConversationView {
             try {
                 session.client().sendAction(chat(), kind, target, value);
             } catch (KeyChangedException e) {
-                problem = peer + "'s key changed. Verify it first.";
+                problem = I18n.t("conv.keyChangedFirst", peer);
             } catch (Exception e) {
-                problem = "Could not send the change: " + e.getMessage();
+                problem = I18n.t("conv.changeFailed", e.getMessage());
             }
             String p = problem;
             if (p != null) Platform.runLater(() -> systemLine(p, true));
@@ -640,7 +647,7 @@ final class ConversationView {
                 if (!l.getStyleClass().contains("read")) l.getStyleClass().add("read");
             }
             case History.FAILED -> {
-                l.setText("not sent");
+                l.setText(I18n.t("conv.notSent"));
                 l.getStyleClass().add("failed");
             }
             default -> l.setText("");
@@ -695,11 +702,11 @@ final class ConversationView {
                 ChatClient.Sent sent = session.client().send(chat(), text, expire, answering, uid);
                 status = session.sent(localId, sent.envelopeId());
                 if (!sent.skipped().isEmpty()) {
-                    problem = "Not sent to " + String.join(", ", sent.skipped()) + " until their new key is verified.";
+                    problem = I18n.t("conv.notSentTo", String.join(", ", sent.skipped()));
                 }
             } catch (KeyChangedException e) {
                 status = History.FAILED;
-                problem = peer + "'s key changed. Verify it, then send again.";
+                problem = I18n.t("conv.keyChangedResend", peer);
                 Platform.runLater(this::refreshHeader);
             } catch (Exception e) {
                 status = History.FAILED;
@@ -730,7 +737,7 @@ final class ConversationView {
         Button save = new Button();
         save.getStyleClass().addAll("small", "attach");
         save.setGraphic(Icons.of(Icons.DOWNLOAD, 16, "muted"));
-        save.setTooltip(new Tooltip("Save to disk"));
+        save.setTooltip(new Tooltip(I18n.t("conv.saveTip")));
         save.setOnAction(e -> saveFile(file));
         HBox card = new HBox(icon, titles, UiKit.grow(), save);
         card.getStyleClass().add("file-card");
@@ -760,15 +767,15 @@ final class ConversationView {
 
     private void chooseFile() {
         FileChooser chooser = new FileChooser();
-        chooser.setTitle("Send a file");
+        chooser.setTitle(I18n.t("conv.sendFile"));
         File chosen = chooser.showOpenDialog(root.getScene().getWindow());
         if (chosen == null) return;
         if (chosen.length() > Attachments.MAX_FILE_BYTES) {
-            systemLine(chosen.getName() + " is larger than " + Attachments.MAX_FILE_BYTES / (1024 * 1024) + " MB.", true);
+            systemLine(I18n.t("conv.tooLarge", chosen.getName(), Attachments.MAX_FILE_BYTES / (1024 * 1024)), true);
             return;
         }
         String name = FileMessage.safeName(chosen.getName());
-        Label progress = UiKit.label("Encrypting and sending " + name + "…", "system-line");
+        Label progress = UiKit.label(I18n.t("conv.sending", name), "system-line");
         HBox row = new HBox(progress);
         row.setAlignment(Pos.CENTER_RIGHT);
         row.setPadding(new Insets(12, 0, 0, 0));
@@ -790,13 +797,13 @@ final class ConversationView {
                 session.sent(id, sent.envelopeId());
                 stored = session.history().get(id);
                 if (!sent.skipped().isEmpty()) {
-                    problem = "Not sent to " + String.join(", ", sent.skipped()) + " until their new key is verified.";
+                    problem = I18n.t("conv.notSentTo", String.join(", ", sent.skipped()));
                 }
             } catch (KeyChangedException e) {
-                problem = peer + "'s key changed. Verify it, then send again.";
+                problem = I18n.t("conv.keyChangedResend", peer);
                 Platform.runLater(this::refreshHeader);
             } catch (Exception e) {
-                problem = "Could not send " + name + ": " + e.getMessage();
+                problem = I18n.t("conv.sendFailed", name, e.getMessage());
             }
             History.Message finalStored = stored;
             String finalProblem = problem;
@@ -810,7 +817,7 @@ final class ConversationView {
 
     private void saveFile(FileMessage file) {
         FileChooser chooser = new FileChooser();
-        chooser.setTitle("Save file");
+        chooser.setTitle(I18n.t("conv.saveFile"));
         chooser.setInitialFileName(file.name());
         File target = chooser.showSaveDialog(root.getScene().getWindow());
         if (target == null) return;
@@ -819,12 +826,12 @@ final class ConversationView {
             boolean danger = false;
             try {
                 Files.write(target.toPath(), session.client().downloadFile(file));
-                result = "Saved " + target.getName() + ".";
+                result = I18n.t("conv.saved", target.getName());
             } catch (SecurityException e) {
-                result = "Did not save " + file.name() + ": " + e.getMessage() + ".";
+                result = I18n.t("conv.notSaved", file.name(), e.getMessage());
                 danger = true;
             } catch (Exception e) {
-                result = "Could not download " + file.name() + ": " + e.getMessage();
+                result = I18n.t("conv.downloadFailed", file.name(), e.getMessage());
                 danger = true;
             }
             String text = result;

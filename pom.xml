@@ -37,6 +37,12 @@
       <artifactId>javafx-controls</artifactId>
       <version>${javafx.version}</version>
     </dependency>
+    <!-- Windows DPAPI for "remember me" (the password is encrypted by the OS for this user) -->
+    <dependency>
+      <groupId>net.java.dev.jna</groupId>
+      <artifactId>jna-platform</artifactId>
+      <version>5.14.0</version>
+    </dependency>
     <!-- QR codes for contact verification (no cryptography in this library) -->
     <dependency>
       <groupId>com.google.zxing</groupId>

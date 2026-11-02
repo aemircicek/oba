@@ -40,7 +40,7 @@ final class WaitingScreen {
         addresses.managedProperty().bind(addresses.visibleProperty());
         addresses.setVisible(false);
 
-        Button cancel = new Button("Cancel");
+        Button cancel = new Button(I18n.t("common.cancel"));
         cancel.setId("cancel");
         cancel.setCancelButton(true);
         cancel.setOnAction(e -> onCancel.run());
@@ -71,7 +71,7 @@ final class WaitingScreen {
     void showAddresses(List<String> hosts, int port) {
         addresses.getChildren().clear();
         if (hosts.isEmpty()) {
-            Label none = new Label("No local network address found. Is Wi-Fi or Ethernet connected?");
+            Label none = new Label(I18n.t("waiting.noAddress"));
             none.getStyleClass().addAll("notice", "info");
             none.setWrapText(true);
             addresses.getChildren().add(none);
@@ -84,7 +84,7 @@ final class WaitingScreen {
             Button copy = new Button();
             copy.setGraphic(Icons.of(Icons.COPY, 16, "muted"));
             copy.getStyleClass().add("icon-button");
-            copy.setTooltip(new Tooltip("Copy address"));
+            copy.setTooltip(new Tooltip(I18n.t("waiting.copy")));
             copy.setOnAction(e -> {
                 ClipboardContent content = new ClipboardContent();
                 content.putString(host);
@@ -97,7 +97,7 @@ final class WaitingScreen {
             addresses.getChildren().add(chip);
         }
         if (port != com.emirchat.net.Connector.DEFAULT_PORT) {
-            Label hint = new Label("Your peer must also enter port " + port + ".");
+            Label hint = new Label(I18n.t("waiting.port", port));
             hint.getStyleClass().add("caption");
             addresses.getChildren().add(hint);
         }

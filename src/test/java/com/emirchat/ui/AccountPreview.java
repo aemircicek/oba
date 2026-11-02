@@ -110,6 +110,7 @@ public final class AccountPreview {
         out = Path.of(args[0]);
         theme = args.length > 1 ? args[1] : "dark";
         System.setProperty("securechat.theme", theme);
+        I18n.use(System.getProperty("preview.language", "en"));
         Files.createDirectories(out);
         work = Files.createTempDirectory("securechat-account-preview");
         server = new ChatServer(new ChatServer.Config(work.resolve("server"), "127.0.0.1", 0, 1_000)).start();
@@ -298,6 +299,17 @@ public final class AccountPreview {
         snap("11-key-changed-dialog");
         if (efeNew.client == null) throw new AssertionError();
 
+        // The server goes away and comes back: the app reconnects by itself, without logging out
+        int port = server.port();
+        server.close();
+        waitFor("#status-offline");
+        pause();
+        snap("12-offline");
+        server = new ChatServer(new ChatServer.Config(work.resolve("server"), "127.0.0.1", port, 1_000)).start();
+        waitFor("#status-online", 60);
+        pause();
+        snap("13-reconnected");
+
         fx(() -> { shell.shutdown(); return null; });
         efeNew.client.close();
         ayse.client.close();
@@ -338,7 +350,11 @@ public final class AccountPreview {
     }
 
     private static void waitFor(String selector) throws Exception {
-        long deadline = System.currentTimeMillis() + 15_000;
+        waitFor(selector, 15);
+    }
+
+    private static void waitFor(String selector, int seconds) throws Exception {
+        long deadline = System.currentTimeMillis() + seconds * 1000L;
         while (System.currentTimeMillis() < deadline) {
             if (fx(() -> lookup(selector) != null)) return;
             Thread.sleep(50);
