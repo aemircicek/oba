@@ -353,6 +353,20 @@ public final class AccountPreview {
         Thread.sleep(800);
         snap("15-community");
 
+        // A voice call from ayse: ringing, answered, talking (silent devices: no real microphone)
+        ayse.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
+        ayse.client.calls().call("emir");
+        waitFor("#call-accept");
+        Thread.sleep(300);
+        snap("16-incoming-call");
+        fx(() -> { ((Button) find("#call-accept")).fire(); return null; });
+        waitFor("#call-mute");
+        Thread.sleep(2300);
+        snap("17-in-call");
+        fx(() -> { ((Button) find("#call-hangup")).fire(); return null; });
+        Thread.sleep(800);
+        snap("18-call-ended");
+
         // The server goes away and comes back: the app reconnects by itself, without logging out
         int port = server.port();
         server.close();

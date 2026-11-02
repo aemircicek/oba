@@ -55,6 +55,9 @@ final class MainView implements AccountSession.View {
 
     private boolean focusHooked;
     private final HBox updateBanner = new HBox(8);
+    private final HBox callBar = new HBox(10);
+    private javafx.animation.Timeline callTicker;
+    private javafx.animation.PauseTransition callHide;
     private final Label connectionLabel = UiKit.label("● " + I18n.t("main.connected"), "row-sub", "accent-text");
 
     MainView(AccountSession session, Runnable onLogout) {
@@ -125,7 +128,10 @@ final class MainView implements AccountSession.View {
 
         showEmpty();
         frame.setLeft(sidebar);
-        frame.setCenter(content);
+        callBar.managedProperty().bind(callBar.visibleProperty());
+        callBar.setVisible(false);
+        VBox.setVgrow(content, Priority.ALWAYS);
+        frame.setCenter(new VBox(callBar, content));
         stack.getChildren().add(frame);
         refreshSidebar();
         session.setView(this);
@@ -943,6 +949,8 @@ final class MainView implements AccountSession.View {
             @Override public void openContact(String user) { MainView.this.openContact(user); }
 
             @Override public void openGroupInfo(long groupId) { MainView.this.openGroupInfo(groupId); }
+
+            @Override public void call(String friend) { session.client().calls().call(friend); }
         };
         current = conversation.startsWith("g:")
                 ? ConversationView.group(session, Long.parseLong(conversation.substring(2)), actions)
@@ -1282,6 +1290,134 @@ final class MainView implements AccountSession.View {
     @Override
     public void typing(String conversation, String who) {
         if (current != null && current.conversation().equals(conversation)) current.typing(who);
+    }
+
+    // ------------------------------------------------------------------ calls
+
+    @Override
+    public void call(com.emirchat.call.Calls.Call c) {
+        com.emirchat.call.Calls calls = session.client().calls();
+        if (callTicker != null) callTicker.stop();
+        if (callHide != null) callHide.stop();
+        if (c.state() == com.emirchat.call.Calls.State.ENDED) {
+            if (c.reason() == com.emirchat.call.Calls.EndReason.MISSED && !c.outgoing()) {
+                notifyCall(c.peer(), I18n.t("call.missedFrom", c.peer()));
+                if (calls.current() != null) return; // missed while talking to someone else: keep that bar
+            }
+            Label text = UiKit.label(endText(c), "row-title");
+            text.setWrapText(true);
+            showCallBar(c.peer(), text);
+            callHide = new javafx.animation.PauseTransition(javafx.util.Duration.seconds(4));
+            callHide.setOnFinished(e -> {
+                if (calls.current() == null) callBar.setVisible(false);
+            });
+            callHide.play();
+            return;
+        }
+        Label status = UiKit.label("", "row-sub");
+        Label title = UiKit.label(c.peer(), "row-title");
+        VBox text = new VBox(2, title, status);
+        HBox buttons = new HBox(8);
+        buttons.setAlignment(Pos.CENTER_RIGHT);
+        switch (c.state()) {
+            case CALLING -> {
+                status.setText(I18n.t("call.calling"));
+                buttons.getChildren().add(hangUpButton(I18n.t("call.cancel"), calls::hangUp));
+            }
+            case RINGING -> {
+                status.setText(I18n.t("call.incoming"));
+                Button accept = new Button(I18n.t("call.accept"));
+                accept.setGraphic(Icons.of(Icons.PHONE, 14, "on-accent"));
+                accept.getStyleClass().addAll("small", "primary");
+                accept.setId("call-accept");
+                accept.setOnAction(e -> calls.accept());
+                buttons.getChildren().addAll(hangUpButton(I18n.t("call.reject"), calls::reject), accept);
+                notifyCall(c.peer(), I18n.t("call.incomingFrom", c.peer()));
+                ring();
+            }
+            case CONNECTED -> {
+                Runnable tick = () -> status.setText("🔒 " + I18n.t("call.encrypted") + " · "
+                        + duration(System.currentTimeMillis() - c.connectedAt()));
+                tick.run();
+                callTicker = new javafx.animation.Timeline(new javafx.animation.KeyFrame(javafx.util.Duration.seconds(1),
+                        e -> tick.run()));
+                callTicker.setCycleCount(javafx.animation.Animation.INDEFINITE);
+                callTicker.play();
+                Button mute = new Button(c.muted() ? I18n.t("call.unmute") : I18n.t("call.mute"));
+                mute.setGraphic(Icons.of(c.muted() ? Icons.MIC_OFF : Icons.MIC, 14, c.muted() ? "danger" : "muted"));
+                mute.getStyleClass().add("small");
+                mute.setId("call-mute");
+                mute.setOnAction(e -> calls.setMuted(!c.muted()));
+                buttons.getChildren().addAll(mute, hangUpButton(I18n.t("call.hangUp"), calls::hangUp));
+            }
+            default -> { }
+        }
+        HBox row = new HBox(10, text, UiKit.grow(), buttons);
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(row, Priority.ALWAYS);
+        showCallBar(c.peer(), row);
+    }
+
+    private void showCallBar(String peer, Node body) {
+        callBar.getChildren().setAll(UiKit.avatar(peer, "avatar-sm", false), body);
+        HBox.setHgrow(body, Priority.ALWAYS);
+        callBar.getStyleClass().setAll("call-bar");
+        callBar.setAlignment(Pos.CENTER_LEFT);
+        callBar.setId("call-bar");
+        callBar.setVisible(true);
+    }
+
+    private static Button hangUpButton(String text, Runnable action) {
+        Button b = new Button(text);
+        b.setGraphic(Icons.of(Icons.PHONE, 14, "danger"));
+        b.getStyleClass().addAll("small", "danger-ghost");
+        b.setId("call-hangup");
+        b.setOnAction(e -> action.run());
+        return b;
+    }
+
+    private static String endText(com.emirchat.call.Calls.Call c) {
+        return switch (c.reason()) {
+            case HUNG_UP -> c.connectedAt() > 0
+                    ? I18n.t("call.ended", duration(System.currentTimeMillis() - c.connectedAt()))
+                    : I18n.t("call.cancelled");
+            case REJECTED -> c.outgoing() ? I18n.t("call.rejected", c.peer()) : I18n.t("call.cancelled");
+            case BUSY -> I18n.t("call.busy", c.peer());
+            case NO_ANSWER -> I18n.t("call.noAnswer", c.peer());
+            case MISSED -> I18n.t("call.missedFrom", c.peer());
+            case FAILED -> I18n.t("call.failed", c.error() == null ? "" : c.error());
+        };
+    }
+
+    static String duration(long ms) {
+        long s = Math.max(0, ms / 1000);
+        return s >= 3600 ? String.format("%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                : String.format("%02d:%02d", s / 60, s % 60);
+    }
+
+    /** Rings (a system beep) every two seconds while the call is ringing, and brings the window forward. */
+    private void ring() {
+        if (stack.getScene() != null && stack.getScene().getWindow() instanceof javafx.stage.Stage stage) {
+            if (stage.isIconified()) stage.setIconified(false);
+            stage.toFront();
+        }
+        if (!Boolean.parseBoolean(System.getProperty("securechat.notifications", "true"))) return;
+        Runnable beep = () -> {
+            try {
+                java.awt.Toolkit.getDefaultToolkit().beep();
+            } catch (UnsupportedOperationException ignored) { // includes HeadlessException
+                // no sound: the bar still shows the call
+            }
+        };
+        beep.run();
+        callTicker = new javafx.animation.Timeline(new javafx.animation.KeyFrame(javafx.util.Duration.seconds(2), e -> beep.run()));
+        callTicker.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        callTicker.play();
+    }
+
+    private void notifyCall(String title, String body) {
+        if (!session.setting(AccountSession.NOTIFICATIONS) || !Boolean.parseBoolean(System.getProperty("securechat.notifications", "true"))) return;
+        Tray.get().notify(title, body);
     }
 
     @Override

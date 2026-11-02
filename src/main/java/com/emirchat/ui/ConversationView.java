@@ -46,6 +46,8 @@ final class ConversationView {
         void openContact(String user);
 
         void openGroupInfo(long groupId);
+
+        default void call(String friend) {}
     }
 
     private final AccountSession session;
@@ -203,6 +205,15 @@ final class ConversationView {
             titles.getChildren().addAll(UiKit.label(name, "h2"), new HBox(8, members, presence));
         }
         header.getChildren().addAll(titles, UiKit.grow(), timerButton());
+        if (peer != null) {
+            Button call = new Button();
+            call.setGraphic(Icons.of(Icons.PHONE, 15, "accent"));
+            call.getStyleClass().addAll("small", "timer-button");
+            call.setTooltip(new Tooltip(I18n.t("call.start", peer)));
+            call.setId("call-button");
+            call.setOnAction(e -> actions.call(peer));
+            header.getChildren().add(call);
+        }
         if (peer == null) {
             Packet.GroupInfo shown = group();
             Button info = new Button(shown != null && shown.community() != 0 ? I18n.t("community.settings") : I18n.t("conv.groupInfo"));

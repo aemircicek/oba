@@ -162,6 +162,11 @@ public final class Calls implements AutoCloseable {
         });
     }
 
+    /** The connection to the server is gone: so is the call. */
+    public void connectionLost() {
+        run(() -> end(EndReason.FAILED, "connection lost"));
+    }
+
     public void setMuted(boolean mute) {
         muted = mute;
         run(this::changed);

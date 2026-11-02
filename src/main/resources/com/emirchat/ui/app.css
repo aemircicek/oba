@@ -456,3 +456,6 @@
 .channel-row { -fx-padding: 7 16; }
 .channel-row .row-title { -fx-font-weight: normal; -fx-text-fill: -sc-text-2; }
 .channel-row.selected .row-title { -fx-text-fill: -sc-text; -fx-font-weight: bold; }
+
+/* Voice calls */
+.call-bar { -fx-padding: 10 18; -fx-background-color: -sc-accent-weak; -fx-border-color: transparent transparent -sc-border transparent; }

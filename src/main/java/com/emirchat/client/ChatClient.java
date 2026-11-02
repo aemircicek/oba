@@ -365,6 +365,7 @@ public final class ChatClient implements AutoCloseable {
             }
         });
         connection.onClosed(() -> {
+            client.calls.connectionLost();
             if (!client.closing) client.inbox.execute(() -> client.listener.disconnected());
         });
         client.publishKeys();
@@ -1221,7 +1222,8 @@ public final class ChatClient implements AutoCloseable {
      */
     private com.emirchat.call.Calls calls;
     private volatile java.util.function.Supplier<com.emirchat.call.AudioDevice> audioDevices =
-            com.emirchat.call.SoundDevice::new;
+            "none".equals(System.getProperty("securechat.audio"))
+                    ? com.emirchat.call.SilentDevice::new : com.emirchat.call.SoundDevice::new;
 
     /** Voice calls with friends. */
     public com.emirchat.call.Calls calls() {

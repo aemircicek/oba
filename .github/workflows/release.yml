@@ -56,9 +56,24 @@ jobs:
       - name: Tools for .deb packages
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fakeroot
-      - name: macOS icon
+      - name: macOS icon and microphone permission
         if: runner.os == 'macOS'
-        run: iconutil -c icns packaging/macos/scorpion.iconset -o packaging/macos/scorpion.icns
+        shell: bash
+        run: |
+          set -euo pipefail
+          iconutil -c icns packaging/macos/scorpion.iconset -o packaging/macos/scorpion.icns
+          # Voice calls need the microphone, and macOS only asks the user if Info.plist says why.
+          # Start from this JDK's own Info.plist template (its placeholders differ between versions).
+          jimage extract --dir jdk-res --include 'regex:.*/Info-lite\.plist\.template' "$JAVA_HOME/lib/modules"
+          TEMPLATE=$(find jdk-res -name 'Info-lite.plist.template' | head -n 1)
+          if [ -z "$TEMPLATE" ]; then
+            echo "::warning::Info.plist template not found; the app will not be able to ask for the microphone"
+            exit 0
+          fi
+          mkdir -p packaging/macos/resources
+          perl -pe 's#^\s*</dict>#  <key>NSMicrophoneUsageDescription</key>\n  <string>Scorpion uses the microphone only during end-to-end encrypted voice calls.</string>\n</dict>#' \
+            "$TEMPLATE" > packaging/macos/resources/Info.plist
+          grep -q NSMicrophoneUsageDescription packaging/macos/resources/Info.plist
       - name: Package
         shell: bash
         env:
@@ -85,7 +100,9 @@ jobs:
               if command -v 7z > /dev/null; then (cd portable && 7z a -tzip "../$ZIP" Scorpion > /dev/null)
               else powershell -NoProfile -Command "Compress-Archive -Path portable/Scorpion -DestinationPath '$ZIP'"; fi ;;
             macOS)
-              jpackage "${COMMON[@]}" "${INSTALLER[@]}" --type dmg --icon packaging/macos/scorpion.icns --dest pkg \
+              RES=()
+              if [ -f packaging/macos/resources/Info.plist ]; then RES=(--resource-dir packaging/macos/resources); fi
+              jpackage "${COMMON[@]}" "${INSTALLER[@]}" ${RES[@]+"${RES[@]}"} --type dmg --icon packaging/macos/scorpion.icns --dest pkg \
                 --mac-package-identifier org.scorpion.app --mac-package-name Scorpion \
                 --file-associations packaging/scbackup.properties
               cp pkg/*.dmg "dist/Scorpion-${VERSION}-${PLATFORM}.dmg" ;;
