@@ -3,6 +3,15 @@
 ## Unreleased (3.2.0)
 
 ### Added
+- **Scorpion desktop app**: new name and icon; installers with Java included (Windows installer
+  and portable zip, macOS dmg, Linux deb); data in each OS's usual folder (the old
+  `~/.securechat` is moved there).
+- **English and Turkish** interface.
+- **Default server** with an optional built-in fingerprint; other servers under "Advanced".
+- **Remember me** with the OS's protected storage (DPAPI, Keychain, Secret Service).
+- **Runs in the tray**, starts with the computer if wanted, **reconnects by itself**, one window
+  per data folder, `.scbackup` files open the restore dialog.
+- Update banner, About dialog, third-party notices, local log file, first-start tour.
 - **Replies, reactions, edits and "delete for everyone"**: messages carry an id inside the
   ciphertext; reactions, edits and deletions refer to it, and edits and deletions are accepted
   only from the author. Right-click a message in the desktop app.
@@ -18,7 +27,7 @@
   [docs/deploy.md](docs/deploy.md).
 - **Release packages** with Java included (Windows zip, macOS dmg, Linux deb), Sigstore build
   provenance for every file, and `SHA256SUMS`.
-- 22 new tests (161 in total).
+- 31 new tests (170 in total).
 
 ### Fixed
 - A message delivered again after its acknowledgement was lost (the app closed right after

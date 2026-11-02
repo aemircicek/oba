@@ -1,10 +1,14 @@
-# secure-chat
+<p align="center"><img src="docs/scorpion-icon.png" width="96" alt="Scorpion icon"></p>
+
+# Scorpion
 
 [![CI](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml)
 
-End-to-end encrypted messenger for the desktop and the terminal: accounts, friends, direct
-messages and groups, written in Java using only the JDK's standard cryptography (no
-third-party crypto libraries). The server relays and stores messages it cannot read.
+**Scorpion** is an end-to-end encrypted messenger for Windows, macOS and Linux (plus a terminal
+client): accounts, friends, direct messages, groups and files, in English and Turkish. It is
+written in Java using only the JDK's standard cryptography (no third-party crypto libraries), and
+the server relays and stores messages it cannot read. This repository was called *secure-chat*
+before the desktop app got its name.
 
 <p align="center">
   <img src="docs/screenshots/account-dm-dark.png" width="420" alt="Encrypted direct messages">
@@ -20,14 +24,22 @@ direct message, and Sender Keys for groups.
 ## Quick start
 
 From the [latest release](https://github.com/aemircicek/secure-chat/releases/latest), download
-either a package with Java included (Windows: portable `.zip`, macOS: `.dmg`, Linux: `.deb`) or
-the jar for your platform (Java 21+ required). Or build it yourself with `mvn verify`.
+Scorpion with Java included:
+
+| | File | |
+|---|---|---|
+| Windows | `Scorpion-<version>-windows-x64.exe` | installer: no admin rights, Start menu and desktop shortcuts |
+| Windows | `Scorpion-<version>-windows-x64-portable.zip` | unzip and run `Scorpion.exe` |
+| macOS | `Scorpion-<version>-macos-arm64.dmg` | |
+| Linux | `Scorpion-<version>-linux-x64.deb` | `sudo apt install ./Scorpion-*.deb` |
+
+There is also a runnable jar per platform (Java 21+ required), or build it yourself with `mvn verify`.
 
 Check a download before running it, with the checksum file or GitHub's signed build provenance:
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing                       # on Windows: Get-FileHash <file>
-gh attestation verify secure-chat-windows-x64.jar -R aemircicek/secure-chat
+gh attestation verify Scorpion-3.2.0-windows-x64.exe -R aemircicek/secure-chat
 ```
 
 The packages are not code-signed (that needs paid certificates), so Windows SmartScreen and macOS
@@ -38,9 +50,10 @@ java -jar secure-chat.jar server                    # run a server on port 5056 
 java -jar secure-chat.jar                           # desktop app: register or log in
 ```
 
-In the desktop app, enter the server address (for example `localhost:5056`, or the server's LAN
-address), then register a username and password. To try it alone on one machine, open two app
-windows with different key directories:
+Register a username and password. Builds with a default server (set in
+`src/main/resources/default-server.properties`, optionally with its pinned fingerprint) connect to
+it directly; otherwise, or under *Advanced*, enter a server address such as `localhost:5056`. To
+try it alone on one machine, open two app windows with different data folders:
 
 ```sh
 java -jar secure-chat.jar gui --home ./alice
@@ -49,7 +62,13 @@ java -jar secure-chat.jar gui --home ./bob
 
 ### Desktop app
 
-- **Accounts**: register and log in with a username and password.
+- **Accounts**: register and log in with a username and password; *Remember me* keeps the password
+  in the operating system's protected storage (Windows DPAPI, macOS Keychain, Linux Secret
+  Service) and signs in by itself.
+- **Always there**: closing the window keeps Scorpion in the tray so messages and notifications
+  still arrive; it can start with the computer, reconnects by itself after a network change or a
+  server restart, and keeps one window (a second start brings it forward).
+- **English and Turkish**, following the system or chosen on the login screen and in Settings.
 - **Server verification**: on first connection the app shows the server's key fingerprint; after
   that it is pinned and a different key is refused.
 - **Friends**: send, accept and decline requests; see who is online.
@@ -79,6 +98,8 @@ java -jar secure-chat.jar gui --home ./bob
 - **Encrypted backup**: Settings → *Back up this account* saves keys, sessions and history in one
   file encrypted with a passphrase of your choice; *Restore from a backup* on the login screen
   moves the account to another computer.
+- **Updates and help**: a banner when a new version is out (can be turned off), a short tour on
+  first start, an About dialog and a local log file for troubleshooting.
 - Light and dark themes, following the system.
 
 <p align="center">
@@ -245,7 +266,7 @@ Users then authenticate with their password inside the channel. Low-order X25519
 
 ### Tests
 
-`mvn verify` runs 161 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 170 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -318,4 +339,4 @@ See [SECURITY.md](SECURITY.md) for how to report a vulnerability.
 
 ## License
 
-[MIT](LICENSE) © 2026 Emir Çiçek. Icons adapted from [Feather](https://github.com/feathericons/feather) (MIT).
+[MIT](LICENSE) © 2026 Emir Çiçek. Third-party components and their licenses: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
