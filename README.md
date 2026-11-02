@@ -245,7 +245,7 @@ Users then authenticate with their password inside the channel. Low-order X25519
 
 ### Tests
 
-`mvn verify` runs 160 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 161 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -268,7 +268,8 @@ Users then authenticate with their password inside the channel. Low-order X25519
   key change.
 - **Server**: registration and login rules, identical errors for wrong password and unknown user,
   brute-force limits, friend and group permissions, the offline queue in order, delivery
-  receipts, a tampering server being caught, and the server storing only ciphertext.
+  receipts, a message delivered again after a lost acknowledgement, a tampering server being caught,
+  and the server storing only ciphertext.
 
 CI also runs a Semgrep security scan. `src/test/java/com/emirchat/ui/AccountPreview.java` drives
 the real desktop app against an in-process server and scripted users and saves a screenshot of

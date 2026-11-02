@@ -18,7 +18,12 @@
   [docs/deploy.md](docs/deploy.md).
 - **Release packages** with Java included (Windows zip, macOS dmg, Linux deb), Sigstore build
   provenance for every file, and `SHA256SUMS`.
-- 21 new tests (160 in total).
+- 22 new tests (161 in total).
+
+### Fixed
+- A message delivered again after its acknowledgement was lost (the app closed right after
+  receiving it) is now acknowledged quietly instead of showing a "could not be decrypted"
+  warning. Handled envelope ids are remembered across restarts.
 
 ### Changed
 - New messages use a format with message ids; 3.1 messages are still read. Update all clients

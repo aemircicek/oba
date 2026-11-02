@@ -131,6 +131,41 @@ class MessagingIntegrationTest {
     }
 
     @Test
+    void aMessageDeliveredAgainAfterALostAcknowledgementIsNotAnError() throws Exception {
+        try (Device emir = new Device("emir-laptop").start("emir", true)) {
+            Device efe = new Device("efe-laptop").start("efe", true);
+            befriend(emir, efe);
+            efe.close();
+            emir.client.sendText("efe", "bir kez");
+            Object[] row;
+            String url = "jdbc:sqlite:" + dir.resolve("server/server.db");
+            try (Connection db = DriverManager.getConnection(url); Statement s = db.createStatement();
+                 ResultSet rs = s.executeQuery("SELECT id, recipient_id, sender_id, sent_at, body, group_id FROM envelopes")) {
+                assertTrue(rs.next());
+                row = new Object[] {rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4), rs.getBytes(5), rs.getLong(6)};
+            }
+            try (Device efeBack = new Device("efe-laptop").start("efe", false)) {
+                assertEquals("emir: bir kez", efeBack.nextMessage());
+                Thread.sleep(300);
+                assertEquals(0, queued());
+            }
+            // The app closed before the server got the acknowledgement: the server still has it.
+            try (Connection db = DriverManager.getConnection(url);
+                 java.sql.PreparedStatement ps = db.prepareStatement(
+                         "INSERT INTO envelopes (id, recipient_id, sender_id, sent_at, body, group_id) VALUES (?, ?, ?, ?, ?, ?)")) {
+                for (int i = 0; i < row.length; i++) ps.setObject(i + 1, row[i]);
+                ps.executeUpdate();
+            }
+            try (Device efeAgain = new Device("efe-laptop").start("efe", false)) {
+                for (int i = 0; i < 40 && queued() > 0; i++) Thread.sleep(50);
+                assertEquals(0, queued(), "acknowledged again, so the server stops re-sending it");
+                assertNull(efeAgain.messages.poll(300, TimeUnit.MILLISECONDS), "not shown twice");
+                assertTrue(efeAgain.problems.isEmpty(), "no 'could not be decrypted' warning: " + efeAgain.problems);
+            }
+        }
+    }
+
+    @Test
     void theServerOnlyStoresCiphertext() throws Exception {
         try (Device emir = new Device("emir-laptop").start("emir", true)) {
             Device efe = new Device("efe-laptop").start("efe", true);

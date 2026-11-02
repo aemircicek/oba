@@ -264,6 +264,44 @@ public final class ChatClient implements AutoCloseable {
     private final Map<Long, Boolean> seen = Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, false) {
         @Override protected boolean removeEldestEntry(Map.Entry<Long, Boolean> e) { return size() > 10_000; }
     });
+    /** Envelopes already processed (also across restarts), newest last; see {@link #receive}. */
+    private final java.util.LinkedHashSet<Long> handled = new java.util.LinkedHashSet<>();
+    private static final int HANDLED_KEPT = 2000;
+
+    private void loadHandled() {
+        try {
+            Path file = dataDir.resolve("handled");
+            if (!Files.exists(file)) return;
+            for (String line : Files.readAllLines(file)) {
+                try {
+                    long id = Long.parseLong(line.strip());
+                    handled.add(id);
+                    seen.put(id, Boolean.TRUE);
+                } catch (NumberFormatException ignored) {
+                    // skip a damaged line
+                }
+            }
+        } catch (IOException ignored) {
+            // without the list, a re-delivered message is reported as undecryptable at worst
+        }
+    }
+
+    private void markHandled(long envelopeId) {
+        synchronized (handled) {
+            handled.add(envelopeId);
+            while (handled.size() > HANDLED_KEPT) handled.remove(handled.iterator().next());
+            try {
+                Path file = dataDir.resolve("handled");
+                Path tmp = dataDir.resolve("handled.tmp");
+                Files.write(tmp, handled.stream().map(String::valueOf).toList());
+                Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException ignored) {
+                // best effort, as above
+            }
+        }
+    }
+
     private final ExecutorService inbox = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "inbox");
         t.setDaemon(true);
@@ -299,6 +337,7 @@ public final class ChatClient implements AutoCloseable {
         client.listener = listener;
         client.dataDir = dir;
         client.groupNames = new GroupNames(dir.resolve("e2e"));
+        client.loadHandled();
         client.deviceKey = device.publicKeyBytes();
         connection.onPush(p -> client.inbox.execute(() -> client.onPush(p)));
         connection.onClosed(() -> {
@@ -898,7 +937,13 @@ public final class ChatClient implements AutoCloseable {
     }
 
     private void receive(Packet.Envelope envelope) {
-        if (seen.put(envelope.id(), Boolean.TRUE) != null) return; // live push and queue fetch can overlap
+        if (seen.put(envelope.id(), Boolean.TRUE) != null) {
+            // Live push and queue fetch can overlap; and if our acknowledgement was lost (the app
+            // closed right after a message), the server delivers it again after a restart. Its
+            // message key is already used up, so acknowledge it again instead of reporting an error.
+            if (handled.contains(envelope.id())) connection.ackAsync(List.of(envelope.id()));
+            return;
+        }
         boolean ack = true;
         try {
             if (envelope.groupId() != 0) {
@@ -927,7 +972,10 @@ public final class ChatClient implements AutoCloseable {
             listener.undecryptable(envelope.sender(), e.getMessage());
         } finally {
             // Otherwise acknowledge either way: a message that cannot be decrypted now never will be.
-            if (ack) connection.ackAsync(List.of(envelope.id()));
+            if (ack) {
+                markHandled(envelope.id());
+                connection.ackAsync(List.of(envelope.id()));
+            }
         }
     }
 
