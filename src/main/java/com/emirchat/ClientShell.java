@@ -3,14 +3,18 @@ package com.emirchat;
 import com.emirchat.api.ApiException;
 import com.emirchat.api.Packet;
 import com.emirchat.chat.ChatMessage;
+import com.emirchat.chat.FileMessage;
 import com.emirchat.chat.TerminalSanitizer;
 import com.emirchat.client.ChatClient;
 import com.emirchat.client.ServerConnection;
 import com.emirchat.crypto.Identity;
+import com.emirchat.e2e.Attachments;
 import com.emirchat.trust.KeyChangedException;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -28,7 +32,10 @@ final class ClientShell {
             "  groups             list your groups        gmsg <id> <text>  message a group",
             "  group <name> <user,user,...>   create a group with friends",
             "  gadd <id> <user>   add a friend (admin)    gremove <id> <user>  remove a member (admin)",
-            "  gleave <id>        leave a group",
+            "  gleave <id>        leave a group       grename <id> <name>  rename a group (admin)",
+            "  file <user> <path> send an encrypted file  gfile <id> <path>  send a file to a group",
+            "  save <n> <folder>  save received file number n",
+            "  timer <user|#id> <off|5m|1h|1d|1w>  disappearing messages for a chat",
             "  verify <user>      show the fingerprint to compare with your friend",
             "  trust <user>       accept a friend's new key after verifying it",
             "  help               this list               quit             leave");
@@ -38,8 +45,9 @@ final class ClientShell {
     static int run(ServerConnection connection, Identity device, Path accounts, String username, String password,
                    BufferedReader stdin) throws IOException {
         ChatClient client;
+        Printer printer = new Printer();
         try {
-            client = ChatClient.start(connection, device, accounts, username, password, false, new Printer());
+            client = ChatClient.start(connection, device, accounts, username, password, false, printer);
         } catch (ApiException e) {
             System.err.println(e.getMessage());
             return 4;
@@ -107,6 +115,14 @@ final class ClientShell {
                         String[] a = (parts.length > 2 ? arg + " " + parts[2] : arg).split("\\s+");
                         client.removeGroupMember(Long.parseLong(a[0]), a[1]);
                     }
+                    case "grename" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: grename <id> <new name>");
+                        } else {
+                            client.renameGroup(Long.parseLong(arg), parts[2]);
+                            System.out.println("Renamed (the name is end-to-end encrypted).");
+                        }
+                    }
                     case "gleave" -> {
                         client.leaveGroup(Long.parseLong(arg));
                         System.out.println("Left the group.");
@@ -120,6 +136,52 @@ final class ClientShell {
                         client.trustNewKey(arg);
                         System.out.println("Now trusting " + arg + "'s new key:\n" + Identity.pretty(client.pinnedFingerprint(arg)));
                     }
+                    case "file", "gfile" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: " + parts[0] + (parts[0].equals("file") ? " <user>" : " <id>") + " <path>");
+                        } else {
+                            Path path = Path.of(parts[2].strip());
+                            if (Files.size(path) > Attachments.MAX_FILE_BYTES) {
+                                System.out.println("! Files can be at most " + Attachments.MAX_FILE_BYTES / (1024 * 1024) + " MB.");
+                            } else {
+                                byte[] data = Files.readAllBytes(path);
+                                String name = FileMessage.safeName(path.getFileName().toString());
+                                String mime = java.util.Objects.requireNonNullElse(Files.probeContentType(path),
+                                        "application/octet-stream");
+                                if (parts[0].equals("file")) {
+                                    client.sendFile(arg, name, mime, data);
+                                } else {
+                                    var skipped = client.sendGroupFile(Long.parseLong(arg), name, mime, data).getValue();
+                                    if (!skipped.isEmpty()) System.out.println("! Not delivered to (unverified key): " + skipped);
+                                }
+                                System.out.println("Sent " + name + " (encrypted).");
+                            }
+                        }
+                    }
+                    case "save" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: save <number> <folder>");
+                        } else {
+                            FileMessage file = printer.file(Integer.parseInt(arg));
+                            Path target = Path.of(parts[2].strip()).resolve(file.name()); // safe name: no directories
+                            Files.write(target, client.downloadFile(file), StandardOpenOption.CREATE_NEW);
+                            System.out.println("Saved " + target.toAbsolutePath() + ".");
+                        }
+                    }
+                    case "timer" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: timer <user|#group-id> <off|30s|5m|1h|1d|1w>");
+                        } else {
+                            long seconds = parseDuration(parts[2].strip());
+                            if (arg.startsWith("#")) {
+                                client.setGroupTimer(Long.parseLong(arg.substring(1)), seconds);
+                            } else {
+                                client.setTimer(arg, seconds);
+                            }
+                            System.out.println(seconds == 0 ? "Disappearing messages off."
+                                    : "Messages in that chat now disappear " + parts[2].strip() + " after they arrive (in the desktop app).");
+                        }
+                    }
                     case "help" -> System.out.println(HELP);
                     case "quit", "exit" -> {
                         client.close();
@@ -131,14 +193,35 @@ final class ClientShell {
                 System.out.println("! " + arg + "'s key changed. Run 'verify " + arg + "', compare it with them, then 'trust " + arg + "'.");
             } catch (ApiException e) {
                 System.out.println("! " + e.getMessage());
+            } catch (java.nio.file.FileAlreadyExistsException e) {
+                System.out.println("! " + e.getFile() + " already exists.");
+            } catch (SecurityException e) {
+                System.out.println("! Refused: " + e.getMessage() + ".");
             } catch (IOException e) {
                 System.out.println("! " + e.getMessage());
-            } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
+            } catch (NumberFormatException | ArrayIndexOutOfBoundsException | java.nio.file.InvalidPathException e) {
                 System.out.println("! Check the command format (type help).");
             }
         }
         client.close();
         return 0;
+    }
+
+    /** "off", or a number with s/m/h/d/w, e.g. 5m or 1d. */
+    static long parseDuration(String text) {
+        if (text.equalsIgnoreCase("off") || text.equals("0")) return 0;
+        long n = Long.parseLong(text.substring(0, text.length() - 1));
+        long unit = switch (Character.toLowerCase(text.charAt(text.length() - 1))) {
+            case 's' -> 1;
+            case 'm' -> 60;
+            case 'h' -> 3600;
+            case 'd' -> 86_400;
+            case 'w' -> 604_800;
+            default -> throw new NumberFormatException("unknown unit");
+        };
+        long seconds = Math.multiplyExact(n, unit);
+        if (seconds <= 0 || seconds > ChatClient.MAX_TIMER_SECONDS) throw new NumberFormatException("out of range");
+        return seconds;
     }
 
     private static String prompt(BufferedReader stdin) throws IOException {
@@ -160,6 +243,24 @@ final class ClientShell {
 
     /** Prints everything the client hears, without corrupting the prompt line. */
     private static final class Printer implements ChatClient.Listener {
+        private final java.util.List<FileMessage> files = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        FileMessage file(int number) {
+            if (number < 1 || number > files.size()) throw new NumberFormatException("no such file");
+            return files.get(number - 1);
+        }
+
+        @Override public void file(String from, FileMessage f, long id) {
+            files.add(f);
+            show(from + " sent a file: " + f.name() + " (" + f.size() + " bytes). Type: save " + files.size() + " <folder>");
+        }
+
+        @Override public void groupFile(long groupId, String from, FileMessage f, long id) {
+            files.add(f);
+            show("#" + groupId + " " + from + " sent a file: " + f.name() + " (" + f.size() + " bytes). Type: save "
+                    + files.size() + " <folder>");
+        }
+
         @Override public void message(String from, ChatMessage m, long id) {
             show("[" + TIME.format(Instant.ofEpochMilli(m.sentAtMillis())) + "] " + from + ": " + m.text());
         }
@@ -171,6 +272,23 @@ final class ClientShell {
         @Override public void groupUpdated(Packet.GroupInfo g) {
             show("Group #" + g.id() + " " + g.name() + ": " + String.join(", ",
                     g.members().stream().map(Packet.Member::username).toList()));
+        }
+
+        @Override public void timerChanged(String from, long groupId, long seconds) {
+            String where = groupId == 0 ? "your chat" : "group #" + groupId;
+            show(from + (seconds == 0 ? " turned off disappearing messages in " + where + "."
+                    : " turned on disappearing messages in " + where + " (" + seconds + " s). This terminal keeps no history,"
+                    + " so nothing is stored here."));
+        }
+
+        @Override public void action(ChatClient.Action a) {
+            String where = a.groupId() == 0 ? "" : " in #" + a.groupId();
+            switch (a.kind()) {
+                case REACT -> show(a.from() + (a.value().isEmpty() ? " took back a reaction" : " reacted " + a.value()) + where + ".");
+                case EDIT -> show(a.from() + " edited a message" + where + ": " + a.value());
+                case DELETE -> show(a.from() + " deleted a message" + where + ".");
+                default -> { } // read receipts and typing are for the desktop app
+            }
         }
 
         @Override public void groupRemoved(long groupId) {

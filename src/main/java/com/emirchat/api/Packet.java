@@ -24,6 +24,11 @@ public sealed interface Packet {
     int MAX_ACKS = 500;
     int MAX_GROUP_NAME_BYTES = 64;
     int MAX_GROUP_MEMBERS = 100;
+    /** An encrypted group name as stored by the server (see {@code com.emirchat.e2e.GroupNames}). */
+    int MAX_SEALED_NAME_BYTES = 256;
+    /** Attachment upload and download chunk size (well under the 64 KiB frame limit). */
+    int MAX_CHUNK_BYTES = 32 * 1024;
+    int ATTACHMENT_ID_BYTES = com.emirchat.e2e.Attachments.ID_LENGTH;
 
     /** A friend as the server describes it. */
     record Friend(String username, boolean online, byte[] identityKey) {
@@ -91,6 +96,19 @@ public sealed interface Packet {
 
     record AddGroupMember(long groupId, String username) implements Packet {}
 
+    /** Sets the group's end-to-end encrypted name (admin only); the server cannot read it. */
+    record RenameGroup(long groupId, byte[] sealedName) implements Packet {
+        public RenameGroup { sealedName = sealedName.clone(); }
+
+        @Override public byte[] sealedName() { return sealedName.clone(); }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof RenameGroup r && r.groupId == groupId && java.util.Arrays.equals(r.sealedName, sealedName);
+        }
+
+        @Override public int hashCode() { return Long.hashCode(groupId); }
+    }
+
     record RemoveGroupMember(long groupId, String username) implements Packet {}
 
     record LeaveGroup(long groupId) implements Packet {}
@@ -102,6 +120,61 @@ public sealed interface Packet {
 
     record AckEnvelopes(List<Long> ids) implements Packet {
         public AckEnvelopes { ids = List.copyOf(ids); }
+    }
+
+    /**
+     * Reserves space for an encrypted attachment. Exactly one audience: a recipient (direct
+     * message, groupId 0) or a group (recipient empty). Only that audience may download it.
+     *
+     * @param size the exact size of the encrypted blob
+     */
+    record UploadStart(long size, String recipient, long groupId) implements Packet {}
+
+    /** Appends to an upload; {@code offset} must equal the bytes received so far. */
+    record UploadChunk(byte[] attachmentId, long offset, byte[] data) implements Packet {
+        public UploadChunk {
+            attachmentId = attachmentId.clone();
+            data = data.clone();
+        }
+
+        @Override public byte[] attachmentId() { return attachmentId.clone(); }
+
+        @Override public byte[] data() { return data.clone(); }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof UploadChunk u && java.util.Arrays.equals(u.attachmentId, attachmentId)
+                    && u.offset == offset && java.util.Arrays.equals(u.data, data);
+        }
+
+        @Override public int hashCode() { return java.util.Arrays.hashCode(attachmentId) * 31 + Long.hashCode(offset); }
+
+        @Override public String toString() { return "UploadChunk[" + offset + "+" + data.length + "]"; }
+    }
+
+    /** Completes an upload once every byte arrived; only then can it be downloaded. */
+    record UploadFinish(byte[] attachmentId) implements Packet {
+        public UploadFinish { attachmentId = attachmentId.clone(); }
+
+        @Override public byte[] attachmentId() { return attachmentId.clone(); }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof UploadFinish u && java.util.Arrays.equals(u.attachmentId, attachmentId);
+        }
+
+        @Override public int hashCode() { return java.util.Arrays.hashCode(attachmentId); }
+    }
+
+    /** Reads up to {@link #MAX_CHUNK_BYTES} of a completed attachment, starting at {@code offset}. */
+    record FetchAttachment(byte[] attachmentId, long offset) implements Packet {
+        public FetchAttachment { attachmentId = attachmentId.clone(); }
+
+        @Override public byte[] attachmentId() { return attachmentId.clone(); }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof FetchAttachment f && java.util.Arrays.equals(f.attachmentId, attachmentId) && f.offset == offset;
+        }
+
+        @Override public int hashCode() { return java.util.Arrays.hashCode(attachmentId) * 31 + Long.hashCode(offset); }
     }
 
     // ------------------------------------------------------------- responses (server -> client)
@@ -147,16 +220,70 @@ public sealed interface Packet {
         @Override public int hashCode() { return username.hashCode(); }
     }
 
-    record GroupInfo(long id, String name, String owner, List<Member> members) implements Packet {
-        public GroupInfo { members = List.copyOf(members); }
+    /**
+     * @param name       from the server: a plaintext name of a group created before names were
+     *                   encrypted (else empty). Clients replace it with the decrypted name.
+     * @param sealedName the end-to-end encrypted name, or empty
+     */
+    record GroupInfo(long id, String name, String owner, List<Member> members, byte[] sealedName) implements Packet {
+        public GroupInfo {
+            members = List.copyOf(members);
+            sealedName = sealedName.clone();
+        }
+
+        public GroupInfo(long id, String name, String owner, List<Member> members) {
+            this(id, name, owner, members, new byte[0]);
+        }
+
+        @Override public byte[] sealedName() { return sealedName.clone(); }
 
         public boolean hasMember(String username) {
             return members.stream().anyMatch(m -> m.username().equals(username));
         }
+
+        /** The same group shown under another name. */
+        public GroupInfo withName(String displayName) {
+            return new GroupInfo(id, displayName, owner, members, sealedName);
+        }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof GroupInfo g && g.id == id && g.name.equals(name) && g.owner.equals(owner)
+                    && g.members.equals(members) && java.util.Arrays.equals(g.sealedName, sealedName);
+        }
+
+        @Override public int hashCode() { return Long.hashCode(id); }
     }
 
     record GroupList(List<GroupInfo> groups) implements Packet {
         public GroupList { groups = List.copyOf(groups); }
+    }
+
+    /** @param attachmentId random and unguessable, chosen by the server */
+    record UploadStarted(byte[] attachmentId) implements Packet {
+        public UploadStarted { attachmentId = attachmentId.clone(); }
+
+        @Override public byte[] attachmentId() { return attachmentId.clone(); }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof UploadStarted u && java.util.Arrays.equals(u.attachmentId, attachmentId);
+        }
+
+        @Override public int hashCode() { return java.util.Arrays.hashCode(attachmentId); }
+    }
+
+    /** @param totalSize size of the whole encrypted blob */
+    record AttachmentChunk(long totalSize, byte[] data) implements Packet {
+        public AttachmentChunk { data = data.clone(); }
+
+        @Override public byte[] data() { return data.clone(); }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof AttachmentChunk c && c.totalSize == totalSize && java.util.Arrays.equals(c.data, data);
+        }
+
+        @Override public int hashCode() { return Long.hashCode(totalSize); }
+
+        @Override public String toString() { return "AttachmentChunk[" + data.length + " of " + totalSize + "]"; }
     }
 
     // ------------------------------------------------------------- pushes (server -> client, id 0)
@@ -229,6 +356,7 @@ public sealed interface Packet {
                 writeNames(w, c.members());
             }
             case AddGroupMember a -> w.u8(31).i64(requestId).i64(a.groupId()).string(a.username());
+            case RenameGroup r -> w.u8(36).i64(requestId).i64(r.groupId()).bytes(r.sealedName());
             case RemoveGroupMember r -> w.u8(32).i64(requestId).i64(r.groupId()).string(r.username());
             case LeaveGroup l -> w.u8(33).i64(requestId).i64(l.groupId());
             case ListGroups l -> w.u8(34).i64(requestId);
@@ -244,6 +372,12 @@ public sealed interface Packet {
                 w.u8(26).i64(requestId).u16(a.ids().size());
                 for (long id : a.ids()) w.i64(id);
             }
+            case UploadStart u -> w.u8(40).i64(requestId).i64(u.size()).string(u.recipient()).i64(u.groupId());
+            case UploadChunk u -> w.u8(41).i64(requestId).bytes(u.attachmentId()).i64(u.offset()).bytes(u.data());
+            case UploadFinish u -> w.u8(42).i64(requestId).bytes(u.attachmentId());
+            case FetchAttachment f -> w.u8(43).i64(requestId).bytes(f.attachmentId()).i64(f.offset());
+            case UploadStarted u -> w.u8(118).i64(requestId).bytes(u.attachmentId());
+            case AttachmentChunk c -> w.u8(119).i64(requestId).i64(c.totalSize()).bytes(c.data());
             case Ok o -> w.u8(100).i64(requestId);
             case Error e -> w.u8(101).i64(requestId).u8(e.code().code).string(truncate(e.message()));
             case LoggedIn l -> w.u8(102).i64(requestId).string(l.username()).u8(l.newDevice() ? 1 : 0);
@@ -302,6 +436,7 @@ public sealed interface Packet {
             case 25 -> new FetchPending();
             case 30 -> new CreateGroup(r.string(MAX_GROUP_NAME_BYTES), readNames(r));
             case 31 -> new AddGroupMember(r.i64(), r.string(MAX_USERNAME_BYTES));
+            case 36 -> new RenameGroup(r.i64(), r.bytes(MAX_SEALED_NAME_BYTES));
             case 32 -> new RemoveGroupMember(r.i64(), r.string(MAX_USERNAME_BYTES));
             case 33 -> new LeaveGroup(r.i64());
             case 34 -> new ListGroups();
@@ -321,6 +456,12 @@ public sealed interface Packet {
                 for (int i = 0; i < n; i++) ids.add(r.i64());
                 yield new AckEnvelopes(ids);
             }
+            case 40 -> new UploadStart(r.i64(), r.string(MAX_USERNAME_BYTES), r.i64());
+            case 41 -> new UploadChunk(r.exactBytes(ATTACHMENT_ID_BYTES), r.i64(), r.bytes(MAX_CHUNK_BYTES));
+            case 42 -> new UploadFinish(r.exactBytes(ATTACHMENT_ID_BYTES));
+            case 43 -> new FetchAttachment(r.exactBytes(ATTACHMENT_ID_BYTES), r.i64());
+            case 118 -> new UploadStarted(r.exactBytes(ATTACHMENT_ID_BYTES));
+            case 119 -> new AttachmentChunk(r.i64(), r.bytes(MAX_CHUNK_BYTES));
             case 100 -> new Ok();
             case 101 -> new Error(ErrorCode.of(r.u8()), r.string(MAX_MESSAGE_BYTES));
             case 102 -> new LoggedIn(r.string(MAX_USERNAME_BYTES), bool(r.u8()));
@@ -358,7 +499,7 @@ public sealed interface Packet {
     private static Wire.Writer writeGroup(Wire.Writer w, GroupInfo g) {
         w.i64(g.id()).string(g.name()).string(g.owner()).u16(g.members().size());
         for (Member m : g.members()) w.string(m.username()).bytes(m.identityKey());
-        return w;
+        return w.bytes(g.sealedName());
     }
 
     private static GroupInfo readGroup(Wire.Reader r) throws ProtocolException {
@@ -370,7 +511,7 @@ public sealed interface Packet {
         for (int i = 0; i < n; i++) {
             members.add(new Member(r.string(MAX_USERNAME_BYTES), r.exactBytes(Identity.ENCODED_PUBLIC_KEY_LENGTH)));
         }
-        return new GroupInfo(id, name, owner, members);
+        return new GroupInfo(id, name, owner, members, r.bytes(MAX_SEALED_NAME_BYTES));
     }
 
     private static void writeFriend(Wire.Writer w, Friend f) {

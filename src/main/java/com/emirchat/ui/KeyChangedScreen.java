@@ -17,30 +17,28 @@ final class KeyChangedScreen {
         String peer = e.peerName();
         StackPane badge = new StackPane(Icons.of(Icons.ALERT, 28, "danger"));
         badge.getStyleClass().addAll("icon-badge", "danger");
-        Label title = new Label(peer + "'s identity key has changed");
+        Label title = new Label(I18n.t("keyChanged.title", peer));
         title.getStyleClass().addAll("h1");
         title.setWrapText(true);
         title.setId("key-changed-title");
         title.setStyle("-fx-text-alignment: center;");
-        Label body = new Label("The connection was blocked. Someone may be impersonating " + peer
-                + " (a man-in-the-middle attack), or " + peer + " set up secure-chat again with a new key.");
+        Label body = new Label(I18n.t("keyChanged.body", peer));
         body.getStyleClass().add("body");
         body.setWrapText(true);
         body.setStyle("-fx-text-alignment: center;");
         VBox header = new VBox(10, badge, title, body);
         header.setAlignment(Pos.CENTER);
 
-        VBox before = section("TRUSTED BEFORE", e.expectedFingerprint());
-        VBox now = section("PRESENTED NOW", e.receivedFingerprint());
+        VBox before = section(I18n.t("keyChanged.before"), e.expectedFingerprint());
+        VBox now = section(I18n.t("keyChanged.now"), e.receivedFingerprint());
         Label nowLabel = (Label) now.getChildren().get(0);
         nowLabel.getStyleClass().add("danger-text");
         VBox compare = new VBox(16, before, separator(), now);
         compare.getStyleClass().add("card");
 
-        Label howTitle = new Label("What to do");
+        Label howTitle = new Label(I18n.t("keyChanged.whatToDo"));
         howTitle.getStyleClass().add("field-label");
-        Label how = new Label("Ask " + peer + " over a phone call whether they reinstalled. If they did and the new "
-                + "pattern matches theirs, remove the line starting with \"" + peer + "\" from this file and connect again:");
+        Label how = new Label(I18n.t("keyChanged.how", peer));
         how.getStyleClass().add("body");
         how.setWrapText(true);
         Label path = new Label(e.knownPeersFile());
@@ -49,7 +47,7 @@ final class KeyChangedScreen {
         VBox advice = new VBox(8, howTitle, how, path);
         advice.getStyleClass().add("card-flat");
 
-        Button back = new Button("Back to start");
+        Button back = new Button(I18n.t("keyChanged.back"));
         back.setId("back");
         back.getStyleClass().add("primary");
         back.setMaxWidth(Double.MAX_VALUE);

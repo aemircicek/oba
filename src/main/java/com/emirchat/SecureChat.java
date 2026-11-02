@@ -31,18 +31,21 @@ public final class SecureChat {
             "  secure-chat fingerprint",
             "",
             "Options:",
-            "  --home <dir>   key and known-peers directory (default: ~/.securechat)",
+            "  --home <dir>   key and known-peers directory (default: the Scorpion data folder)",
             "",
             "Type " + ChatSession.QUIT_COMMAND + " to leave a chat.",
             "",
-            AccountCli.USAGE);
+            AccountCli.USAGE,
+            "",
+            BackupCli.USAGE);
 
     private SecureChat() {}
 
     public static void main(String[] args) {
         int code;
         try {
-            code = AccountCli.handles(args[0]) ? AccountCli.run(args) : run(args);
+            code = AccountCli.handles(args[0]) ? AccountCli.run(args)
+                    : BackupCli.handles(args[0]) ? BackupCli.run(args) : run(args);
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
             System.err.println();
@@ -126,7 +129,7 @@ public final class SecureChat {
 
     record Options(String command, String host, String name, int port, String bind, Path home) {
         static Path defaultHome() {
-            return Path.of(System.getProperty("user.home"), ".securechat");
+            return com.emirchat.AppInfo.defaultHome();
         }
 
         static Options parse(String[] args) {

@@ -1,5 +1,67 @@
 # Changelog
 
+## 3.2.0 (2026-11-02)
+
+### Added
+- **Scorpion desktop app**: new name and icon; installers with Java included (Windows installer
+  and portable zip, macOS dmg, Linux deb); data in each OS's usual folder (the old
+  `~/.securechat` is moved there).
+- **English and Turkish** interface.
+- **Default server** with an optional built-in fingerprint; other servers under "Advanced".
+- **Remember me** with the OS's protected storage (DPAPI, Keychain, Secret Service).
+- **Runs in the tray**, starts with the computer if wanted, **reconnects by itself**, one window
+  per data folder, `.scbackup` files open the restore dialog.
+- Update banner, About dialog, third-party notices, local log file, first-start tour.
+- **Replies, reactions, edits and "delete for everyone"**: messages carry an id inside the
+  ciphertext; reactions, edits and deletions refer to it, and edits and deletions are accepted
+  only from the author. Right-click a message in the desktop app.
+- **Read receipts and typing indicators** for direct chats, both optional (Settings). Typing
+  notices are only sent to friends who are online, so none are queued on the server.
+- **Search** across all chats, decrypted locally.
+- **Desktop notifications** through the system tray, with optional message preview.
+- **Safety numbers and QR codes** for contact verification: 60 digits to read out, or check a
+  picture of the friend's QR code.
+- **Encrypted backup and restore** of keys, sessions and history (desktop and
+  `secure-chat backup` / `restore`), protected by a separate passphrase.
+- **Server deployment**: Dockerfile, docker-compose.yml, a hardened systemd unit and
+  [docs/deploy.md](docs/deploy.md).
+- **Release packages** with Java included (Windows zip, macOS dmg, Linux deb), Sigstore build
+  provenance for every file, and `SHA256SUMS`.
+- 31 new tests (170 in total).
+
+### Fixed
+- A message delivered again after its acknowledgement was lost (the app closed right after
+  receiving it) is now acknowledged quietly instead of showing a "could not be decrypted"
+  warning. Handled envelope ids are remembered across restarts.
+
+### Changed
+- New messages use a format with message ids; 3.1 messages are still read. Update all clients
+  together.
+
+## 3.1.0 (unreleased, included in 3.2.0)
+
+### Added
+- **Encrypted file and image sharing** in direct messages and groups, up to 25 MB per file. Each
+  file is encrypted with a fresh AES-256-GCM key on the sender's device; the server stores only
+  the ciphertext and lets only the recipient or current group members download it. The key and
+  the SHA-256 digest of the blob travel inside the end-to-end encrypted message, so the receiver
+  detects a swapped or modified blob. Images are previewed in the chat.
+- Server: attachment storage with per-user quota (250 MB), at most 3 uploads in progress, and
+  deletion after 30 days (unfinished uploads after an hour). Database schema version 5.
+- **Disappearing messages**: a per-chat timer (5 minutes to 1 week in the app, up to 4 weeks in
+  the protocol) that every participant receives end-to-end encrypted. Messages and files sent
+  with a timer are deleted from local history that long after they arrive, together with cached
+  attachment copies.
+- **Encrypted group names**: the admin encrypts the name with a name key that members receive
+  end-to-end; the server stores only ciphertext. A new key is made whenever someone leaves.
+  Admins can rename groups. Groups named in plain text by 3.0 are migrated automatically.
+- Terminal client: `file`, `gfile`, `save`, `timer` and `grename` commands.
+- 42 new tests (139 in total).
+
+### Changed
+- The client–server protocol changed (attachments, group info): update the server and all
+  clients to 3.1 together. Server data is migrated automatically (schema version 6).
+
 ## 3.0.0 (2026-11-02)
 
 secure-chat becomes an end-to-end encrypted messenger with a server.

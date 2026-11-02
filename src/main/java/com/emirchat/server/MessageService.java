@@ -168,7 +168,8 @@ final class MessageService {
         }
     }
 
-    private Database.User friend(Database.User me, String rawName) throws ApiException {
+    /** The user named, if {@code me} may open a pairwise channel to them (friends, or a shared group). */
+    Database.User friend(Database.User me, String rawName) throws ApiException {
         String name = AccountService.normalize(rawName);
         try {
             if (AccountService.USERNAME.matcher(name).matches()) {

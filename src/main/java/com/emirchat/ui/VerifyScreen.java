@@ -17,35 +17,33 @@ final class VerifyScreen {
     VerifyScreen(String peerName, String peerFingerprint, String myFingerprint, Runnable onTrust, Runnable onReject) {
         StackPane badge = new StackPane(Icons.of(Icons.KEY, 26, "accent"));
         badge.getStyleClass().addAll("icon-badge", "accent");
-        Label title = new Label("Verify " + peerName);
+        Label title = new Label(I18n.t("verify.title", peerName));
         title.getStyleClass().add("h1");
         title.setId("verify-title");
-        Label body = new Label("This is your first conversation with " + peerName + ". Compare the pattern and code "
-                + "below with what " + peerName + " sees for you, over a phone call or in person. "
-                + "If they differ, someone may be intercepting the connection.");
+        Label body = new Label(I18n.t("verify.body", peerName));
         body.getStyleClass().add("body");
         body.setWrapText(true);
         body.setStyle("-fx-text-alignment: center;");
         VBox header = new VBox(10, badge, title, body);
         header.setAlignment(Pos.CENTER);
 
-        Label peerLabel = new Label(peerName.toUpperCase() + "'S FINGERPRINT");
+        Label peerLabel = new Label(I18n.t("verify.theirs", peerName.toUpperCase(I18n.locale())));
         peerLabel.getStyleClass().add("overline");
         VBox peerCard = new VBox(16, peerLabel, FingerprintView.large(peerFingerprint));
         peerCard.setAlignment(Pos.CENTER);
         peerCard.getStyleClass().add("card");
 
-        Label mineLabel = new Label(peerName.toUpperCase() + " SHOULD SEE THIS FOR YOU");
+        Label mineLabel = new Label(I18n.t("verify.mine", peerName.toUpperCase(I18n.locale())));
         mineLabel.getStyleClass().add("overline");
         VBox mineCard = new VBox(10, mineLabel, FingerprintView.compact(myFingerprint));
         mineCard.getStyleClass().add("card-flat");
 
-        Button reject = new Button("They don't match");
+        Button reject = new Button(I18n.t("verify.reject"));
         reject.setId("reject");
         reject.getStyleClass().add("danger-ghost");
         reject.setMaxWidth(Double.MAX_VALUE);
         reject.setOnAction(e -> onReject.run());
-        Button trust = new Button("They match, trust " + peerName);
+        Button trust = new Button(I18n.t("verify.trust", peerName));
         trust.setId("trust");
         trust.getStyleClass().add("primary");
         trust.setMaxWidth(Double.MAX_VALUE);
@@ -54,7 +52,7 @@ final class VerifyScreen {
         HBox.setHgrow(trust, Priority.ALWAYS);
         HBox buttons = new HBox(10, reject, trust);
 
-        Label note = new Label("Once trusted, the key is remembered. You'll be warned if it ever changes.");
+        Label note = new Label(I18n.t("verify.note"));
         note.getStyleClass().add("caption");
         note.setWrapText(true);
 

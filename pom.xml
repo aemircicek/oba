@@ -6,7 +6,7 @@
 
   <groupId>com.emirchat</groupId>
   <artifactId>secure-chat</artifactId>
-  <version>3.0.0</version>
+  <version>3.2.0</version>
   <packaging>jar</packaging>
   <name>secure-chat</name>
   <description>End-to-end encrypted messenger (accounts, friends, direct messages and groups) for the desktop and the terminal.</description>
@@ -36,6 +36,18 @@
       <groupId>org.openjfx</groupId>
       <artifactId>javafx-controls</artifactId>
       <version>${javafx.version}</version>
+    </dependency>
+    <!-- Windows DPAPI for "remember me" (the password is encrypted by the OS for this user) -->
+    <dependency>
+      <groupId>net.java.dev.jna</groupId>
+      <artifactId>jna-platform</artifactId>
+      <version>5.14.0</version>
+    </dependency>
+    <!-- QR codes for contact verification (no cryptography in this library) -->
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>core</artifactId>
+      <version>3.5.3</version>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -103,6 +115,10 @@
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.emirchat.Main</mainClass>
+                  <manifestEntries>
+                    <Implementation-Title>Scorpion</Implementation-Title>
+                    <Implementation-Version>${project.version}</Implementation-Version>
+                  </manifestEntries>
                 </transformer>
               </transformers>
             </configuration>

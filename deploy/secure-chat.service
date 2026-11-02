@@ -1,0 +1,35 @@
+# systemd unit for running the secure-chat server without Docker.
+#   sudo cp secure-chat.jar /opt/secure-chat/secure-chat.jar
+#   sudo cp deploy/secure-chat.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now secure-chat
+#   journalctl -u secure-chat      (shows the server fingerprint)
+[Unit]
+Description=secure-chat server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/java -XX:MaxRAMPercentage=50 -Dorg.sqlite.tmpdir=/var/lib/secure-chat -jar /opt/secure-chat/secure-chat.jar server --data /var/lib/secure-chat --bind 0.0.0.0 --port 5056
+DynamicUser=yes
+StateDirectory=secure-chat
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the service can only write its own state directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

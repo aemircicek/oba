@@ -16,7 +16,7 @@ import javafx.scene.paint.Color;
 /** Small shared building blocks for the account app. */
 final class UiKit {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm");
-    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH);
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMM", I18n.locale());
 
     private UiKit() {}
 

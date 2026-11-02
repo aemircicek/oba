@@ -18,7 +18,8 @@ public enum ErrorCode {
     LIMIT_REACHED(14),
     NO_KEYS(15),
     GROUP_NOT_FOUND(16),
-    NOT_GROUP_ADMIN(17);
+    NOT_GROUP_ADMIN(17),
+    ATTACHMENT_NOT_FOUND(18);
 
     final int code;
 

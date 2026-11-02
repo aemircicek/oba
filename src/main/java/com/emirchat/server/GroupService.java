@@ -27,10 +27,14 @@ final class GroupService {
         this.presence = presence;
     }
 
+    /**
+     * @param rawName empty for current clients, which set an end-to-end encrypted name right after
+     *                creating the group; older clients send a plaintext name
+     */
     synchronized Packet.GroupInfo create(Database.User me, String rawName, List<String> memberNames) throws ApiException {
         String name = rawName == null ? "" : rawName.strip();
-        if (name.isEmpty() || name.codePoints().anyMatch(Character::isISOControl)) {
-            throw new ApiException(ErrorCode.INVALID_REQUEST, "Give the group a name.");
+        if (name.codePoints().anyMatch(Character::isISOControl)) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST, "Invalid group name.");
         }
         try {
             if (db.groupsOf(me.id()).size() >= MAX_GROUPS_PER_USER) {
@@ -58,6 +62,18 @@ final class GroupService {
                 throw new ApiException(ErrorCode.LIMIT_REACHED, "The group is full.");
             }
             db.addMember(g.id(), newcomer.id());
+            broadcast(info(g.id()));
+        } catch (SQLException e) {
+            throw storage();
+        }
+    }
+
+    /** Sets the encrypted name. The server checks only who may rename and the size. */
+    synchronized void rename(Database.User me, long groupId, byte[] sealedName) throws ApiException {
+        if (sealedName.length == 0) throw new ApiException(ErrorCode.INVALID_REQUEST, "Missing group name.");
+        try {
+            Database.Group g = ownedGroup(me, groupId);
+            db.renameGroup(g.id(), sealedName);
             broadcast(info(g.id()));
         } catch (SQLException e) {
             throw storage();
@@ -114,7 +130,7 @@ final class GroupService {
             members.add(new Packet.Member(u.username(), u.identityKey()));
             if (u.id() == g.ownerId()) owner = u.username();
         }
-        return new Packet.GroupInfo(g.id(), g.name(), owner, members);
+        return new Packet.GroupInfo(g.id(), g.name(), owner, members, g.sealedName());
     }
 
     private void broadcast(Packet.GroupInfo info) throws SQLException {

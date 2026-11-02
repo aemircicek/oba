@@ -68,18 +68,18 @@ final class ChatScreen {
         Label name = new Label(peerName);
         name.getStyleClass().add("h2");
         name.setId("peer-name");
-        Label badgeText = new Label("Verified · end-to-end encrypted");
+        Label badgeText = new Label(I18n.t("chat.verifiedBadge"));
         Node chevron = Icons.of(Icons.CHEVRON_DOWN, 13, "accent");
         HBox badge = new HBox(Icons.of(Icons.SHIELD_CHECK, 13, "accent"), badgeText, chevron);
         badge.getStyleClass().add("secure-badge");
         badge.setAlignment(Pos.CENTER_LEFT);
         badge.setId("secure-badge");
-        Tooltip.install(badge, new Tooltip("Show session security details"));
+        Tooltip.install(badge, new Tooltip(I18n.t("chat.detailsTip")));
         VBox titles = new VBox(2, name, badge);
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        Button leave = new Button("Leave");
+        Button leave = new Button(I18n.t("chat.leave"));
         leave.setId("leave");
         leave.setGraphic(Icons.of(Icons.LOG_OUT, 14, null));
         leave.setOnAction(e -> sender.submit(conversation::leave));
@@ -90,10 +90,9 @@ final class ChatScreen {
 
         // Security details (collapsed by default) ----------------------------
         VBox details = new VBox(12,
-                detail(peerName.toUpperCase() + "'S KEY", FingerprintView.compact(peerFingerprint)),
-                detail("YOUR KEY", FingerprintView.compact(myFingerprint)),
-                detail("PROTOCOL", caption("X25519 key exchange · Ed25519 signatures · HKDF-SHA256 · AES-256-GCM. "
-                        + "New keys for every session (forward secrecy).")));
+                detail(I18n.t("chat.theirKey", peerName.toUpperCase(I18n.locale())), FingerprintView.compact(peerFingerprint)),
+                detail(I18n.t("chat.yourKey"), FingerprintView.compact(myFingerprint)),
+                detail(I18n.t("chat.protocol"), caption(I18n.t("chat.protocolText"))));
         details.getStyleClass().add("details");
         details.setVisible(false);
         details.managedProperty().bind(details.visibleProperty());
@@ -109,19 +108,18 @@ final class ChatScreen {
         scroller.setFitToWidth(true);
         scroller.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         messages.heightProperty().addListener((obs, o, n) -> scroller.setVvalue(1.0));
-        addSystem("Secure session started. Messages are encrypted on this computer and can only be read by "
-                + peerName + ".", false);
+        addSystem(I18n.t("chat.started", peerName), false);
 
         // Composer -----------------------------------------------------------
         TextField input = new TextField();
         input.setId("composer");
-        input.setPromptText("Message " + peerName);
+        input.setPromptText(I18n.t("conv.prompt", peerName));
         HBox.setHgrow(input, Priority.ALWAYS);
         Button send = new Button();
         send.setId("send");
         send.getStyleClass().add("send");
         send.setGraphic(Icons.of(Icons.SEND, 17, "on-accent"));
-        send.setTooltip(new Tooltip("Send (Enter)"));
+        send.setTooltip(new Tooltip(I18n.t("conv.sendTip")));
         Label counter = new Label();
         counter.getStyleClass().add("caption");
         counter.managedProperty().bind(counter.visibleProperty());
@@ -145,7 +143,7 @@ final class ChatScreen {
                 try {
                     conversation.send(text);
                 } catch (Exception ex) {
-                    Platform.runLater(() -> addSystem("Last message could not be sent.", true));
+                    Platform.runLater(() -> addSystem(I18n.t("chat.sendFailed"), true));
                 }
             });
         };
@@ -228,10 +226,10 @@ final class ChatScreen {
     private void ended(Conversation.EndReason reason, String detail) {
         sender.shutdown();
         String text = switch (reason) {
-            case LOCAL_LEFT -> "You left the chat.";
-            case PEER_LEFT -> peerName + " left the chat.";
-            case CONNECTION_LOST -> "The connection to " + peerName + " was lost.";
-            case SECURITY_ERROR -> "Connection closed: a message failed its integrity check (" + detail + ").";
+            case LOCAL_LEFT -> I18n.t("chat.youLeft");
+            case PEER_LEFT -> I18n.t("chat.peerLeft", peerName);
+            case CONNECTION_LOST -> I18n.t("chat.lost", peerName);
+            case SECURITY_ERROR -> I18n.t("chat.integrity", detail);
         };
         if (reason == Conversation.EndReason.LOCAL_LEFT) {
             onExit.run();
@@ -239,13 +237,13 @@ final class ChatScreen {
         }
         addSystem(text, reason == Conversation.EndReason.SECURITY_ERROR);
         leaveButton.setDisable(true);
-        Label endedLabel = new Label("Chat ended");
+        Label endedLabel = new Label(I18n.t("chat.ended"));
         endedLabel.getStyleClass().add("body");
         endedLabel.setWrapText(true);
         endedLabel.setId("ended");
         HBox.setHgrow(endedLabel, Priority.ALWAYS);
         endedLabel.setMaxWidth(Double.MAX_VALUE);
-        Button again = new Button("New chat");
+        Button again = new Button(I18n.t("chat.again"));
         again.setId("new-chat");
         again.getStyleClass().add("primary");
         again.setDefaultButton(true);

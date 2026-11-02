@@ -51,6 +51,7 @@ public final class AccountPreview {
     private static final class Bot {
         final String name;
         final BlockingQueue<String> inbox = new LinkedBlockingQueue<>();
+        final java.util.List<ChatClient.Incoming> received = new java.util.concurrent.CopyOnWriteArrayList<>();
         ChatClient client;
 
         Bot(String name, Path device, boolean register) throws Exception {
@@ -62,6 +63,11 @@ public final class AccountPreview {
                 @Override public void message(String from, ChatMessage m, long e) { inbox.add(from + ": " + m.text()); }
 
                 @Override public void groupMessage(long g, String from, ChatMessage m, long e) { inbox.add("#" + g + " " + from + ": " + m.text()); }
+
+                @Override public void incoming(ChatClient.Incoming m) {
+                    received.add(m);
+                    ChatClient.Listener.super.incoming(m);
+                }
             });
         }
 
@@ -72,10 +78,41 @@ public final class AccountPreview {
         }
     }
 
+    /** A small floor-plan-like PNG drawn in code, so the preview needs no asset files. */
+    private static byte[] samplePlan() throws Exception {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(480, 300, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new java.awt.Color(0xF4F1EA));
+        g.fillRect(0, 0, 480, 300);
+        g.setColor(new java.awt.Color(0x2B3A55));
+        g.setStroke(new java.awt.BasicStroke(6));
+        g.drawRect(30, 30, 420, 240);
+        g.drawLine(250, 30, 250, 170);
+        g.drawLine(30, 170, 330, 170);
+        g.drawLine(330, 170, 330, 270);
+        g.setColor(new java.awt.Color(0x13824F));
+        g.setStroke(new java.awt.BasicStroke(3));
+        g.drawArc(230, 150, 40, 40, 0, 90);
+        g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.BOLD, 16));
+        g.setColor(new java.awt.Color(0x2B3A55));
+        g.drawString("SALON", 110, 105);
+        g.drawString("YATAK ODASI", 300, 105);
+        g.drawString("MUTFAK", 140, 225);
+        g.drawString("BANYO", 360, 225);
+        g.dispose();
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        ImageIO.write(img, "png", bytes);
+        return bytes.toByteArray();
+    }
+
     public static void main(String[] args) throws Exception {
         out = Path.of(args[0]);
         theme = args.length > 1 ? args[1] : "dark";
         System.setProperty("securechat.theme", theme);
+        I18n.use(System.getProperty("preview.language", "en"));
+        System.setProperty("securechat.preview", "true");
+        java.util.prefs.Preferences.userNodeForPackage(AppPrefs.class).node("preview-app").clear();
         Files.createDirectories(out);
         work = Files.createTempDirectory("securechat-account-preview");
         server = new ChatServer(new ChatServer.Config(work.resolve("server"), "127.0.0.1", 0, 1_000)).start();
@@ -117,6 +154,10 @@ public final class AccountPreview {
         snap("02-verify-server");
         fx(() -> { ((Button) find("#server-trust")).fire(); return null; });
         waitFor("#tab-chats");
+        waitFor("#welcome-dialog");
+        pause();
+        snap("03a-welcome");
+        for (int i = 0; i < 3; i++) fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
         pause();
         snap("03-main-empty");
 
@@ -149,6 +190,57 @@ public final class AccountPreview {
         efe.client.sendText("emir", "Harika, görüşürüz!");
         Thread.sleep(800);
         snap("05-dm");
+
+        // Encrypted files: an image (previewed inline) and a document
+        efe.client.sendFile("emir", "kat-plani.png", "image/png", samplePlan());
+        efe.client.sendFile("emir", "MobilCAD-sunum.pdf", "application/pdf", new byte[184_320]);
+        Thread.sleep(1500);
+        snap("05b-files");
+
+        // Replies, reactions, edits and read receipts, driven from efe's side
+        System.setProperty("securechat.notifications", "false");
+        ChatClient.Chat toEmir = ChatClient.Chat.dm("emir");
+        java.util.List<ChatClient.Incoming> fromEmir = efe.received.stream().filter(m -> m.text() != null).toList();
+        ChatClient.Incoming first = fromEmir.get(0);
+        ChatClient.Incoming second = fromEmir.get(fromEmir.size() - 1);
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.READ, second.messageId(), "");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.REACT, second.messageId(), "❤️");
+        efe.client.send(toEmir, "Tamam, 8'de görüşürüz 👍", 0, first.messageId());
+        ChatClient.Sent typo = efe.client.send(toEmir, "Sunumu yarn bitiririm", 0, null);
+        Thread.sleep(400);
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.EDIT, typo.messageId(), "Sunumu yarın bitiririm");
+        Thread.sleep(400);
+        type("Süper, sunumu bekliyorum!");
+        efe.next();
+        ChatClient.Incoming latest = efe.received.get(efe.received.size() - 1);
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.READ, latest.messageId(), "");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.REACT, latest.messageId(), "❤️");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.TYPING, null, "1");
+        Thread.sleep(900);
+        snap("05d-rich");
+
+        fx(() -> { ((TextField) find("#search")).setText("sunum"); return null; });
+        Thread.sleep(400);
+        snap("05e-search");
+        fx(() -> { ((TextField) find("#search")).setText(""); return null; });
+        fx(() -> { ((Button) find("#settings")).fire(); return null; });
+        waitFor("#settings-dialog");
+        pause();
+        snap("05f-settings");
+        fx(() -> { ((Button) find("#settings-done")).fire(); return null; });
+        Thread.sleep(300);
+
+        // Disappearing messages: turn on a one-hour timer, then send a message
+        fx(() -> {
+            javafx.scene.control.MenuButton timer = (javafx.scene.control.MenuButton) find("#timer");
+            timer.getItems().stream().filter(i -> "timer-3600".equals(i.getId())).findFirst().orElseThrow().fire();
+            return null;
+        });
+        Thread.sleep(800);
+        type("Bu mesaj bir saat sonra iki tarafta da silinecek.");
+        efe.next();
+        Thread.sleep(500);
+        snap("05c-disappearing");
 
         fx(() -> { click(find("#verify-badge")); return null; });
         waitFor("#contact-dialog");
@@ -213,6 +305,17 @@ public final class AccountPreview {
         snap("11-key-changed-dialog");
         if (efeNew.client == null) throw new AssertionError();
 
+        // The server goes away and comes back: the app reconnects by itself, without logging out
+        int port = server.port();
+        server.close();
+        waitFor("#status-offline");
+        pause();
+        snap("12-offline");
+        server = new ChatServer(new ChatServer.Config(work.resolve("server"), "127.0.0.1", port, 1_000)).start();
+        waitFor("#status-online", 60);
+        pause();
+        snap("13-reconnected");
+
         fx(() -> { shell.shutdown(); return null; });
         efeNew.client.close();
         ayse.client.close();
@@ -253,7 +356,11 @@ public final class AccountPreview {
     }
 
     private static void waitFor(String selector) throws Exception {
-        long deadline = System.currentTimeMillis() + 15_000;
+        waitFor(selector, 15);
+    }
+
+    private static void waitFor(String selector, int seconds) throws Exception {
+        long deadline = System.currentTimeMillis() + seconds * 1000L;
         while (System.currentTimeMillis() < deadline) {
             if (fx(() -> lookup(selector) != null)) return;
             Thread.sleep(50);

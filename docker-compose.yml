@@ -1,0 +1,28 @@
+# secure-chat server. Start with:  docker compose up -d --build
+# The server's fingerprint is in:   docker compose logs secure-chat
+services:
+  secure-chat:
+    build: .
+    image: secure-chat-server
+    container_name: secure-chat
+    restart: unless-stopped
+    ports:
+      - "5056:5056"            # the only port to open in the firewall
+    volumes:
+      - securechat-data:/data  # server identity key, accounts database, encrypted attachments
+    read_only: true            # nothing but /data (and a small /tmp) is writable
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  securechat-data:

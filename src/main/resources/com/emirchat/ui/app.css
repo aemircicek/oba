@@ -252,6 +252,38 @@
 .bubble.own .bubble-text { -fx-text-fill: -sc-on-own-bubble; }
 .bubble.peer .bubble-text { -fx-text-fill: -sc-text; }
 .bubble-time { -fx-font-size: 10px; }
+
+/* Shared files */
+.file-card { -fx-spacing: 10; -fx-padding: 2 0 4 0; }
+.file-icon {
+    -fx-background-radius: 10;
+    -fx-min-width: 38; -fx-min-height: 38; -fx-max-width: 38; -fx-max-height: 38;
+}
+.bubble.own .file-icon { -fx-background-color: rgba(255, 255, 255, 0.18); }
+.bubble.peer .file-icon { -fx-background-color: -sc-accent-weak; }
+.file-name { -fx-font-size: 13px; -fx-font-weight: bold; }
+.bubble.own .file-name { -fx-text-fill: -sc-on-own-bubble; }
+.bubble.peer .file-name { -fx-text-fill: -sc-text; }
+.file-size { -fx-font-size: 11px; }
+.bubble.own .file-size { -fx-text-fill: -sc-own-time; }
+.bubble.peer .file-size { -fx-text-fill: -sc-text-3; }
+.file-preview { -fx-cursor: hand; }
+.attach {
+    -fx-background-color: transparent;
+    -fx-background-radius: 999;
+    -fx-min-width: 40; -fx-min-height: 40;
+    -fx-cursor: hand;
+}
+.attach:hover { -fx-background-color: -sc-surface-2; }
+
+/* Disappearing messages */
+.timer-button { -fx-background-color: transparent; -fx-background-radius: 999; -fx-padding: 4 10; -fx-text-fill: -sc-text-2; }
+.timer-button:hover { -fx-background-color: -sc-surface-2; }
+.timer-button.active { -fx-background-color: -sc-accent-weak; }
+.timer-button > .label { -fx-text-fill: -sc-text-2; -fx-font-size: 12px; -fx-font-weight: bold; }
+.timer-button.active > .label { -fx-text-fill: -sc-accent-text; }
+.timer-button .arrow-button { -fx-padding: 0; }
+.timer-button .arrow { -fx-padding: 0; -fx-shape: none; }
 .bubble.own .bubble-time { -fx-text-fill: -sc-own-time; }
 .bubble.peer .bubble-time { -fx-text-fill: -sc-text-3; }
 
@@ -376,3 +408,45 @@
 .combo-box-popup .list-view { -fx-background-color: -sc-surface; -fx-border-color: -sc-border; }
 .combo-box-popup .list-cell { -fx-background-color: -sc-surface; -fx-text-fill: -sc-text; -fx-padding: 6 10; }
 .combo-box-popup .list-cell:hover { -fx-background-color: -sc-surface-2; }
+
+/* Replies, reactions, edits */
+.reply-quote {
+    -fx-background-color: rgba(127, 127, 127, 0.14);
+    -fx-background-radius: 8;
+    -fx-border-color: transparent transparent transparent -sc-accent;
+    -fx-border-width: 0 0 0 3;
+    -fx-padding: 4 8;
+}
+.bubble.own .reply-quote { -fx-background-color: rgba(255, 255, 255, 0.16); -fx-border-color: transparent transparent transparent rgba(255, 255, 255, 0.7); }
+.quote-sender { -fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: -sc-accent-text; }
+.bubble.own .quote-sender { -fx-text-fill: -sc-on-own-bubble; }
+.quote-text { -fx-font-size: 11.5px; -fx-text-fill: -sc-text-2; }
+.bubble.own .quote-text { -fx-text-fill: -sc-own-time; }
+.bubble-deleted { -fx-font-style: italic; -fx-opacity: 0.75; }
+.reaction-chip {
+    -fx-background-color: -sc-surface;
+    -fx-border-color: -sc-border;
+    -fx-background-radius: 999;
+    -fx-border-radius: 999;
+    -fx-padding: 1 7;
+    -fx-font-size: 12px;
+    -fx-cursor: hand;
+    -fx-translate-y: -4;
+}
+.reaction-chip.mine { -fx-border-color: -sc-accent; -fx-background-color: -sc-accent-weak; }
+.bubble.own .bubble-status.read { -fx-text-fill: #4fc3f7; -fx-font-weight: bold; }
+.context-bar {
+    -fx-background-color: -sc-surface-2;
+    -fx-border-color: -sc-border transparent transparent -sc-accent;
+    -fx-border-width: 1 0 0 3;
+    -fx-padding: 6 14;
+}
+.context-text { -fx-text-fill: -sc-text-2; -fx-font-size: 12px; }
+.typing { -fx-text-fill: -sc-accent-text; -fx-font-style: italic; }
+.highlight .bubble { -fx-effect: dropshadow(gaussian, -sc-accent, 14, 0.5, 0, 0); }
+.search { -fx-background-radius: 999; -fx-border-radius: 999; -fx-padding: 7 14; -fx-background-color: -sc-surface-2; -fx-border-color: transparent; }
+.search:focused { -fx-border-color: -sc-accent; }
+.safety-digits { -fx-font-family: 'Consolas', 'Menlo', monospace; -fx-font-size: 13px; -fx-text-fill: -sc-text; -fx-line-spacing: 3px; }
+.danger-text { -fx-text-fill: -sc-danger; }
+
+.update-banner { -fx-background-color: -sc-accent-weak; -fx-padding: 8 14; -fx-border-color: transparent transparent -sc-border transparent; }

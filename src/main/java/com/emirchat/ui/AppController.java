@@ -76,8 +76,8 @@ final class AppController {
         Attempt a = new Attempt();
         attempt = a;
         WaitingScreen waiting = request.hosting()
-                ? new WaitingScreen("Waiting for a peer", "Ask your peer to choose Join and enter one of these addresses:", this::cancel)
-                : new WaitingScreen("Connecting to " + request.host(), "Opening an encrypted, authenticated session…", this::cancel);
+                ? new WaitingScreen(I18n.t("direct.waiting"), I18n.t("direct.waitingBody"), this::cancel)
+                : new WaitingScreen(I18n.t("direct.connecting", request.host()), I18n.t("direct.connectingBody"), this::cancel);
         show(waiting.root());
 
         Connector.Progress progress = new Connector.Progress() {
@@ -88,7 +88,7 @@ final class AppController {
                 var addresses = LocalAddresses.lan();
                 Platform.runLater(() -> {
                     waiting.showAddresses(addresses, request.port());
-                    waiting.setStatus("Listening on port " + request.port());
+                    waiting.setStatus(I18n.t("direct.listening", request.port()));
                 });
             }
 
@@ -98,8 +98,8 @@ final class AppController {
                 if (a.cancelled) Connector.closeQuietly(socket);
                 if (socket.isConnected()) {
                     Platform.runLater(() -> {
-                        waiting.setTitle("Peer connected", "Checking their identity…");
-                        waiting.setStatus("Authenticating " + socket.getInetAddress().getHostAddress());
+                        waiting.setTitle(I18n.t("direct.peerConnected"), I18n.t("direct.checking"));
+                        waiting.setStatus(I18n.t("direct.authenticating", socket.getInetAddress().getHostAddress()));
                     });
                 }
             }
@@ -119,15 +119,15 @@ final class AppController {
                 if (!a.cancelled) Platform.runLater(() -> show(new KeyChangedScreen(e, () -> showStart(null)).root()));
             } catch (PeerRejectedException e) {
                 if (!a.cancelled) Platform.runLater(() -> showStart(new StartScreen.Notice(
-                        "You didn't confirm the fingerprint, so the connection was closed. Nothing was sent.", false)));
+                        I18n.t("direct.notConfirmed"), false)));
             } catch (SocketTimeoutException e) {
-                if (!a.cancelled) fail("The peer didn't respond in time. Please try again.");
+                if (!a.cancelled) fail(I18n.t("direct.timeout"));
             } catch (SecurityException e) {
-                if (!a.cancelled) fail("The connection was not secure and was closed: " + e.getMessage() + ".");
+                if (!a.cancelled) fail(I18n.t("direct.insecure", e.getMessage()));
             } catch (IOException e) {
                 if (!a.cancelled) fail(friendly(e));
             } catch (RuntimeException e) {
-                if (!a.cancelled) fail("Unexpected error: " + e.getMessage());
+                if (!a.cancelled) fail(I18n.t("shell.unexpected", e.getMessage()));
             }
         });
     }
@@ -139,13 +139,13 @@ final class AppController {
     private static String friendly(IOException e) {
         String m = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
         if (m.contains("rejected your identity key")) {
-            return "Your peer closed the connection during verification. They may not have confirmed your fingerprint.";
+            return I18n.t("direct.peerRejected");
         }
         if (m.contains("Connection refused")) {
-            return "Nobody is hosting at that address yet. Ask your peer to press Start hosting first.";
+            return I18n.t("direct.nobodyHosting");
         }
         if (e instanceof java.io.EOFException || m.contains("Connection reset") || m.contains("Socket closed")) {
-            return "The connection closed during setup. Your peer may have cancelled or rejected the fingerprint.";
+            return I18n.t("direct.closedDuringSetup");
         }
         return m;
     }
