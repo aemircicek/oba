@@ -11,6 +11,8 @@
   mute and hang up, ringing and missed-call notifications. Every call gets its own keys; audio is
   end-to-end encrypted and relayed by the server without being stored. The macOS app asks for
   microphone access.
+- **A default server**: the app connects to the project's server out of the box, with its key
+  built in (no fingerprint question on first connection). Other servers stay under "Advanced".
 
 ### Fixed
 - A group message that arrived before its sender's key (for example from a friend's new device)
