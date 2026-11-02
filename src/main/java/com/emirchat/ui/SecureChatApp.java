@@ -26,7 +26,11 @@ public final class SecureChatApp extends Application {
         Theme.install(root);
         Scene scene = new Scene(root, 1040, 720);
 
-        stage.setTitle("secure-chat");
+        stage.setTitle(com.emirchat.AppInfo.NAME);
+        for (int size : new int[] {16, 24, 32, 48, 64, 128, 256}) {
+            var icon = SecureChatApp.class.getResourceAsStream("icons/icon-" + size + ".png");
+            if (icon != null) stage.getIcons().add(new javafx.scene.image.Image(icon));
+        }
         stage.setMinWidth(420);
         stage.setMinHeight(620);
         stage.setScene(scene);
@@ -52,6 +56,6 @@ public final class SecureChatApp extends Application {
     }
 
     private static Path defaultHome() {
-        return Path.of(System.getProperty("user.home"), ".securechat");
+        return com.emirchat.AppInfo.defaultHome();
     }
 }

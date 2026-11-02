@@ -31,7 +31,7 @@ public final class SecureChat {
             "  secure-chat fingerprint",
             "",
             "Options:",
-            "  --home <dir>   key and known-peers directory (default: ~/.securechat)",
+            "  --home <dir>   key and known-peers directory (default: the Scorpion data folder)",
             "",
             "Type " + ChatSession.QUIT_COMMAND + " to leave a chat.",
             "",
@@ -129,7 +129,7 @@ public final class SecureChat {
 
     record Options(String command, String host, String name, int port, String bind, Path home) {
         static Path defaultHome() {
-            return Path.of(System.getProperty("user.home"), ".securechat");
+            return com.emirchat.AppInfo.defaultHome();
         }
 
         static Options parse(String[] args) {

@@ -35,7 +35,7 @@ final class LoginScreen {
     LoginScreen(String savedServer, String savedUser, String notice, Actions actions) {
         StackPane badge = new StackPane(Icons.of(Icons.SHIELD_CHECK, 28, "accent"));
         badge.getStyleClass().addAll("icon-badge", "accent");
-        Label title = UiKit.label("secure-chat", "h1");
+        Label title = UiKit.label(com.emirchat.AppInfo.NAME, "h1");
         Label tagline = UiKit.label("End-to-end encrypted messages, friends and groups.\nYour server never sees what you write.", "body");
         tagline.setWrapText(true);
         tagline.setStyle("-fx-text-alignment: center;");

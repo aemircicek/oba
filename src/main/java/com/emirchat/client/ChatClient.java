@@ -1081,10 +1081,22 @@ public final class ChatClient implements AutoCloseable {
         groupKeys.acceptDistribution(groupId, sender, distribution);
     }
 
+    /**
+     * Logs out. Messages already being processed are finished first (stored, remembered as
+     * handled and acknowledged), so closing right after a message arrives does not make the
+     * server deliver it again.
+     */
     @Override
     public void close() {
         closing = true; // a deliberate logout is not reported as a lost connection
-        connection.close();
         inbox.shutdown();
+        if (!Thread.currentThread().getName().equals("inbox")) {
+            try {
+                inbox.awaitTermination(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        connection.close();
     }
 }

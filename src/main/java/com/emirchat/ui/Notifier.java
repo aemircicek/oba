@@ -3,7 +3,6 @@ package com.emirchat.ui;
 import java.awt.EventQueue;
 import java.awt.SystemTray;
 import java.awt.TrayIcon;
-import java.awt.image.BufferedImage;
 
 /**
  * Desktop notifications through the operating system's tray (Windows notification centre, most
@@ -28,17 +27,11 @@ final class Notifier {
                 unavailable = true;
                 return null;
             }
-            BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
-            java.awt.Graphics2D g = image.createGraphics();
-            g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
-            g.setColor(new java.awt.Color(0x13824F));
-            g.fillOval(0, 0, 16, 16);
-            g.setColor(java.awt.Color.WHITE);
-            g.fillRoundRect(5, 7, 6, 5, 2, 2);
-            g.setStroke(new java.awt.BasicStroke(1.4f));
-            g.drawArc(6, 3, 4, 6, 0, 180);
-            g.dispose();
-            icon = new TrayIcon(image, "secure-chat");
+            java.awt.Image image;
+            try (var in = Notifier.class.getResourceAsStream("icons/icon-32.png")) {
+                image = javax.imageio.ImageIO.read(in);
+            }
+            icon = new TrayIcon(image, com.emirchat.AppInfo.NAME);
             icon.setImageAutoSize(true);
             SystemTray.getSystemTray().add(icon);
         } catch (Exception | LinkageError e) {

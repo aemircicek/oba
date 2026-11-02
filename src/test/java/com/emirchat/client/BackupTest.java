@@ -97,12 +97,12 @@ class BackupTest {
         Path notABackup = dir.resolve("photo.scbackup");
         Files.writeString(notABackup, "just some text that is long enough to have a header and more");
         IOException e = assertThrows(IOException.class, () -> Backup.restore(notABackup, PASS, dir.resolve("q")));
-        assertTrue(e.getMessage().contains("not a secure-chat backup"));
+        assertTrue(e.getMessage().contains("not a Scorpion backup"));
     }
 
     @Test
     void theSuggestedNameNamesTheAccount() {
         String name = Backup.suggestedName("emir");
-        assertTrue(name.startsWith("secure-chat-emir-") && name.endsWith(".scbackup"));
+        assertTrue(name.startsWith("scorpion-emir-") && name.endsWith(".scbackup"));
     }
 }

@@ -40,7 +40,7 @@ final class StartScreen {
         // Brand
         StackPane badge = new StackPane(Icons.of(Icons.SHIELD_CHECK, 28, "accent"));
         badge.getStyleClass().addAll("icon-badge", "accent");
-        Label title = new Label("secure-chat");
+        Label title = new Label(com.emirchat.AppInfo.NAME);
         title.getStyleClass().add("h1");
         Label tagline = new Label("End-to-end encrypted chat between two computers.\nNo servers, no accounts.");
         tagline.getStyleClass().add("body");
