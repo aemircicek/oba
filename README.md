@@ -50,8 +50,15 @@ java -jar secure-chat.jar gui --home ./bob
   them verified.
 - **Key-change warning**: if a friend's key changes (new device, or an attack), messages to them
   are held back until you verify the new key.
+- **Files and images**: send any file up to 25 MB to a friend or a group (📎 next to the message
+  box). Each file is encrypted with its own key before it leaves your computer; images are
+  previewed in the chat.
 - **Encrypted history**: messages are stored on disk encrypted under a key derived from your password.
 - Light and dark themes, following the system.
+
+<p align="center">
+  <img src="docs/screenshots/account-files-dark.png" width="560" alt="An encrypted image and document in a chat">
+</p>
 
 <p align="center">
   <img src="docs/screenshots/account-login-light.png" width="280" alt="Login">
@@ -67,7 +74,7 @@ java -jar secure-chat.jar register --server localhost:5056 --username emir
 java -jar secure-chat.jar client   --server localhost:5056 --username emir
 ```
 
-`client` opens an interactive shell (`msg`, `friends`, `add`, `accept`, `group`, `gmsg`,
+`client` opens an interactive shell (`msg`, `file`, `save`, `friends`, `add`, `accept`, `group`, `gmsg`,
 `verify`, `trust`, ...; type `help` for the full list). The desktop app and the terminal client
 use the same protocol and can talk to each other.
 
@@ -108,7 +115,10 @@ must not be able to read or forge messages. User devices are trusted.
 | Online guessing | 5 failed logins per username and 20 per IP address in 15 minutes |
 | Username enumeration on login | Same error and same hashing cost for unknown usernames |
 | Stolen disk | Message history encrypted with AES-256-GCM under a key from the account password (PBKDF2, 600k) |
-| Resource exhaustion | Frame and message size limits, offline queue and prekey caps, prekey-fetch rate limits |
+| File confidentiality | Each file is encrypted with a fresh AES-256-GCM key; the server stores only the ciphertext, and the key travels in an end-to-end encrypted message |
+| File integrity | The receiver checks the SHA-256 digest of the blob (sent end-to-end) before decrypting; GCM authenticates the content |
+| File access | Only the uploader and the named audience (the friend, or current group members) can download; unknown and forbidden ids look the same |
+| Resource exhaustion | Frame and message size limits, offline queue and prekey caps, prekey-fetch rate limits, 25 MB per file, 250 MB of stored files per user |
 
 ### Direct messages: X3DH and the Double Ratchet
 
@@ -141,6 +151,27 @@ fanned out by the server. When anyone leaves or is removed, every remaining memb
 new sender key. Removal is also checked at send time, so a member removed while you were offline
 does not receive your next message.
 
+### Files
+
+```mermaid
+sequenceDiagram
+    participant A as Alice
+    participant S as Server
+    participant B as Bob
+    Note over A: key = random 32 bytes<br/>blob = nonce ‖ AES-256-GCM(key, file)<br/>digest = SHA-256(blob)
+    A->>S: UploadStart(size, audience = Bob)
+    S->>A: random attachment id
+    A->>S: blob in 32 KiB chunks, then UploadFinish
+    A->>S: Double Ratchet message {id, key, digest, name, size}
+    S->>B: deliver the message
+    B->>S: fetch blob by id (Bob is the audience)
+    Note over B: check SHA-256(blob) = digest<br/>then decrypt with key
+```
+
+The server never sees the key, the file name or the content. Blobs are deleted after 30 days
+(unfinished uploads after an hour). File names from other people are reduced to a plain name
+(no folders, control characters or right-to-left tricks) before they are shown or saved.
+
 ### Transport
 
 Clients and the server talk over the same SIGMA-I channel as the direct mode: an ephemeral X25519
@@ -154,18 +185,19 @@ Users then authenticate with their password inside the channel. Low-order X25519
 |---|---|
 | `com.emirchat.crypto` | `Hkdf` (RFC 5869), `Identity` (Ed25519 keys, fingerprints), `X25519` |
 | `com.emirchat.protocol` | `FrameIO` (bounded framing), `Wire` (strict encoding), `Handshake` (SIGMA-I), `SecureChannel` |
-| `com.emirchat.e2e` | `X3dh`, `DoubleRatchet`, `GroupKeys` (Sender Keys), `Messenger`, `DeviceKeys`, `PrekeyBundle` |
-| `com.emirchat.server` | `ChatServer`, accounts, friends, groups, offline queue, `PasswordHasher`, `RateLimiter`, SQLite |
+| `com.emirchat.e2e` | `X3dh`, `DoubleRatchet`, `GroupKeys` (Sender Keys), `Attachments` (file encryption), `Messenger`, `DeviceKeys`, `PrekeyBundle` |
+| `com.emirchat.server` | `ChatServer`, accounts, friends, groups, offline queue, `AttachmentService`, `PasswordHasher`, `RateLimiter`, SQLite |
 | `com.emirchat.client` | `ChatClient`, `ServerConnection`, encrypted `History` |
 | `com.emirchat.api` | `Packet` (client–server messages), error codes |
 | `com.emirchat.trust` | `KnownPeers` (TOFU store for servers and contacts) |
 | `com.emirchat.ui` | JavaFX desktop app: screens, theme, fingerprint art |
-| `com.emirchat.net`, `com.emirchat.chat` | Direct mode: connect/host, conversation, terminal sanitising |
+| `com.emirchat.chat` | `ChatMessage`, `FileMessage` (file description and safe names), terminal sanitising |
+| `com.emirchat.net` | Direct mode: connect/host |
 | `com.emirchat` | `Main`, `SecureChat` and `AccountCli` command lines, `ClientShell` |
 
 ### Tests
 
-`mvn verify` runs 97 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 122 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -175,6 +207,9 @@ Users then authenticate with their password inside the channel. Low-order X25519
 - **Groups**: removed members cannot read after rotation (even if the removal happened while a
   member was offline), new members cannot read old messages, members cannot forge each other,
   redistributing an old chain state cannot enable replays.
+- **Files**: a blob swapped or modified on the server is refused, a wrong key fails, only the
+  recipient or current group members can download, uploads must arrive in order and in full,
+  expiry and per-user quotas, hostile file names (`../../etc/passwd`, right-to-left overrides).
 - **Server**: registration and login rules, identical errors for wrong password and unknown user,
   brute-force limits, friend and group permissions, the offline queue in order, delivery
   receipts, a tampering server being caught, and the server storing only ciphertext.
@@ -189,7 +224,8 @@ Honest notes on what this project does **not** do:
 
 - **Not audited.** It is a learning and portfolio project. For real-world secrecy use Signal.
 - **The server sees metadata**: who is friends with whom, who messages whom and when, group names
-  and member lists, and online status. It cannot see message content.
+  and member lists, online status, and the approximate size of each file. It cannot see message
+  content, file names or file content.
 - **The server can hide or delay messages**, and can claim a user has a new device. The app then
   shows a key-change warning; users must compare fingerprints to detect a fake key.
 - **TOFU trusts first contact.** Until friends compare fingerprints, a malicious server could
@@ -202,7 +238,6 @@ Honest notes on what this project does **not** do:
 
 ## Roadmap
 
-- Encrypted file and image sharing
 - Disappearing messages
 - Encrypting group names and descriptions with the group key
 - Passphrase-encrypted identity keys and session state

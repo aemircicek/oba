@@ -28,7 +28,7 @@ final class ClientConnection {
 
     /** Everything a connection needs from the server. */
     record Services(Identity identity, AccountService accounts, FriendService friends, MessageService messages,
-                    GroupService groups, Presence presence) {}
+                    GroupService groups, AttachmentService attachments, Presence presence) {}
 
     private final Socket socket;
     private final Services services;
@@ -167,6 +167,16 @@ final class ClientConnection {
                 services.messages().ack(me(), a.ids());
                 yield new Packet.Ok();
             }
+            case Packet.UploadStart u -> services.attachments().start(me(), u.size(), u.recipient(), u.groupId());
+            case Packet.UploadChunk u -> {
+                services.attachments().chunk(me(), u.attachmentId(), u.offset(), u.data());
+                yield new Packet.Ok();
+            }
+            case Packet.UploadFinish u -> {
+                services.attachments().finish(me(), u.attachmentId());
+                yield new Packet.Ok();
+            }
+            case Packet.FetchAttachment f -> services.attachments().fetch(me(), f.attachmentId(), f.offset());
             default -> throw new ApiException(ErrorCode.PROTOCOL, "Unexpected packet from client");
         };
     }

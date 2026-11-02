@@ -2,6 +2,7 @@ package com.emirchat.ui;
 
 import com.emirchat.api.Packet;
 import com.emirchat.chat.ChatMessage;
+import com.emirchat.chat.FileMessage;
 import com.emirchat.chat.TerminalSanitizer;
 import com.emirchat.client.ChatClient;
 import com.emirchat.client.History;
@@ -39,6 +40,11 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         t.setDaemon(true);
         return t;
     });
+    private final ExecutorService downloads = Executors.newFixedThreadPool(2, r -> {
+        Thread t = new Thread(r, "ui-download");
+        t.setDaemon(true);
+        return t;
+    });
     /** Delivery receipts that arrived before the send call returned the envelope id (fast LANs). */
     private final java.util.Set<Long> earlyDeliveries = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private volatile ChatClient client;
@@ -69,6 +75,11 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         return background;
     }
 
+    /** Downloads run apart from sends, so a large file never holds up a text message. */
+    ExecutorService downloads() {
+        return downloads;
+    }
+
     static String dm(String user) {
         return "dm:" + user;
     }
@@ -96,6 +107,27 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     @Override
     public void groupMessage(long groupId, String from, ChatMessage message, long envelopeId) {
         store(group(groupId), from, message, envelopeId);
+    }
+
+    @Override
+    public void file(String from, FileMessage file, long envelopeId) {
+        storeFile(dm(from), from, file, envelopeId);
+    }
+
+    @Override
+    public void groupFile(long groupId, String from, FileMessage file, long envelopeId) {
+        storeFile(group(groupId), from, file, envelopeId);
+    }
+
+    private void storeFile(String conversation, String from, FileMessage file, long envelopeId) {
+        try {
+            long id = history.addFile(conversation, from, file, file.sentAtMillis(), false, History.RECEIVED, envelopeId);
+            History.Message stored = new History.Message(id, conversation, from, file.name(), file.sentAtMillis(), false,
+                    History.RECEIVED, envelopeId, file);
+            fx(v -> v.messageStored(stored));
+        } catch (IOException e) {
+            fx(v -> v.problem("Could not save a file message: " + e.getMessage()));
+        }
     }
 
     private void store(String conversation, String from, ChatMessage message, long envelopeId) {
@@ -179,6 +211,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         ChatClient c = client;
         if (c != null) c.close();
         background.shutdownNow();
+        downloads.shutdownNow();
         history.close();
     }
 }

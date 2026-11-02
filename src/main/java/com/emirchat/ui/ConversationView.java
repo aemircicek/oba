@@ -2,10 +2,16 @@ package com.emirchat.ui;
 
 import com.emirchat.api.Packet;
 import com.emirchat.chat.ChatMessage;
+import com.emirchat.chat.FileMessage;
+import com.emirchat.e2e.Attachments;
 import com.emirchat.client.ChatClient;
 import com.emirchat.client.History;
 import com.emirchat.trust.KeyChangedException;
+import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
@@ -20,11 +26,15 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.stage.FileChooser;
 
 /** One conversation (a DM or a group) in the main window. */
 final class ConversationView {
@@ -80,7 +90,13 @@ final class ConversationView {
         send.disableProperty().bind(input.textProperty().isEmpty());
         input.setOnAction(e -> send());
         send.setOnAction(e -> send());
-        HBox composer = new HBox(input, send);
+        Button attach = new Button();
+        attach.setId("attach");
+        attach.getStyleClass().add("attach");
+        attach.setGraphic(Icons.of(Icons.PAPERCLIP, 19, "muted"));
+        attach.setTooltip(new Tooltip("Send a file (encrypted, up to " + Attachments.MAX_FILE_BYTES / (1024 * 1024) + " MB)"));
+        attach.setOnAction(e -> chooseFile());
+        HBox composer = new HBox(attach, input, send);
         composer.getStyleClass().add("composer");
         composer.setAlignment(Pos.CENTER);
 
@@ -192,8 +208,14 @@ final class ConversationView {
         VBox bubble = new VBox(2);
         bubble.getStyleClass().addAll("bubble", own ? "own" : "peer");
         if (continued) bubble.getStyleClass().add("continued");
-        Label body = UiKit.label(m.text(), "bubble-text");
-        body.setWrapText(true);
+        Node body;
+        if (m.file() != null) {
+            body = fileCard(m.file());
+        } else {
+            Label text = UiKit.label(m.text(), "bubble-text");
+            text.setWrapText(true);
+            body = text;
+        }
         HBox meta = new HBox(5, UiKit.label(UiKit.clock(m.sentAt()), "bubble-time"));
         meta.setAlignment(Pos.CENTER_RIGHT);
         if (own) {
@@ -295,6 +317,145 @@ final class ConversationView {
                 if (finalProblem != null) systemLine(finalProblem, true);
             });
         });
+    }
+
+    // ------------------------------------------------------------------ files
+
+    private Node fileCard(FileMessage file) {
+        StackPane icon = new StackPane(Icons.of(Icons.FILE, 18, "accent"));
+        icon.getStyleClass().add("file-icon");
+        VBox titles = new VBox(1, UiKit.label(file.name(), "file-name"), UiKit.label(humanSize(file.size()), "file-size"));
+        Button save = new Button();
+        save.getStyleClass().addAll("small", "attach");
+        save.setGraphic(Icons.of(Icons.DOWNLOAD, 16, "muted"));
+        save.setTooltip(new Tooltip("Save to disk"));
+        save.setOnAction(e -> saveFile(file));
+        HBox card = new HBox(icon, titles, UiKit.grow(), save);
+        card.getStyleClass().add("file-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        card.setMinWidth(220);
+        if (!file.isPreviewableImage()) return card;
+        VBox withPreview = new VBox(6, card);
+        session.downloads().execute(() -> {
+            try {
+                Image image = new Image(new ByteArrayInputStream(session.client().downloadFile(file)));
+                if (image.isError()) return;
+                Platform.runLater(() -> {
+                    ImageView view = new ImageView(image);
+                    view.setPreserveRatio(true);
+                    view.setFitWidth(Math.min(280, image.getWidth()));
+                    view.setSmooth(true);
+                    view.getStyleClass().add("file-preview");
+                    view.setOnMouseClicked(e -> saveFile(file));
+                    withPreview.getChildren().add(0, view);
+                });
+            } catch (Exception ignored) {
+                // no preview; the file can still be saved, which reports any problem
+            }
+        });
+        return withPreview;
+    }
+
+    private void chooseFile() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Send a file");
+        File chosen = chooser.showOpenDialog(root.getScene().getWindow());
+        if (chosen == null) return;
+        if (chosen.length() > Attachments.MAX_FILE_BYTES) {
+            systemLine(chosen.getName() + " is larger than " + Attachments.MAX_FILE_BYTES / (1024 * 1024) + " MB.", true);
+            return;
+        }
+        String name = FileMessage.safeName(chosen.getName());
+        Label progress = UiKit.label("Encrypting and sending " + name + "…", "system-line");
+        HBox row = new HBox(progress);
+        row.setAlignment(Pos.CENTER_RIGHT);
+        row.setPadding(new Insets(12, 0, 0, 0));
+        messages.getChildren().add(row);
+        session.background().execute(() -> {
+            String problem = null;
+            History.Message stored = null;
+            try {
+                byte[] data = Files.readAllBytes(chosen.toPath());
+                String mime = mimeType(chosen.toPath());
+                String me = session.client().username();
+                if (peer != null) {
+                    ChatClient.SentFile sent = session.client().sendFile(peer, name, mime, data);
+                    long id = session.history().addFile(conversation, me, sent.file(), sent.file().sentAtMillis(), true,
+                            History.SENT, sent.envelopeId());
+                    int status = session.sent(id, sent.envelopeId());
+                    stored = new History.Message(id, conversation, me, name, sent.file().sentAtMillis(), true, status,
+                            sent.envelopeId(), sent.file());
+                } else {
+                    Map.Entry<FileMessage, List<String>> sent = session.client().sendGroupFile(groupId, name, mime, data);
+                    long id = session.history().addFile(conversation, me, sent.getKey(), sent.getKey().sentAtMillis(), true,
+                            History.SENT, 0);
+                    stored = new History.Message(id, conversation, me, name, sent.getKey().sentAtMillis(), true, History.SENT,
+                            0, sent.getKey());
+                    if (!sent.getValue().isEmpty()) {
+                        problem = "Not sent to " + String.join(", ", sent.getValue()) + " until their new key is verified.";
+                    }
+                }
+            } catch (KeyChangedException e) {
+                problem = peer + "'s key changed. Verify it, then send again.";
+                Platform.runLater(this::refreshHeader);
+            } catch (Exception e) {
+                problem = "Could not send " + name + ": " + e.getMessage();
+            }
+            History.Message finalStored = stored;
+            String finalProblem = problem;
+            Platform.runLater(() -> {
+                messages.getChildren().remove(row);
+                if (finalStored != null) append(finalStored);
+                if (finalProblem != null) systemLine(finalProblem, true);
+            });
+        });
+    }
+
+    private void saveFile(FileMessage file) {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Save file");
+        chooser.setInitialFileName(file.name());
+        File target = chooser.showSaveDialog(root.getScene().getWindow());
+        if (target == null) return;
+        session.downloads().execute(() -> {
+            String result;
+            boolean danger = false;
+            try {
+                Files.write(target.toPath(), session.client().downloadFile(file));
+                result = "Saved " + target.getName() + ".";
+            } catch (SecurityException e) {
+                result = "Did not save " + file.name() + ": " + e.getMessage() + ".";
+                danger = true;
+            } catch (Exception e) {
+                result = "Could not download " + file.name() + ": " + e.getMessage();
+                danger = true;
+            }
+            String text = result;
+            boolean isDanger = danger;
+            Platform.runLater(() -> systemLine(text, isDanger));
+        });
+    }
+
+    private static String mimeType(Path file) {
+        try {
+            String probed = Files.probeContentType(file);
+            if (probed != null) return probed;
+        } catch (IOException ignored) {
+            // fall back to the extension
+        }
+        String n = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        if (n.endsWith(".png")) return "image/png";
+        if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "image/jpeg";
+        if (n.endsWith(".gif")) return "image/gif";
+        if (n.endsWith(".bmp")) return "image/bmp";
+        if (n.endsWith(".pdf")) return "application/pdf";
+        return "application/octet-stream";
+    }
+
+    static String humanSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.0f KB", bytes / 1024.0);
+        return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024));
     }
 
     void systemLine(String text, boolean danger) {

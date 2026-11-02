@@ -3,14 +3,18 @@ package com.emirchat;
 import com.emirchat.api.ApiException;
 import com.emirchat.api.Packet;
 import com.emirchat.chat.ChatMessage;
+import com.emirchat.chat.FileMessage;
 import com.emirchat.chat.TerminalSanitizer;
 import com.emirchat.client.ChatClient;
 import com.emirchat.client.ServerConnection;
 import com.emirchat.crypto.Identity;
+import com.emirchat.e2e.Attachments;
 import com.emirchat.trust.KeyChangedException;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -29,6 +33,8 @@ final class ClientShell {
             "  group <name> <user,user,...>   create a group with friends",
             "  gadd <id> <user>   add a friend (admin)    gremove <id> <user>  remove a member (admin)",
             "  gleave <id>        leave a group",
+            "  file <user> <path> send an encrypted file  gfile <id> <path>  send a file to a group",
+            "  save <n> <folder>  save received file number n",
             "  verify <user>      show the fingerprint to compare with your friend",
             "  trust <user>       accept a friend's new key after verifying it",
             "  help               this list               quit             leave");
@@ -38,8 +44,9 @@ final class ClientShell {
     static int run(ServerConnection connection, Identity device, Path accounts, String username, String password,
                    BufferedReader stdin) throws IOException {
         ChatClient client;
+        Printer printer = new Printer();
         try {
-            client = ChatClient.start(connection, device, accounts, username, password, false, new Printer());
+            client = ChatClient.start(connection, device, accounts, username, password, false, printer);
         } catch (ApiException e) {
             System.err.println(e.getMessage());
             return 4;
@@ -120,6 +127,38 @@ final class ClientShell {
                         client.trustNewKey(arg);
                         System.out.println("Now trusting " + arg + "'s new key:\n" + Identity.pretty(client.pinnedFingerprint(arg)));
                     }
+                    case "file", "gfile" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: " + parts[0] + (parts[0].equals("file") ? " <user>" : " <id>") + " <path>");
+                        } else {
+                            Path path = Path.of(parts[2].strip());
+                            if (Files.size(path) > Attachments.MAX_FILE_BYTES) {
+                                System.out.println("! Files can be at most " + Attachments.MAX_FILE_BYTES / (1024 * 1024) + " MB.");
+                            } else {
+                                byte[] data = Files.readAllBytes(path);
+                                String name = FileMessage.safeName(path.getFileName().toString());
+                                String mime = java.util.Objects.requireNonNullElse(Files.probeContentType(path),
+                                        "application/octet-stream");
+                                if (parts[0].equals("file")) {
+                                    client.sendFile(arg, name, mime, data);
+                                } else {
+                                    var skipped = client.sendGroupFile(Long.parseLong(arg), name, mime, data).getValue();
+                                    if (!skipped.isEmpty()) System.out.println("! Not delivered to (unverified key): " + skipped);
+                                }
+                                System.out.println("Sent " + name + " (encrypted).");
+                            }
+                        }
+                    }
+                    case "save" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: save <number> <folder>");
+                        } else {
+                            FileMessage file = printer.file(Integer.parseInt(arg));
+                            Path target = Path.of(parts[2].strip()).resolve(file.name()); // safe name: no directories
+                            Files.write(target, client.downloadFile(file), StandardOpenOption.CREATE_NEW);
+                            System.out.println("Saved " + target.toAbsolutePath() + ".");
+                        }
+                    }
                     case "help" -> System.out.println(HELP);
                     case "quit", "exit" -> {
                         client.close();
@@ -131,9 +170,13 @@ final class ClientShell {
                 System.out.println("! " + arg + "'s key changed. Run 'verify " + arg + "', compare it with them, then 'trust " + arg + "'.");
             } catch (ApiException e) {
                 System.out.println("! " + e.getMessage());
+            } catch (java.nio.file.FileAlreadyExistsException e) {
+                System.out.println("! " + e.getFile() + " already exists.");
+            } catch (SecurityException e) {
+                System.out.println("! Refused: " + e.getMessage() + ".");
             } catch (IOException e) {
                 System.out.println("! " + e.getMessage());
-            } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
+            } catch (NumberFormatException | ArrayIndexOutOfBoundsException | java.nio.file.InvalidPathException e) {
                 System.out.println("! Check the command format (type help).");
             }
         }
@@ -160,6 +203,24 @@ final class ClientShell {
 
     /** Prints everything the client hears, without corrupting the prompt line. */
     private static final class Printer implements ChatClient.Listener {
+        private final java.util.List<FileMessage> files = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        FileMessage file(int number) {
+            if (number < 1 || number > files.size()) throw new NumberFormatException("no such file");
+            return files.get(number - 1);
+        }
+
+        @Override public void file(String from, FileMessage f, long id) {
+            files.add(f);
+            show(from + " sent a file: " + f.name() + " (" + f.size() + " bytes). Type: save " + files.size() + " <folder>");
+        }
+
+        @Override public void groupFile(long groupId, String from, FileMessage f, long id) {
+            files.add(f);
+            show("#" + groupId + " " + from + " sent a file: " + f.name() + " (" + f.size() + " bytes). Type: save "
+                    + files.size() + " <folder>");
+        }
+
         @Override public void message(String from, ChatMessage m, long id) {
             show("[" + TIME.format(Instant.ofEpochMilli(m.sentAtMillis())) + "] " + from + ": " + m.text());
         }

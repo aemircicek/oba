@@ -4,7 +4,9 @@ import com.emirchat.api.ApiException;
 import com.emirchat.api.ErrorCode;
 import com.emirchat.api.Packet;
 import com.emirchat.chat.ChatMessage;
+import com.emirchat.chat.FileMessage;
 import com.emirchat.crypto.Identity;
+import com.emirchat.e2e.Attachments;
 import com.emirchat.e2e.Messenger;
 import com.emirchat.protocol.Wire;
 import com.emirchat.trust.KeyChangedException;
@@ -14,13 +16,16 @@ import java.net.ProtocolException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * A logged-in account: server connection + end-to-end encryption + friend key pinning.
@@ -35,6 +40,10 @@ public final class ChatClient implements AutoCloseable {
     static final int PREKEY_LOW_WATER = 20;
     private static final int CONTENT_CHAT = 1;
     private static final int CONTENT_SENDER_KEY = 2;
+    private static final int CONTENT_FILE = 3;
+    private static final int MAX_CONTENT_BYTES = ChatMessage.MAX_TEXT_BYTES + 256;
+    /** Upload/download requests kept in flight at once (the server answers them in order). */
+    private static final int TRANSFER_WINDOW = 8;
 
     /** Everything the UI needs to hear about. All callbacks run on the client's inbox thread. */
     public interface Listener {
@@ -60,6 +69,11 @@ public final class ChatClient implements AutoCloseable {
 
         /** We left or were removed. */
         default void groupRemoved(long groupId) {}
+
+        /** A friend shared a file; fetch it with {@link ChatClient#downloadFile}. */
+        default void file(String from, FileMessage file, long envelopeId) {}
+
+        default void groupFile(long groupId, String from, FileMessage file, long envelopeId) {}
     }
 
     private final ServerConnection connection;
@@ -232,6 +246,132 @@ public final class ChatClient implements AutoCloseable {
         return connection.sendEnvelope(user, body);
     }
 
+    // ------------------------------------------------------------------ files
+
+    /** The description of a file just sent, and the envelope that carried it. */
+    public record SentFile(FileMessage file, long envelopeId) {}
+
+    /** Encrypts a file, uploads the ciphertext, and sends its key to a friend end-to-end. */
+    public SentFile sendFile(String friend, String name, String mimeType, byte[] data)
+            throws IOException, ApiException, KeyChangedException {
+        pinnedKey(friend); // refuse before uploading if their key changed
+        FileMessage file = upload(data, name, mimeType, friend, 0);
+        return new SentFile(file, sendPairwise(friend, CONTENT_FILE, file.encode()).id());
+    }
+
+    /**
+     * Encrypts a file, uploads it for the group, and sends its key to the members.
+     *
+     * @return the file sent, and members skipped because their key changed and is not yet verified
+     */
+    public Map.Entry<FileMessage, List<String>> sendGroupFile(long groupId, String name, String mimeType, byte[] data)
+            throws IOException, ApiException {
+        if (!groups.containsKey(groupId)) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
+        FileMessage file = upload(data, name, mimeType, "", groupId);
+        return Map.entry(file, sendGroupContent(groupId, CONTENT_FILE, file.encode()));
+    }
+
+    private FileMessage upload(byte[] data, String name, String mimeType, String recipient, long groupId)
+            throws IOException, ApiException {
+        if (data.length > Attachments.MAX_FILE_BYTES) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST,
+                    "Files can be at most " + Attachments.MAX_FILE_BYTES / (1024 * 1024) + " MB.");
+        }
+        Attachments.Sealed sealed = Attachments.seal(data);
+        byte[] ciphertext = sealed.ciphertext();
+        Packet started = connection.call(new Packet.UploadStart(ciphertext.length, recipient, groupId));
+        if (!(started instanceof Packet.UploadStarted s)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        byte[] id = s.attachmentId();
+        List<CompletableFuture<Packet>> inFlight = new ArrayList<>();
+        for (int offset = 0; offset < ciphertext.length; offset += Packet.MAX_CHUNK_BYTES) {
+            byte[] chunk = Arrays.copyOfRange(ciphertext, offset, Math.min(ciphertext.length, offset + Packet.MAX_CHUNK_BYTES));
+            inFlight.add(connection.request(new Packet.UploadChunk(id, offset, chunk)));
+            if (inFlight.size() >= TRANSFER_WINDOW) await(inFlight.remove(0));
+        }
+        for (CompletableFuture<Packet> f : inFlight) await(f);
+        connection.call(new Packet.UploadFinish(id));
+        cacheAttachment(id, ciphertext); // our own copy, still encrypted
+        return new FileMessage(id, sealed.key(), sealed.digest(), data.length, name, mimeType, System.currentTimeMillis());
+    }
+
+    /**
+     * Downloads (or reads from the local cache), checks and decrypts a shared file.
+     *
+     * @throws SecurityException if the server returned something other than what the sender described
+     */
+    public byte[] downloadFile(FileMessage file) throws IOException, ApiException {
+        byte[] id = file.attachmentId();
+        byte[] ciphertext = cachedAttachment(id, file.ciphertextSize());
+        if (ciphertext == null) {
+            ciphertext = new byte[Math.toIntExact(file.ciphertextSize())];
+            List<CompletableFuture<Packet>> inFlight = new ArrayList<>();
+            List<Long> offsets = new ArrayList<>();
+            for (long offset = 0; offset < ciphertext.length; offset += Packet.MAX_CHUNK_BYTES) {
+                inFlight.add(connection.request(new Packet.FetchAttachment(id, offset)));
+                offsets.add(offset);
+                if (inFlight.size() >= TRANSFER_WINDOW) place(ciphertext, offsets.remove(0), await(inFlight.remove(0)));
+            }
+            while (!inFlight.isEmpty()) place(ciphertext, offsets.remove(0), await(inFlight.remove(0)));
+        }
+        byte[] plaintext = Attachments.open(ciphertext, file.key(), file.digest());
+        if (plaintext.length != file.size()) throw new SecurityException("File size does not match its description");
+        cacheAttachment(id, ciphertext);
+        return plaintext;
+    }
+
+    private static void place(byte[] target, long offset, Packet response) throws ApiException {
+        if (!(response instanceof Packet.AttachmentChunk chunk)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        byte[] data = chunk.data();
+        long expected = Math.min(Packet.MAX_CHUNK_BYTES, target.length - offset);
+        if (chunk.totalSize() != target.length || data.length != expected) {
+            throw new SecurityException("The server's copy has a different size than the sender described");
+        }
+        System.arraycopy(data, 0, target, (int) offset, data.length);
+    }
+
+    private static Packet await(CompletableFuture<Packet> future) throws IOException, ApiException {
+        try {
+            Packet p = future.get(ServerConnection.CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (p instanceof Packet.Error e) throw new ApiException(e.code(), e.message());
+            return p;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted", e);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new IOException("The server did not answer in time", e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            throw e.getCause() instanceof IOException io ? io : new IOException(e.getCause().getMessage(), e.getCause());
+        }
+    }
+
+    private Path attachmentFile(byte[] id) {
+        return dataDir.resolve("attachments").resolve(Attachments.hex(id));
+    }
+
+    /** Encrypted copies of files we sent or opened, so they need not be downloaded again. */
+    private void cacheAttachment(byte[] id, byte[] ciphertext) {
+        try {
+            Path file = attachmentFile(id);
+            if (Files.exists(file)) return;
+            Files.createDirectories(file.getParent());
+            Path tmp = Files.createTempFile(file.getParent(), "dl", ".tmp");
+            Files.write(tmp, ciphertext);
+            Files.move(tmp, file, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException ignored) {
+            // the cache is an optimisation
+        }
+    }
+
+    private byte[] cachedAttachment(byte[] id, long expectedSize) {
+        try {
+            Path file = attachmentFile(id);
+            if (Files.exists(file) && Files.size(file) == expectedSize) return Files.readAllBytes(file);
+        } catch (IOException ignored) {
+            // fall back to downloading
+        }
+        return null;
+    }
+
     // ------------------------------------------------------------------ groups
 
     public List<Packet.GroupInfo> refreshGroups() throws IOException, ApiException {
@@ -273,6 +413,10 @@ public final class ChatClient implements AutoCloseable {
      * @return members that were skipped because their key changed and is not yet verified
      */
     public List<String> sendGroupText(long groupId, String text) throws IOException, ApiException {
+        return sendGroupContent(groupId, CONTENT_CHAT, ChatMessage.text(text).encode());
+    }
+
+    private List<String> sendGroupContent(long groupId, int contentType, byte[] payload) throws IOException, ApiException {
         Packet.GroupInfo group = groups.get(groupId);
         if (group == null) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
         List<String> members = group.members().stream().map(Packet.Member::username).toList();
@@ -287,7 +431,7 @@ public final class ChatClient implements AutoCloseable {
                 listener.keyChanged(member);
             }
         }
-        byte[] plaintext = new Wire.Writer().u8(CONTENT_CHAT).bytes(ChatMessage.text(text).encode()).toByteArray();
+        byte[] plaintext = new Wire.Writer().u8(contentType).bytes(payload).toByteArray();
         connection.call(new Packet.SendGroupEnvelope(groupId, groupKeys.encrypt(groupId, plaintext)));
         return skipped;
     }
@@ -414,11 +558,12 @@ public final class ChatClient implements AutoCloseable {
             byte[] plaintext = messenger.decrypt(envelope.sender(), key, envelope.body());
             Wire.Reader r = new Wire.Reader(plaintext);
             int contentType = r.u8();
-            byte[] payload = r.bytes(ChatMessage.MAX_TEXT_BYTES + 256);
+            byte[] payload = r.bytes(MAX_CONTENT_BYTES);
             r.expectEnd();
             switch (contentType) {
                 case CONTENT_CHAT -> listener.message(envelope.sender(), ChatMessage.decode(payload), envelope.id());
                 case CONTENT_SENDER_KEY -> acceptSenderKey(envelope.sender(), payload);
+                case CONTENT_FILE -> listener.file(envelope.sender(), FileMessage.decode(payload), envelope.id());
                 default -> throw new ProtocolException("Unknown content type " + contentType);
             }
         } catch (KeyChangedException e) {
@@ -445,10 +590,16 @@ public final class ChatClient implements AutoCloseable {
         }
         byte[] plaintext = groupKeys.decrypt(envelope.groupId(), envelope.sender(), envelope.body());
         Wire.Reader r = new Wire.Reader(plaintext);
-        if (r.u8() != CONTENT_CHAT) throw new ProtocolException("Unknown group content");
-        ChatMessage message = ChatMessage.decode(r.bytes(ChatMessage.MAX_TEXT_BYTES + 64));
+        int contentType = r.u8();
+        byte[] payload = r.bytes(MAX_CONTENT_BYTES);
         r.expectEnd();
-        listener.groupMessage(envelope.groupId(), envelope.sender(), message, envelope.id());
+        switch (contentType) {
+            case CONTENT_CHAT -> listener.groupMessage(envelope.groupId(), envelope.sender(), ChatMessage.decode(payload),
+                    envelope.id());
+            case CONTENT_FILE -> listener.groupFile(envelope.groupId(), envelope.sender(), FileMessage.decode(payload),
+                    envelope.id());
+            default -> throw new ProtocolException("Unknown group content");
+        }
     }
 
     /** A sender key arrived over the pairwise channel; only accepted from a current member of that group. */

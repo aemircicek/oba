@@ -52,4 +52,43 @@ class HistoryTest {
             assertTrue(right.load("dm:efe", 1).get(0).text().contains("4711"));
         }
     }
+
+    @Test
+    void fileMessagesKeepTheirKeyEncryptedAtRest() throws Exception {
+        Path file = dir.resolve("h.db");
+        byte[] key = new byte[32];
+        java.util.Arrays.fill(key, (byte) 0x7e); // '~' repeated: easy to spot in a raw dump
+        com.emirchat.chat.FileMessage f = new com.emirchat.chat.FileMessage(new byte[16], key, new byte[32], 2048,
+                "bütçe-2026.xlsx", "application/vnd.ms-excel", 5);
+        try (History h = History.open(file, "pw", 1000)) {
+            h.add("dm:efe", "efe", "önce bir mesaj", 4, false, History.RECEIVED, 1);
+            h.addFile("dm:efe", "efe", f, 5, false, History.RECEIVED, 2);
+
+            List<History.Message> loaded = h.load("dm:efe", 10);
+            assertEquals(null, loaded.get(0).file());
+            assertEquals(f, loaded.get(1).file());
+            assertEquals("bütçe-2026.xlsx", loaded.get(1).text());
+            assertEquals("📎 bütçe-2026.xlsx", h.summaries().get(0).lastText());
+        }
+        for (Path p : Files.list(dir).toList()) {
+            String raw = new String(Files.readAllBytes(p), StandardCharsets.ISO_8859_1);
+            assertFalse(raw.contains("~~~~~~~~"), p + " contains the file key");
+            assertFalse(raw.contains("xlsx"), p + " contains the file name");
+        }
+    }
+
+    @Test
+    void historiesFromBeforeFileSupportAreUpgraded() throws Exception {
+        Path file = dir.resolve("old.db");
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + file);
+             java.sql.Statement s = c.createStatement()) {
+            s.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation TEXT NOT NULL, "
+                    + "sender TEXT NOT NULL, body BLOB NOT NULL, sent_at INTEGER NOT NULL, outgoing INTEGER NOT NULL, "
+                    + "status INTEGER NOT NULL, envelope_id INTEGER NOT NULL, unread INTEGER NOT NULL)");
+        }
+        try (History h = History.open(file, "pw", 1000)) {
+            h.add("dm:efe", "emir", "still works", 1, true, History.SENT, 0);
+            assertEquals("still works", h.load("dm:efe", 1).get(0).text());
+        }
+    }
 }

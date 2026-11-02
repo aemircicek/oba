@@ -252,6 +252,29 @@
 .bubble.own .bubble-text { -fx-text-fill: -sc-on-own-bubble; }
 .bubble.peer .bubble-text { -fx-text-fill: -sc-text; }
 .bubble-time { -fx-font-size: 10px; }
+
+/* Shared files */
+.file-card { -fx-spacing: 10; -fx-padding: 2 0 4 0; }
+.file-icon {
+    -fx-background-radius: 10;
+    -fx-min-width: 38; -fx-min-height: 38; -fx-max-width: 38; -fx-max-height: 38;
+}
+.bubble.own .file-icon { -fx-background-color: rgba(255, 255, 255, 0.18); }
+.bubble.peer .file-icon { -fx-background-color: -sc-accent-weak; }
+.file-name { -fx-font-size: 13px; -fx-font-weight: bold; }
+.bubble.own .file-name { -fx-text-fill: -sc-on-own-bubble; }
+.bubble.peer .file-name { -fx-text-fill: -sc-text; }
+.file-size { -fx-font-size: 11px; }
+.bubble.own .file-size { -fx-text-fill: -sc-own-time; }
+.bubble.peer .file-size { -fx-text-fill: -sc-text-3; }
+.file-preview { -fx-cursor: hand; }
+.attach {
+    -fx-background-color: transparent;
+    -fx-background-radius: 999;
+    -fx-min-width: 40; -fx-min-height: 40;
+    -fx-cursor: hand;
+}
+.attach:hover { -fx-background-color: -sc-surface-2; }
 .bubble.own .bubble-time { -fx-text-fill: -sc-own-time; }
 .bubble.peer .bubble-time { -fx-text-fill: -sc-text-3; }
 

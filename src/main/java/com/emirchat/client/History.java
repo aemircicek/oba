@@ -1,5 +1,6 @@
 package com.emirchat.client;
 
+import com.emirchat.chat.FileMessage;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -40,8 +41,17 @@ public final class History implements AutoCloseable {
     static final int KDF_ITERATIONS = 600_000;
     private static final SecureRandom RANDOM = new SecureRandom();
 
+    /** @param file the shared file for a file message (then {@code text} is its name), else null */
     public record Message(long id, String conversation, String sender, String text, long sentAt, boolean outgoing,
-                          int status, long envelopeId) {}
+                          int status, long envelopeId, FileMessage file) {
+        public Message(long id, String conversation, String sender, String text, long sentAt, boolean outgoing,
+                       int status, long envelopeId) {
+            this(id, conversation, sender, text, sentAt, outgoing, status, envelopeId, null);
+        }
+    }
+
+    private static final int KIND_TEXT = 0;
+    private static final int KIND_FILE = 1;
 
     public record Summary(String conversation, String lastSender, String lastText, long lastAt, int unread) {}
 
@@ -79,6 +89,11 @@ public final class History implements AutoCloseable {
                             unread       INTEGER NOT NULL
                         )""");
                 s.execute("CREATE INDEX IF NOT EXISTS messages_conv ON messages(conversation, id)");
+                boolean hasKind = false;
+                try (ResultSet cols = s.executeQuery("PRAGMA table_info(messages)")) {
+                    while (cols.next()) hasKind |= "kind".equals(cols.getString("name"));
+                }
+                if (!hasKind) s.execute("ALTER TABLE messages ADD COLUMN kind INTEGER NOT NULL DEFAULT 0");
             }
             byte[] salt = meta(db, "salt");
             if (salt == null) {
@@ -95,17 +110,30 @@ public final class History implements AutoCloseable {
 
     public synchronized long add(String conversation, String sender, String text, long sentAt, boolean outgoing,
                                  int status, long envelopeId) throws IOException {
+        return insert(conversation, sender, KIND_TEXT, text.getBytes(StandardCharsets.UTF_8), sentAt, outgoing, status,
+                envelopeId);
+    }
+
+    /** Stores a file message; its description (including the file key) is encrypted like texts. */
+    public synchronized long addFile(String conversation, String sender, FileMessage file, long sentAt, boolean outgoing,
+                                     int status, long envelopeId) throws IOException {
+        return insert(conversation, sender, KIND_FILE, file.encode(), sentAt, outgoing, status, envelopeId);
+    }
+
+    private long insert(String conversation, String sender, int kind, byte[] content, long sentAt, boolean outgoing,
+                        int status, long envelopeId) throws IOException {
         try (PreparedStatement ps = db.prepareStatement(
-                "INSERT INTO messages (conversation, sender, body, sent_at, outgoing, status, envelope_id, unread) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+                "INSERT INTO messages (conversation, sender, body, sent_at, outgoing, status, envelope_id, unread, kind) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
             ps.setString(1, conversation);
             ps.setString(2, sender);
-            ps.setBytes(3, seal(text));
+            ps.setBytes(3, seal(content));
             ps.setLong(4, sentAt);
             ps.setInt(5, outgoing ? 1 : 0);
             ps.setInt(6, status);
             ps.setLong(7, envelopeId);
             ps.setInt(8, outgoing ? 0 : 1);
+            ps.setInt(9, kind);
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 keys.next();
@@ -149,14 +177,17 @@ public final class History implements AutoCloseable {
     public synchronized List<Message> load(String conversation, int limit) throws IOException {
         List<Message> result = new ArrayList<>();
         try (PreparedStatement ps = db.prepareStatement(
-                "SELECT id, conversation, sender, body, sent_at, outgoing, status, envelope_id FROM messages "
+                "SELECT id, conversation, sender, body, sent_at, outgoing, status, envelope_id, kind FROM messages "
                         + "WHERE conversation = ? ORDER BY id DESC LIMIT ?")) {
             ps.setString(1, conversation);
             ps.setInt(2, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    result.add(0, new Message(rs.getLong(1), rs.getString(2), rs.getString(3), open(rs.getBytes(4)),
-                            rs.getLong(5), rs.getInt(6) == 1, rs.getInt(7), rs.getLong(8)));
+                    FileMessage file = rs.getInt(9) == KIND_FILE ? file(rs.getBytes(4)) : null;
+                    String text = rs.getInt(9) == KIND_FILE ? (file == null ? "[unreadable file]" : file.name())
+                            : text(rs.getBytes(4));
+                    result.add(0, new Message(rs.getLong(1), rs.getString(2), rs.getString(3), text,
+                            rs.getLong(5), rs.getInt(6) == 1, rs.getInt(7), rs.getLong(8), file));
                 }
             }
         } catch (SQLException e) {
@@ -170,12 +201,19 @@ public final class History implements AutoCloseable {
         List<Summary> result = new ArrayList<>();
         try (Statement s = db.createStatement(); ResultSet rs = s.executeQuery("""
                 SELECT m.conversation, m.sender, m.body, m.sent_at,
-                       (SELECT COUNT(*) FROM messages u WHERE u.conversation = m.conversation AND u.unread = 1)
+                       (SELECT COUNT(*) FROM messages u WHERE u.conversation = m.conversation AND u.unread = 1), m.kind
                 FROM messages m
                 WHERE m.id = (SELECT MAX(id) FROM messages x WHERE x.conversation = m.conversation)
                 ORDER BY m.id DESC""")) {
             while (rs.next()) {
-                result.add(new Summary(rs.getString(1), rs.getString(2), open(rs.getBytes(3)), rs.getLong(4), rs.getInt(5)));
+                String text;
+                if (rs.getInt(6) == KIND_FILE) {
+                    FileMessage file = file(rs.getBytes(3));
+                    text = "📎 " + (file == null ? "file" : file.name());
+                } else {
+                    text = text(rs.getBytes(3));
+                }
+                result.add(new Summary(rs.getString(1), rs.getString(2), text, rs.getLong(4), rs.getInt(5)));
             }
         } catch (SQLException e) {
             throw new IOException(e.getMessage(), e);
@@ -194,26 +232,42 @@ public final class History implements AutoCloseable {
 
     // ------------------------------------------------------------------ crypto
 
-    private byte[] seal(String text) throws IOException {
+    private byte[] seal(byte[] content) throws IOException {
         byte[] nonce = new byte[12];
         RANDOM.nextBytes(nonce);
         try {
             Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
             c.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(128, nonce));
-            byte[] ct = c.doFinal(text.getBytes(StandardCharsets.UTF_8));
+            byte[] ct = c.doFinal(content);
             return ByteBuffer.allocate(12 + ct.length).put(nonce).put(ct).array();
         } catch (GeneralSecurityException e) {
             throw new IOException("Could not encrypt history", e);
         }
     }
 
-    private String open(byte[] sealed) {
+    /** @return the decrypted content, or null if the row was tampered with or the password differs */
+    private byte[] open(byte[] sealed) {
         try {
             Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
             c.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, sealed, 0, 12));
-            return new String(c.doFinal(sealed, 12, sealed.length - 12), StandardCharsets.UTF_8);
-        } catch (GeneralSecurityException e) {
-            return "[unreadable]"; // tampered file or a different password
+            return c.doFinal(sealed, 12, sealed.length - 12);
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private String text(byte[] sealed) {
+        byte[] plain = open(sealed);
+        return plain == null ? "[unreadable]" : new String(plain, StandardCharsets.UTF_8);
+    }
+
+    private FileMessage file(byte[] sealed) {
+        byte[] plain = open(sealed);
+        if (plain == null) return null;
+        try {
+            return FileMessage.decode(plain);
+        } catch (java.net.ProtocolException e) {
+            return null;
         }
     }
 

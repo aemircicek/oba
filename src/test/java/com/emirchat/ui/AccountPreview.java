@@ -72,6 +72,34 @@ public final class AccountPreview {
         }
     }
 
+    /** A small floor-plan-like PNG drawn in code, so the preview needs no asset files. */
+    private static byte[] samplePlan() throws Exception {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(480, 300, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new java.awt.Color(0xF4F1EA));
+        g.fillRect(0, 0, 480, 300);
+        g.setColor(new java.awt.Color(0x2B3A55));
+        g.setStroke(new java.awt.BasicStroke(6));
+        g.drawRect(30, 30, 420, 240);
+        g.drawLine(250, 30, 250, 170);
+        g.drawLine(30, 170, 330, 170);
+        g.drawLine(330, 170, 330, 270);
+        g.setColor(new java.awt.Color(0x13824F));
+        g.setStroke(new java.awt.BasicStroke(3));
+        g.drawArc(230, 150, 40, 40, 0, 90);
+        g.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.BOLD, 16));
+        g.setColor(new java.awt.Color(0x2B3A55));
+        g.drawString("SALON", 110, 105);
+        g.drawString("YATAK ODASI", 300, 105);
+        g.drawString("MUTFAK", 140, 225);
+        g.drawString("BANYO", 360, 225);
+        g.dispose();
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        ImageIO.write(img, "png", bytes);
+        return bytes.toByteArray();
+    }
+
     public static void main(String[] args) throws Exception {
         out = Path.of(args[0]);
         theme = args.length > 1 ? args[1] : "dark";
@@ -149,6 +177,12 @@ public final class AccountPreview {
         efe.client.sendText("emir", "Harika, görüşürüz!");
         Thread.sleep(800);
         snap("05-dm");
+
+        // Encrypted files: an image (previewed inline) and a document
+        efe.client.sendFile("emir", "kat-plani.png", "image/png", samplePlan());
+        efe.client.sendFile("emir", "MobilCAD-sunum.pdf", "application/pdf", new byte[184_320]);
+        Thread.sleep(1500);
+        snap("05b-files");
 
         fx(() -> { click(find("#verify-badge")); return null; });
         waitFor("#contact-dialog");

@@ -31,7 +31,7 @@ import java.util.function.Consumer;
  */
 public final class ServerConnection implements AutoCloseable {
     private static final int CONNECT_TIMEOUT_MS = 10_000;
-    private static final long CALL_TIMEOUT_SECONDS = 30;
+    static final long CALL_TIMEOUT_SECONDS = 30;
     private static final String CLIENT_NAME = "client";
 
     private final Socket socket;

@@ -11,6 +11,8 @@ import java.sql.SQLException;
 import java.time.Clock;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The secure-chat server: accounts, and (in later stages) friends, groups and an offline queue
@@ -31,6 +33,11 @@ public final class ChatServer implements AutoCloseable {
     private final ClientConnection.Services services;
     private final ServerSocket listener;
     private final ExecutorService connections = Executors.newVirtualThreadPerTaskExecutor();
+    private final ScheduledExecutorService maintenance = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "server-maintenance");
+        t.setDaemon(true);
+        return t;
+    });
     private volatile boolean closed;
 
     public ChatServer(Config config) throws IOException {
@@ -43,10 +50,14 @@ public final class ChatServer implements AutoCloseable {
         }
         Clock clock = Clock.systemUTC();
         Presence presence = new Presence();
+        MessageService messages = new MessageService(db, presence, clock);
+        AttachmentService attachments = new AttachmentService(db, messages, config.dataDir().resolve("attachments"), clock);
         this.services = new ClientConnection.Services(identity,
                 new AccountService(db, config.pbkdf2Iterations(), clock),
-                new FriendService(db, presence, clock), new MessageService(db, presence, clock),
-                new GroupService(db, presence), presence);
+                new FriendService(db, presence, clock), messages,
+                new GroupService(db, presence), attachments, presence);
+        attachments.cleanUp();
+        maintenance.scheduleAtFixedRate(attachments::cleanUp, 1, 1, TimeUnit.HOURS);
         // Plain TCP by design: ClientConnection runs the authenticated handshake on every socket.
         // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         this.listener = new ServerSocket();
@@ -95,6 +106,7 @@ public final class ChatServer implements AutoCloseable {
             // shutting down
         }
         connections.shutdownNow();
+        maintenance.shutdownNow();
         try {
             db.close();
         } catch (SQLException | NullPointerException ignored) {

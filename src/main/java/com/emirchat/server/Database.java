@@ -16,7 +16,7 @@ import java.util.Optional;
  * synchronized: one connection, serialised writes, which is plenty for a self-hosted server.
  */
 final class Database implements AutoCloseable {
-    private static final int SCHEMA_VERSION = 4;
+    private static final int SCHEMA_VERSION = 5;
 
     record User(long id, String username, PasswordHasher.Hash password, byte[] identityKey) {}
 
@@ -130,6 +130,109 @@ final class Database implements AutoCloseable {
                 s.execute("ALTER TABLE envelopes ADD COLUMN group_id INTEGER NOT NULL DEFAULT 0");
                 s.execute("PRAGMA user_version = 4");
             }
+        }
+        if (version < 5) {
+            try (Statement s = connection.createStatement()) {
+                // Encrypted attachment blobs live in files; this table holds who may read them.
+                s.execute("""
+                        CREATE TABLE attachments (
+                            id           BLOB    PRIMARY KEY,
+                            uploader_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            recipient_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                            group_id     INTEGER NOT NULL,
+                            size         INTEGER NOT NULL,
+                            received     INTEGER NOT NULL,
+                            complete     INTEGER NOT NULL,
+                            created_at   INTEGER NOT NULL
+                        )""");
+                s.execute("CREATE INDEX attachments_uploader ON attachments(uploader_id)");
+                s.execute("PRAGMA user_version = 5");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ attachments
+
+    /** @param recipientId 0 for a group attachment */
+    record Attachment(byte[] id, long uploaderId, long recipientId, long groupId, long size, long received,
+                      boolean complete, long createdAt) {}
+
+    synchronized void createAttachment(byte[] id, long uploaderId, long recipientId, long groupId, long size, long now)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO attachments (id, uploader_id, recipient_id, group_id, size, received, complete, created_at) "
+                        + "VALUES (?, ?, ?, ?, ?, 0, 0, ?)")) {
+            ps.setBytes(1, id);
+            ps.setLong(2, uploaderId);
+            if (recipientId > 0) ps.setLong(3, recipientId); else ps.setNull(3, java.sql.Types.INTEGER);
+            ps.setLong(4, groupId);
+            ps.setLong(5, size);
+            ps.setLong(6, now);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized Optional<Attachment> attachment(byte[] id) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT id, uploader_id, recipient_id, group_id, size, received, complete, created_at FROM attachments WHERE id = ?")) {
+            ps.setBytes(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(new Attachment(rs.getBytes(1), rs.getLong(2), rs.getLong(3), rs.getLong(4), rs.getLong(5),
+                        rs.getLong(6), rs.getInt(7) == 1, rs.getLong(8)));
+            }
+        }
+    }
+
+    synchronized void setReceived(byte[] id, long received) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE attachments SET received = ? WHERE id = ?")) {
+            ps.setLong(1, received);
+            ps.setBytes(2, id);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized void markComplete(byte[] id) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE attachments SET complete = 1 WHERE id = ?")) {
+            ps.setBytes(1, id);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Bytes reserved by this user's stored and in-progress attachments. */
+    synchronized long attachmentBytes(long uploaderId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT COALESCE(SUM(size), 0) FROM attachments WHERE uploader_id = ?")) {
+            ps.setLong(1, uploaderId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+    }
+
+    synchronized int openUploads(long uploaderId) throws SQLException {
+        return count("SELECT COUNT(*) FROM attachments WHERE uploader_id = ? AND complete = 0", uploaderId);
+    }
+
+    /** Completed attachments created before {@code completeBefore}, and unfinished ones before {@code incompleteBefore}. */
+    synchronized List<byte[]> expiredAttachments(long completeBefore, long incompleteBefore) throws SQLException {
+        List<byte[]> result = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT id FROM attachments WHERE (complete = 1 AND created_at < ?) OR (complete = 0 AND created_at < ?)")) {
+            ps.setLong(1, completeBefore);
+            ps.setLong(2, incompleteBefore);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) result.add(rs.getBytes(1));
+            }
+        }
+        return result;
+    }
+
+    synchronized void deleteAttachment(byte[] id) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM attachments WHERE id = ?")) {
+            ps.setBytes(1, id);
+            ps.executeUpdate();
         }
     }
 

@@ -70,7 +70,12 @@ class ServerUnitTest {
         Packet[] packets = {
                 new Packet.Register("emir", "s3cret-pass"), new Packet.Login("efe", "pässwörd"),
                 new Packet.Ping(), new Packet.Ok(), new Packet.Pong(),
-                new Packet.Error(ErrorCode.USERNAME_TAKEN, "taken"), new Packet.LoggedIn("emir", true)};
+                new Packet.Error(ErrorCode.USERNAME_TAKEN, "taken"), new Packet.LoggedIn("emir", true),
+                new Packet.UploadStart(4096, "efe", 0), new Packet.UploadStart(4096, "", 7),
+                new Packet.UploadChunk(new byte[16], 32768, new byte[] {1, 2, 3}), new Packet.UploadFinish(new byte[16]),
+                new Packet.FetchAttachment(new byte[16], 65536), new Packet.UploadStarted(new byte[16]),
+                new Packet.AttachmentChunk(100_000, new byte[] {9, 8, 7}),
+                new Packet.Error(ErrorCode.ATTACHMENT_NOT_FOUND, "gone")};
         long id = 1;
         for (Packet p : packets) {
             Packet.Frame frame = Packet.decode(Packet.encode(id, p));

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (3.1.0)
+
+### Added
+- **Encrypted file and image sharing** in direct messages and groups, up to 25 MB per file. Each
+  file is encrypted with a fresh AES-256-GCM key on the sender's device; the server stores only
+  the ciphertext and lets only the recipient or current group members download it. The key and
+  the SHA-256 digest of the blob travel inside the end-to-end encrypted message, so the receiver
+  detects a swapped or modified blob. Images are previewed in the chat.
+- Server: attachment storage with per-user quota (250 MB), at most 3 uploads in progress, and
+  deletion after 30 days (unfinished uploads after an hour). Database schema version 5.
+- Terminal client: `file`, `gfile` and `save` commands.
+- 25 new tests (122 in total).
+
 ## 3.0.0 (2026-11-02)
 
 secure-chat becomes an end-to-end encrypted messenger with a server.
