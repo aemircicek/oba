@@ -56,6 +56,9 @@ final class SingleInstance implements AutoCloseable {
             if (sendToRunning(home, command, argument)) return null;
             throw new IOException("Scorpion is already running but does not answer.");
         }
+        // Loopback-only IPC between two starts of the app on this computer: it carries "show" or a file
+        // path plus a random token from an owner-only file, nothing secret, and never leaves the machine.
+        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         ServerSocket server = new ServerSocket(0, 5, InetAddress.getLoopbackAddress());
         byte[] secret = new byte[16];
         new SecureRandom().nextBytes(secret);
@@ -96,6 +99,8 @@ final class SingleInstance implements AutoCloseable {
     private static boolean sendToRunning(Path home, String command, String argument) {
         try {
             String[] portAndToken = Files.readString(home.resolve("app.port")).strip().split(" ");
+            // Loopback-only IPC (see acquire); nothing secret is sent.
+            // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
             try (Socket s = new Socket(InetAddress.getLoopbackAddress(), Integer.parseInt(portAndToken[0]));
                  OutputStream out = s.getOutputStream()) {
                 out.write((portAndToken[1] + " " + command + (argument == null ? "" : " " + argument) + "\n")
