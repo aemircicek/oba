@@ -32,6 +32,28 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         void problem(String text);
 
         void disconnected();
+
+        /** Disappearing messages that were just deleted from history. */
+        void messagesExpired(java.util.List<History.Expired> expired);
+
+        /** The disappearing-message timer of a conversation changed (by us or by someone else). */
+        void timerChanged(String conversation, String by, long seconds);
+    }
+
+    /** The timer choices offered in the app, in seconds (0 = off). */
+    static final long[] TIMER_CHOICES = {0, 5 * 60, 3600, 24 * 3600, 7 * 24 * 3600};
+
+    static String timerLabel(long seconds) {
+        if (seconds <= 0) return "Off";
+        if (seconds % (7 * 24 * 3600) == 0) return plural(seconds / (7 * 24 * 3600), "week");
+        if (seconds % (24 * 3600) == 0) return plural(seconds / (24 * 3600), "day");
+        if (seconds % 3600 == 0) return plural(seconds / 3600, "hour");
+        if (seconds % 60 == 0) return plural(seconds / 60, "minute");
+        return plural(seconds, "second");
+    }
+
+    private static String plural(long n, String unit) {
+        return n + " " + unit + (n == 1 ? "" : "s");
     }
 
     private final History history;
@@ -40,6 +62,12 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         t.setDaemon(true);
         return t;
     });
+    private final java.util.concurrent.ScheduledExecutorService sweeper =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "ui-expiry");
+                t.setDaemon(true);
+                return t;
+            });
     private final ExecutorService downloads = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "ui-download");
         t.setDaemon(true);
@@ -52,6 +80,36 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
     AccountSession(History history) {
         this.history = history;
+        sweeper.scheduleWithFixedDelay(this::deleteExpired, 0, 2, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /** Deletes disappearing messages whose time is up, with their cached files. */
+    void deleteExpired() {
+        try {
+            java.util.List<History.Expired> expired = history.deleteExpired(System.currentTimeMillis());
+            if (expired.isEmpty()) return;
+            ChatClient c = client;
+            for (History.Expired e : expired) {
+                if (e.file() != null && c != null) c.forgetFile(e.file());
+            }
+            fx(v -> v.messagesExpired(expired));
+        } catch (Exception ignored) {
+            // tried again in a moment
+        }
+    }
+
+    /** The current timer of a conversation, in seconds. */
+    long timer(String conversation) {
+        try {
+            return history.timer(conversation);
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
+    /** When a message stored now with this conversation's timer should disappear (0 = never). */
+    static long expiresAt(long now, long seconds) {
+        return seconds > 0 ? now + seconds * 1000 : 0;
     }
 
     void attach(ChatClient client) {
@@ -100,42 +158,59 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     // ------------------------------------------------------------------ ChatClient.Listener (inbox thread)
 
     @Override
-    public void message(String from, ChatMessage message, long envelopeId) {
-        store(dm(from), from, message, envelopeId);
+    public void message(String from, ChatMessage message, long envelopeId, long expireSeconds) {
+        store(dm(from), from, message, envelopeId, expireSeconds);
     }
 
     @Override
-    public void groupMessage(long groupId, String from, ChatMessage message, long envelopeId) {
-        store(group(groupId), from, message, envelopeId);
+    public void groupMessage(long groupId, String from, ChatMessage message, long envelopeId, long expireSeconds) {
+        store(group(groupId), from, message, envelopeId, expireSeconds);
     }
 
     @Override
-    public void file(String from, FileMessage file, long envelopeId) {
-        storeFile(dm(from), from, file, envelopeId);
+    public void file(String from, FileMessage file, long envelopeId, long expireSeconds) {
+        storeFile(dm(from), from, file, envelopeId, expireSeconds);
     }
 
     @Override
-    public void groupFile(long groupId, String from, FileMessage file, long envelopeId) {
-        storeFile(group(groupId), from, file, envelopeId);
+    public void groupFile(long groupId, String from, FileMessage file, long envelopeId, long expireSeconds) {
+        storeFile(group(groupId), from, file, envelopeId, expireSeconds);
     }
 
-    private void storeFile(String conversation, String from, FileMessage file, long envelopeId) {
+    @Override
+    public void timerChanged(String from, long groupId, long seconds) {
+        String conversation = groupId == 0 ? dm(from) : group(groupId);
         try {
-            long id = history.addFile(conversation, from, file, file.sentAtMillis(), false, History.RECEIVED, envelopeId);
+            history.setTimer(conversation, seconds);
+        } catch (IOException e) {
+            fx(v -> v.problem("Could not save the timer: " + e.getMessage()));
+            return;
+        }
+        fx(v -> v.timerChanged(conversation, from, seconds));
+    }
+
+    private void storeFile(String conversation, String from, FileMessage file, long envelopeId, long expireSeconds) {
+        try {
+            // A disappearing message's clock starts when it arrives (clocks of different devices may differ).
+            long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
+            long id = history.addFile(conversation, from, file, file.sentAtMillis(), false, History.RECEIVED, envelopeId,
+                    expiresAt);
             History.Message stored = new History.Message(id, conversation, from, file.name(), file.sentAtMillis(), false,
-                    History.RECEIVED, envelopeId, file);
+                    History.RECEIVED, envelopeId, file, expiresAt);
             fx(v -> v.messageStored(stored));
         } catch (IOException e) {
             fx(v -> v.problem("Could not save a file message: " + e.getMessage()));
         }
     }
 
-    private void store(String conversation, String from, ChatMessage message, long envelopeId) {
+    private void store(String conversation, String from, ChatMessage message, long envelopeId, long expireSeconds) {
         try {
             String text = TerminalSanitizer.sanitize(message.text());
-            long id = history.add(conversation, from, text, message.sentAtMillis(), false, History.RECEIVED, envelopeId);
+            long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
+            long id = history.add(conversation, from, text, message.sentAtMillis(), false, History.RECEIVED, envelopeId,
+                    expiresAt);
             History.Message stored = new History.Message(id, conversation, from, text, message.sentAtMillis(), false,
-                    History.RECEIVED, envelopeId);
+                    History.RECEIVED, envelopeId, null, expiresAt);
             fx(v -> v.messageStored(stored));
         } catch (IOException e) {
             fx(v -> v.problem("Could not save a message: " + e.getMessage()));
@@ -211,6 +286,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         ChatClient c = client;
         if (c != null) c.close();
         background.shutdownNow();
+        sweeper.shutdownNow();
         downloads.shutdownNow();
         history.close();
     }

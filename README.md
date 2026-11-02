@@ -53,6 +53,9 @@ java -jar secure-chat.jar gui --home ./bob
 - **Files and images**: send any file up to 25 MB to a friend or a group (📎 next to the message
   box). Each file is encrypted with its own key before it leaves your computer; images are
   previewed in the chat.
+- **Disappearing messages**: set a timer for a chat (5 minutes to 1 week) with the ⏱ button.
+  Everyone in the chat gets the same setting, and new messages and files are deleted from every
+  device's history that long after they arrive.
 - **Encrypted history**: messages are stored on disk encrypted under a key derived from your password.
 - Light and dark themes, following the system.
 
@@ -74,7 +77,7 @@ java -jar secure-chat.jar register --server localhost:5056 --username emir
 java -jar secure-chat.jar client   --server localhost:5056 --username emir
 ```
 
-`client` opens an interactive shell (`msg`, `file`, `save`, `friends`, `add`, `accept`, `group`, `gmsg`,
+`client` opens an interactive shell (`msg`, `file`, `save`, `timer`, `friends`, `add`, `accept`, `group`, `gmsg`,
 `verify`, `trust`, ...; type `help` for the full list). The desktop app and the terminal client
 use the same protocol and can talk to each other.
 
@@ -118,6 +121,7 @@ must not be able to read or forge messages. User devices are trusted.
 | File confidentiality | Each file is encrypted with a fresh AES-256-GCM key; the server stores only the ciphertext, and the key travels in an end-to-end encrypted message |
 | File integrity | The receiver checks the SHA-256 digest of the blob (sent end-to-end) before decrypting; GCM authenticates the content |
 | File access | Only the uploader and the named audience (the friend, or current group members) can download; unknown and forbidden ids look the same |
+| Disappearing messages | The timer travels inside the encrypted message; expired rows are deleted with SQLite `secure_delete` and cached files are removed |
 | Resource exhaustion | Frame and message size limits, offline queue and prekey caps, prekey-fetch rate limits, 25 MB per file, 250 MB of stored files per user |
 
 ### Direct messages: X3DH and the Double Ratchet
@@ -197,7 +201,7 @@ Users then authenticate with their password inside the channel. Low-order X25519
 
 ### Tests
 
-`mvn verify` runs 122 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 128 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -233,12 +237,15 @@ Honest notes on what this project does **not** do:
 - **One device per account.** Logging in on a new device replaces the old key.
 - **Keys at rest are not encrypted**: identity keys and ratchet sessions are protected only by
   owner-only file permissions (message history is encrypted).
+- **Disappearing messages rely on the other side's app.** They protect against a device being
+  lost or seized later, not against a recipient who takes a screenshot or runs a modified client.
+  The terminal client keeps no history at all.
 - **Registration reveals whether a username is taken.**
 - **Best-effort key wiping** only: the JVM may keep copies of key material in memory.
 
 ## Roadmap
 
-- Disappearing messages
+
 - Encrypting group names and descriptions with the group key
 - Passphrase-encrypted identity keys and session state
 - QR-code contact verification

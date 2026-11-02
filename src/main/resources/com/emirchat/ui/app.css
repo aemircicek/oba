@@ -275,6 +275,15 @@
     -fx-cursor: hand;
 }
 .attach:hover { -fx-background-color: -sc-surface-2; }
+
+/* Disappearing messages */
+.timer-button { -fx-background-color: transparent; -fx-background-radius: 999; -fx-padding: 4 10; -fx-text-fill: -sc-text-2; }
+.timer-button:hover { -fx-background-color: -sc-surface-2; }
+.timer-button.active { -fx-background-color: -sc-accent-weak; }
+.timer-button > .label { -fx-text-fill: -sc-text-2; -fx-font-size: 12px; -fx-font-weight: bold; }
+.timer-button.active > .label { -fx-text-fill: -sc-accent-text; }
+.timer-button .arrow-button { -fx-padding: 0; }
+.timer-button .arrow { -fx-padding: 0; -fx-shape: none; }
 .bubble.own .bubble-time { -fx-text-fill: -sc-own-time; }
 .bubble.peer .bubble-time { -fx-text-fill: -sc-text-3; }
 

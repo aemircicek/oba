@@ -41,14 +41,25 @@ public final class History implements AutoCloseable {
     static final int KDF_ITERATIONS = 600_000;
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    /** @param file the shared file for a file message (then {@code text} is its name), else null */
+    /**
+     * @param file      the shared file for a file message (then {@code text} is its name), else null
+     * @param expiresAt when a disappearing message is deleted (epoch millis), or 0
+     */
     public record Message(long id, String conversation, String sender, String text, long sentAt, boolean outgoing,
-                          int status, long envelopeId, FileMessage file) {
+                          int status, long envelopeId, FileMessage file, long expiresAt) {
         public Message(long id, String conversation, String sender, String text, long sentAt, boolean outgoing,
                        int status, long envelopeId) {
-            this(id, conversation, sender, text, sentAt, outgoing, status, envelopeId, null);
+            this(id, conversation, sender, text, sentAt, outgoing, status, envelopeId, null, 0);
+        }
+
+        public Message(long id, String conversation, String sender, String text, long sentAt, boolean outgoing,
+                       int status, long envelopeId, FileMessage file) {
+            this(id, conversation, sender, text, sentAt, outgoing, status, envelopeId, file, 0);
         }
     }
+
+    /** A disappearing message that was just deleted. */
+    public record Expired(long id, String conversation, FileMessage file) {}
 
     private static final int KIND_TEXT = 0;
     private static final int KIND_FILE = 1;
@@ -89,11 +100,17 @@ public final class History implements AutoCloseable {
                             unread       INTEGER NOT NULL
                         )""");
                 s.execute("CREATE INDEX IF NOT EXISTS messages_conv ON messages(conversation, id)");
-                boolean hasKind = false;
+                java.util.Set<String> columns = new java.util.HashSet<>();
                 try (ResultSet cols = s.executeQuery("PRAGMA table_info(messages)")) {
-                    while (cols.next()) hasKind |= "kind".equals(cols.getString("name"));
+                    while (cols.next()) columns.add(cols.getString("name"));
                 }
-                if (!hasKind) s.execute("ALTER TABLE messages ADD COLUMN kind INTEGER NOT NULL DEFAULT 0");
+                if (!columns.contains("kind")) s.execute("ALTER TABLE messages ADD COLUMN kind INTEGER NOT NULL DEFAULT 0");
+                if (!columns.contains("expires_at")) {
+                    s.execute("ALTER TABLE messages ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0");
+                }
+                s.execute("CREATE INDEX IF NOT EXISTS messages_expiry ON messages(expires_at) WHERE expires_at > 0");
+                s.execute("""
+                        CREATE TABLE IF NOT EXISTS timers (conversation TEXT PRIMARY KEY, seconds INTEGER NOT NULL)""");
             }
             byte[] salt = meta(db, "salt");
             if (salt == null) {
@@ -110,21 +127,79 @@ public final class History implements AutoCloseable {
 
     public synchronized long add(String conversation, String sender, String text, long sentAt, boolean outgoing,
                                  int status, long envelopeId) throws IOException {
+        return add(conversation, sender, text, sentAt, outgoing, status, envelopeId, 0);
+    }
+
+    /** @param expiresAt epoch millis when this disappearing message is deleted, or 0 to keep it */
+    public synchronized long add(String conversation, String sender, String text, long sentAt, boolean outgoing,
+                                 int status, long envelopeId, long expiresAt) throws IOException {
         return insert(conversation, sender, KIND_TEXT, text.getBytes(StandardCharsets.UTF_8), sentAt, outgoing, status,
-                envelopeId);
+                envelopeId, expiresAt);
     }
 
     /** Stores a file message; its description (including the file key) is encrypted like texts. */
     public synchronized long addFile(String conversation, String sender, FileMessage file, long sentAt, boolean outgoing,
                                      int status, long envelopeId) throws IOException {
-        return insert(conversation, sender, KIND_FILE, file.encode(), sentAt, outgoing, status, envelopeId);
+        return addFile(conversation, sender, file, sentAt, outgoing, status, envelopeId, 0);
+    }
+
+    public synchronized long addFile(String conversation, String sender, FileMessage file, long sentAt, boolean outgoing,
+                                     int status, long envelopeId, long expiresAt) throws IOException {
+        return insert(conversation, sender, KIND_FILE, file.encode(), sentAt, outgoing, status, envelopeId, expiresAt);
+    }
+
+    /** The disappearing-message timer of a conversation in seconds (0 = off). */
+    public synchronized long timer(String conversation) throws IOException {
+        try (PreparedStatement ps = db.prepareStatement("SELECT seconds FROM timers WHERE conversation = ?")) {
+            ps.setString(1, conversation);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+    }
+
+    public synchronized void setTimer(String conversation, long seconds) throws IOException {
+        try (PreparedStatement ps = db.prepareStatement(
+                "INSERT INTO timers (conversation, seconds) VALUES (?, ?) ON CONFLICT(conversation) DO UPDATE SET seconds = excluded.seconds")) {
+            ps.setString(1, conversation);
+            ps.setLong(2, seconds);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Deletes every disappearing message whose time has come (rows are overwritten on disk:
+     * {@code secure_delete} is on) and returns them, so their views and cached files can go too.
+     */
+    public synchronized List<Expired> deleteExpired(long now) throws IOException {
+        List<Expired> expired = new ArrayList<>();
+        try (PreparedStatement ps = db.prepareStatement(
+                "SELECT id, conversation, kind, body FROM messages WHERE expires_at > 0 AND expires_at <= ?")) {
+            ps.setLong(1, now);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    expired.add(new Expired(rs.getLong(1), rs.getString(2), rs.getInt(3) == KIND_FILE ? file(rs.getBytes(4)) : null));
+                }
+            }
+            try (PreparedStatement del = db.prepareStatement("DELETE FROM messages WHERE expires_at > 0 AND expires_at <= ?")) {
+                del.setLong(1, now);
+                del.executeUpdate();
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        return expired;
     }
 
     private long insert(String conversation, String sender, int kind, byte[] content, long sentAt, boolean outgoing,
-                        int status, long envelopeId) throws IOException {
+                        int status, long envelopeId, long expiresAt) throws IOException {
         try (PreparedStatement ps = db.prepareStatement(
-                "INSERT INTO messages (conversation, sender, body, sent_at, outgoing, status, envelope_id, unread, kind) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+                "INSERT INTO messages (conversation, sender, body, sent_at, outgoing, status, envelope_id, unread, kind, expires_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
             ps.setString(1, conversation);
             ps.setString(2, sender);
             ps.setBytes(3, seal(content));
@@ -134,6 +209,7 @@ public final class History implements AutoCloseable {
             ps.setLong(7, envelopeId);
             ps.setInt(8, outgoing ? 0 : 1);
             ps.setInt(9, kind);
+            ps.setLong(10, expiresAt);
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 keys.next();
@@ -177,7 +253,7 @@ public final class History implements AutoCloseable {
     public synchronized List<Message> load(String conversation, int limit) throws IOException {
         List<Message> result = new ArrayList<>();
         try (PreparedStatement ps = db.prepareStatement(
-                "SELECT id, conversation, sender, body, sent_at, outgoing, status, envelope_id, kind FROM messages "
+                "SELECT id, conversation, sender, body, sent_at, outgoing, status, envelope_id, kind, expires_at FROM messages "
                         + "WHERE conversation = ? ORDER BY id DESC LIMIT ?")) {
             ps.setString(1, conversation);
             ps.setInt(2, limit);
@@ -187,7 +263,7 @@ public final class History implements AutoCloseable {
                     String text = rs.getInt(9) == KIND_FILE ? (file == null ? "[unreadable file]" : file.name())
                             : text(rs.getBytes(4));
                     result.add(0, new Message(rs.getLong(1), rs.getString(2), rs.getString(3), text,
-                            rs.getLong(5), rs.getInt(6) == 1, rs.getInt(7), rs.getLong(8), file));
+                            rs.getLong(5), rs.getInt(6) == 1, rs.getInt(7), rs.getLong(8), file, rs.getLong(10)));
                 }
             }
         } catch (SQLException e) {

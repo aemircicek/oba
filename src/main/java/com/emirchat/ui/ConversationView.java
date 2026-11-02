@@ -23,6 +23,8 @@ import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.MenuButton;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
@@ -56,6 +58,7 @@ final class ConversationView {
     private final VBox messages = new VBox();
     private final ScrollPane scroller = new ScrollPane(messages);
     private final Map<Long, Label> statusLabels = new HashMap<>();
+    private final Map<Long, Node> rows = new HashMap<>();
     private final TextField input = new TextField();
     private String lastSender;
     private long lastAt;
@@ -153,7 +156,7 @@ final class ConversationView {
             members.setOnMouseClicked(e -> actions.openGroupInfo(groupId));
             titles.getChildren().addAll(UiKit.label(name, "h2"), members);
         }
-        header.getChildren().addAll(titles, UiKit.grow());
+        header.getChildren().addAll(titles, UiKit.grow(), timerButton());
         if (peer == null) {
             Button info = new Button("Group info");
             info.getStyleClass().add("small");
@@ -174,6 +177,70 @@ final class ConversationView {
             banner.setId("key-banner");
             top.getChildren().add(banner);
         }
+    }
+
+    /** Shows the disappearing-message timer and lets the user change it for everyone in the chat. */
+    private Node timerButton() {
+        long current = session.timer(conversation);
+        MenuButton button = new MenuButton(current > 0 ? AccountSession.timerLabel(current) : "");
+        button.setId("timer");
+        button.getStyleClass().addAll("small", "timer-button");
+        if (current > 0) button.getStyleClass().add("active");
+        button.setGraphic(Icons.of(Icons.CLOCK, 15, current > 0 ? "accent" : "muted"));
+        button.setTooltip(new Tooltip(current > 0
+                ? "Disappearing messages: new messages are deleted " + AccountSession.timerLabel(current).toLowerCase(java.util.Locale.ROOT) + " after they arrive"
+                : "Disappearing messages: off"));
+        for (long seconds : AccountSession.TIMER_CHOICES) {
+            MenuItem item = new MenuItem((seconds == current ? "✓ " : "   ") + AccountSession.timerLabel(seconds));
+            item.setId("timer-" + seconds);
+            item.setOnAction(e -> setTimer(seconds));
+            button.getItems().add(item);
+        }
+        return button;
+    }
+
+    private void setTimer(long seconds) {
+        if (seconds == session.timer(conversation)) return;
+        session.background().execute(() -> {
+            String problem = null;
+            try {
+                if (peer != null) {
+                    session.client().setTimer(peer, seconds);
+                } else {
+                    List<String> skipped = session.client().setGroupTimer(groupId, seconds);
+                    if (!skipped.isEmpty()) problem = "Not changed for " + String.join(", ", skipped) + " until their new key is verified.";
+                }
+                session.history().setTimer(conversation, seconds);
+            } catch (KeyChangedException e) {
+                problem = peer + "'s key changed. Verify it first.";
+            } catch (Exception e) {
+                problem = "Could not change the timer: " + e.getMessage();
+            }
+            String finalProblem = problem;
+            Platform.runLater(() -> {
+                if (finalProblem != null) systemLine(finalProblem, true);
+                timerChanged(session.client().username(), session.timer(conversation));
+            });
+        });
+    }
+
+    /** Someone (or we) changed the timer: note it in the chat and update the header. */
+    void timerChanged(String by, long seconds) {
+        String who = by.equals(session.client().username()) ? "You" : by;
+        systemLine(seconds > 0
+                ? who + " turned on disappearing messages. New messages disappear " + AccountSession.timerLabel(seconds) + " after they arrive."
+                : who + " turned off disappearing messages.", false);
+        refreshHeader();
+    }
+
+    /** Removes messages that disappeared. */
+    void remove(List<Long> ids) {
+        for (long id : ids) {
+            Node row = rows.remove(id);
+            if (row != null) messages.getChildren().remove(row);
+            statusLabels.remove(id);
+        }
+        if (!ids.isEmpty()) lastSender = null;
     }
 
     private Packet.GroupInfo group() {
@@ -217,6 +284,11 @@ final class ConversationView {
             body = text;
         }
         HBox meta = new HBox(5, UiKit.label(UiKit.clock(m.sentAt()), "bubble-time"));
+        if (m.expiresAt() > 0) {
+            Label timer = UiKit.label("⏱", "bubble-time");
+            Tooltip.install(timer, new Tooltip("Disappears at " + UiKit.clock(m.expiresAt())));
+            meta.getChildren().add(0, timer);
+        }
         meta.setAlignment(Pos.CENTER_RIGHT);
         if (own) {
             Label status = UiKit.label("", "bubble-status");
@@ -240,6 +312,7 @@ final class ConversationView {
         row.setAlignment(own ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
         row.setPadding(new Insets(continued ? 3 : 12, 0, 0, 0));
         messages.getChildren().add(row);
+        rows.put(m.id(), row);
         lastSender = m.sender();
         lastAt = m.sentAt();
     }
@@ -276,22 +349,24 @@ final class ConversationView {
         input.clear();
         String me = session.client().username();
         long now = System.currentTimeMillis();
+        long expire = session.timer(conversation);
+        long expiresAt = AccountSession.expiresAt(now, expire);
         long localId;
         try {
-            localId = session.history().add(conversation, me, text, now, true, History.PENDING, 0);
+            localId = session.history().add(conversation, me, text, now, true, History.PENDING, 0, expiresAt);
         } catch (IOException e) {
             return;
         }
-        append(new History.Message(localId, conversation, me, text, now, true, History.PENDING, 0));
+        append(new History.Message(localId, conversation, me, text, now, true, History.PENDING, 0, null, expiresAt));
         session.background().execute(() -> {
             int status;
             String problem = null;
             try {
                 if (peer != null) {
-                    long envelope = session.client().sendText(peer, text).id();
+                    long envelope = session.client().sendText(peer, text, expire).id();
                     status = session.sent(localId, envelope);
                 } else {
-                    List<String> skipped = session.client().sendGroupText(groupId, text);
+                    List<String> skipped = session.client().sendGroupText(groupId, text, expire);
                     status = session.sent(localId, 0);
                     if (!skipped.isEmpty()) problem = "Not sent to " + String.join(", ", skipped) + " until their new key is verified.";
                 }
@@ -371,6 +446,7 @@ final class ConversationView {
         row.setAlignment(Pos.CENTER_RIGHT);
         row.setPadding(new Insets(12, 0, 0, 0));
         messages.getChildren().add(row);
+        long expire = session.timer(conversation);
         session.background().execute(() -> {
             String problem = null;
             History.Message stored = null;
@@ -379,18 +455,20 @@ final class ConversationView {
                 String mime = mimeType(chosen.toPath());
                 String me = session.client().username();
                 if (peer != null) {
-                    ChatClient.SentFile sent = session.client().sendFile(peer, name, mime, data);
+                    ChatClient.SentFile sent = session.client().sendFile(peer, name, mime, data, expire);
+                    long expiresAt = AccountSession.expiresAt(System.currentTimeMillis(), expire);
                     long id = session.history().addFile(conversation, me, sent.file(), sent.file().sentAtMillis(), true,
-                            History.SENT, sent.envelopeId());
+                            History.SENT, sent.envelopeId(), expiresAt);
                     int status = session.sent(id, sent.envelopeId());
                     stored = new History.Message(id, conversation, me, name, sent.file().sentAtMillis(), true, status,
-                            sent.envelopeId(), sent.file());
+                            sent.envelopeId(), sent.file(), expiresAt);
                 } else {
-                    Map.Entry<FileMessage, List<String>> sent = session.client().sendGroupFile(groupId, name, mime, data);
+                    Map.Entry<FileMessage, List<String>> sent = session.client().sendGroupFile(groupId, name, mime, data, expire);
+                    long expiresAt = AccountSession.expiresAt(System.currentTimeMillis(), expire);
                     long id = session.history().addFile(conversation, me, sent.getKey(), sent.getKey().sentAtMillis(), true,
-                            History.SENT, 0);
+                            History.SENT, 0, expiresAt);
                     stored = new History.Message(id, conversation, me, name, sent.getKey().sentAtMillis(), true, History.SENT,
-                            0, sent.getKey());
+                            0, sent.getKey(), expiresAt);
                     if (!sent.getValue().isEmpty()) {
                         problem = "Not sent to " + String.join(", ", sent.getValue()) + " until their new key is verified.";
                     }

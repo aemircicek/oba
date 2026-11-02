@@ -35,6 +35,7 @@ final class ClientShell {
             "  gleave <id>        leave a group",
             "  file <user> <path> send an encrypted file  gfile <id> <path>  send a file to a group",
             "  save <n> <folder>  save received file number n",
+            "  timer <user|#id> <off|5m|1h|1d|1w>  disappearing messages for a chat",
             "  verify <user>      show the fingerprint to compare with your friend",
             "  trust <user>       accept a friend's new key after verifying it",
             "  help               this list               quit             leave");
@@ -159,6 +160,20 @@ final class ClientShell {
                             System.out.println("Saved " + target.toAbsolutePath() + ".");
                         }
                     }
+                    case "timer" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: timer <user|#group-id> <off|30s|5m|1h|1d|1w>");
+                        } else {
+                            long seconds = parseDuration(parts[2].strip());
+                            if (arg.startsWith("#")) {
+                                client.setGroupTimer(Long.parseLong(arg.substring(1)), seconds);
+                            } else {
+                                client.setTimer(arg, seconds);
+                            }
+                            System.out.println(seconds == 0 ? "Disappearing messages off."
+                                    : "Messages in that chat now disappear " + parts[2].strip() + " after they arrive (in the desktop app).");
+                        }
+                    }
                     case "help" -> System.out.println(HELP);
                     case "quit", "exit" -> {
                         client.close();
@@ -182,6 +197,23 @@ final class ClientShell {
         }
         client.close();
         return 0;
+    }
+
+    /** "off", or a number with s/m/h/d/w, e.g. 5m or 1d. */
+    static long parseDuration(String text) {
+        if (text.equalsIgnoreCase("off") || text.equals("0")) return 0;
+        long n = Long.parseLong(text.substring(0, text.length() - 1));
+        long unit = switch (Character.toLowerCase(text.charAt(text.length() - 1))) {
+            case 's' -> 1;
+            case 'm' -> 60;
+            case 'h' -> 3600;
+            case 'd' -> 86_400;
+            case 'w' -> 604_800;
+            default -> throw new NumberFormatException("unknown unit");
+        };
+        long seconds = Math.multiplyExact(n, unit);
+        if (seconds <= 0 || seconds > ChatClient.MAX_TIMER_SECONDS) throw new NumberFormatException("out of range");
+        return seconds;
     }
 
     private static String prompt(BufferedReader stdin) throws IOException {
@@ -232,6 +264,13 @@ final class ClientShell {
         @Override public void groupUpdated(Packet.GroupInfo g) {
             show("Group #" + g.id() + " " + g.name() + ": " + String.join(", ",
                     g.members().stream().map(Packet.Member::username).toList()));
+        }
+
+        @Override public void timerChanged(String from, long groupId, long seconds) {
+            String where = groupId == 0 ? "your chat" : "group #" + groupId;
+            show(from + (seconds == 0 ? " turned off disappearing messages in " + where + "."
+                    : " turned on disappearing messages in " + where + " (" + seconds + " s). This terminal keeps no history,"
+                    + " so nothing is stored here."));
         }
 
         @Override public void groupRemoved(long groupId) {

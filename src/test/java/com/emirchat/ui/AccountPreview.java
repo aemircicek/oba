@@ -184,6 +184,18 @@ public final class AccountPreview {
         Thread.sleep(1500);
         snap("05b-files");
 
+        // Disappearing messages: turn on a one-hour timer, then send a message
+        fx(() -> {
+            javafx.scene.control.MenuButton timer = (javafx.scene.control.MenuButton) find("#timer");
+            timer.getItems().stream().filter(i -> "timer-3600".equals(i.getId())).findFirst().orElseThrow().fire();
+            return null;
+        });
+        Thread.sleep(800);
+        type("Bu mesaj bir saat sonra iki tarafta da silinecek.");
+        efe.next();
+        Thread.sleep(500);
+        snap("05c-disappearing");
+
         fx(() -> { click(find("#verify-badge")); return null; });
         waitFor("#contact-dialog");
         pause();

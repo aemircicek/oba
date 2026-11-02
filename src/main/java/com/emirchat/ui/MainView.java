@@ -534,6 +534,20 @@ final class MainView implements AccountSession.View {
         onLogout.run();
     }
 
+    @Override
+    public void messagesExpired(List<History.Expired> expired) {
+        if (current != null) {
+            current.remove(expired.stream().filter(e -> e.conversation().equals(current.conversation()))
+                    .map(History.Expired::id).toList());
+        }
+        refreshSidebar();
+    }
+
+    @Override
+    public void timerChanged(String conversation, String by, long seconds) {
+        if (current != null && current.conversation().equals(conversation)) current.timerChanged(by, seconds);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /** Runs a network call off the UI thread; shows errors in the open conversation or a dialog. */

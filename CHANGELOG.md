@@ -10,8 +10,12 @@
   detects a swapped or modified blob. Images are previewed in the chat.
 - Server: attachment storage with per-user quota (250 MB), at most 3 uploads in progress, and
   deletion after 30 days (unfinished uploads after an hour). Database schema version 5.
-- Terminal client: `file`, `gfile` and `save` commands.
-- 25 new tests (122 in total).
+- **Disappearing messages**: a per-chat timer (5 minutes to 1 week in the app, up to 4 weeks in
+  the protocol) that every participant receives end-to-end encrypted. Messages and files sent
+  with a timer are deleted from local history that long after they arrive, together with cached
+  attachment copies.
+- Terminal client: `file`, `gfile`, `save` and `timer` commands.
+- 31 new tests (128 in total).
 
 ## 3.0.0 (2026-11-02)
 

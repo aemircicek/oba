@@ -41,6 +41,12 @@ public final class ChatClient implements AutoCloseable {
     private static final int CONTENT_CHAT = 1;
     private static final int CONTENT_SENDER_KEY = 2;
     private static final int CONTENT_FILE = 3;
+    /** Sets the conversation's disappearing-message timer: i64 seconds (0 = off). */
+    private static final int CONTENT_TIMER = 4;
+    /** Wraps a chat or file message that disappears: i64 seconds ‖ u8 inner type ‖ bytes inner payload. */
+    private static final int CONTENT_EXPIRING = 5;
+    /** Longest disappearing-message timer accepted (four weeks). */
+    public static final long MAX_TIMER_SECONDS = 28L * 24 * 3600;
     private static final int MAX_CONTENT_BYTES = ChatMessage.MAX_TEXT_BYTES + 256;
     /** Upload/download requests kept in flight at once (the server answers them in order). */
     private static final int TRANSFER_WINDOW = 8;
@@ -74,6 +80,28 @@ public final class ChatClient implements AutoCloseable {
         default void file(String from, FileMessage file, long envelopeId) {}
 
         default void groupFile(long groupId, String from, FileMessage file, long envelopeId) {}
+
+        // Disappearing messages: expireSeconds > 0 means the message should be deleted that many
+        // seconds after it arrives. The defaults forward to the plain callbacks.
+
+        default void message(String from, ChatMessage message, long envelopeId, long expireSeconds) {
+            message(from, message, envelopeId);
+        }
+
+        default void groupMessage(long groupId, String from, ChatMessage message, long envelopeId, long expireSeconds) {
+            groupMessage(groupId, from, message, envelopeId);
+        }
+
+        default void file(String from, FileMessage file, long envelopeId, long expireSeconds) {
+            file(from, file, envelopeId);
+        }
+
+        default void groupFile(long groupId, String from, FileMessage file, long envelopeId, long expireSeconds) {
+            groupFile(groupId, from, file, envelopeId);
+        }
+
+        /** Someone changed the disappearing-message timer of a DM (groupId 0) or a group. */
+        default void timerChanged(String from, long groupId, long seconds) {}
     }
 
     private final ServerConnection connection;
@@ -235,7 +263,45 @@ public final class ChatClient implements AutoCloseable {
 
     /** Encrypts and sends a text message to a friend. */
     public Packet.EnvelopeAccepted sendText(String friend, String text) throws IOException, ApiException, KeyChangedException {
-        return sendPairwise(friend, CONTENT_CHAT, ChatMessage.text(text).encode());
+        return sendText(friend, text, 0);
+    }
+
+    /** @param expireSeconds 0, or how long after arrival the message disappears */
+    public Packet.EnvelopeAccepted sendText(String friend, String text, long expireSeconds)
+            throws IOException, ApiException, KeyChangedException {
+        return sendPairwise(friend, expiring(CONTENT_CHAT, ChatMessage.text(text).encode(), expireSeconds));
+    }
+
+    /** Sets the disappearing-message timer for both sides of a DM (0 turns it off). */
+    public Packet.EnvelopeAccepted setTimer(String friend, long seconds) throws IOException, ApiException, KeyChangedException {
+        return sendPairwise(friend, new Content(CONTENT_TIMER, timerPayload(seconds)));
+    }
+
+    /** Sets the disappearing-message timer for every member of a group. */
+    public List<String> setGroupTimer(long groupId, long seconds) throws IOException, ApiException {
+        return sendGroupContent(groupId, new Content(CONTENT_TIMER, timerPayload(seconds)));
+    }
+
+    private record Content(int type, byte[] payload) {}
+
+    private static Content expiring(int type, byte[] payload, long expireSeconds) {
+        checkTimer(expireSeconds);
+        if (expireSeconds == 0) return new Content(type, payload);
+        return new Content(CONTENT_EXPIRING, new Wire.Writer().i64(expireSeconds).u8(type).bytes(payload).toByteArray());
+    }
+
+    private static byte[] timerPayload(long seconds) {
+        checkTimer(seconds);
+        return new Wire.Writer().i64(seconds).toByteArray();
+    }
+
+    private static void checkTimer(long seconds) {
+        if (seconds < 0 || seconds > MAX_TIMER_SECONDS) throw new IllegalArgumentException("Invalid timer");
+    }
+
+    private Packet.EnvelopeAccepted sendPairwise(String user, Content content)
+            throws IOException, ApiException, KeyChangedException {
+        return sendPairwise(user, content.type(), content.payload());
     }
 
     private Packet.EnvelopeAccepted sendPairwise(String user, int contentType, byte[] payload)
@@ -254,9 +320,15 @@ public final class ChatClient implements AutoCloseable {
     /** Encrypts a file, uploads the ciphertext, and sends its key to a friend end-to-end. */
     public SentFile sendFile(String friend, String name, String mimeType, byte[] data)
             throws IOException, ApiException, KeyChangedException {
+        return sendFile(friend, name, mimeType, data, 0);
+    }
+
+    public SentFile sendFile(String friend, String name, String mimeType, byte[] data, long expireSeconds)
+            throws IOException, ApiException, KeyChangedException {
+        checkTimer(expireSeconds);
         pinnedKey(friend); // refuse before uploading if their key changed
         FileMessage file = upload(data, name, mimeType, friend, 0);
-        return new SentFile(file, sendPairwise(friend, CONTENT_FILE, file.encode()).id());
+        return new SentFile(file, sendPairwise(friend, expiring(CONTENT_FILE, file.encode(), expireSeconds)).id());
     }
 
     /**
@@ -266,9 +338,24 @@ public final class ChatClient implements AutoCloseable {
      */
     public Map.Entry<FileMessage, List<String>> sendGroupFile(long groupId, String name, String mimeType, byte[] data)
             throws IOException, ApiException {
+        return sendGroupFile(groupId, name, mimeType, data, 0);
+    }
+
+    public Map.Entry<FileMessage, List<String>> sendGroupFile(long groupId, String name, String mimeType, byte[] data,
+                                                              long expireSeconds) throws IOException, ApiException {
+        checkTimer(expireSeconds);
         if (!groups.containsKey(groupId)) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
         FileMessage file = upload(data, name, mimeType, "", groupId);
-        return Map.entry(file, sendGroupContent(groupId, CONTENT_FILE, file.encode()));
+        return Map.entry(file, sendGroupContent(groupId, expiring(CONTENT_FILE, file.encode(), expireSeconds)));
+    }
+
+    /** Deletes the local encrypted copy of a file (after its message disappeared). */
+    public void forgetFile(FileMessage file) {
+        try {
+            Files.deleteIfExists(attachmentFile(file.attachmentId()));
+        } catch (IOException ignored) {
+            // the copy is encrypted under a key that no longer exists anywhere
+        }
     }
 
     private FileMessage upload(byte[] data, String name, String mimeType, String recipient, long groupId)
@@ -413,10 +500,16 @@ public final class ChatClient implements AutoCloseable {
      * @return members that were skipped because their key changed and is not yet verified
      */
     public List<String> sendGroupText(long groupId, String text) throws IOException, ApiException {
-        return sendGroupContent(groupId, CONTENT_CHAT, ChatMessage.text(text).encode());
+        return sendGroupText(groupId, text, 0);
     }
 
-    private List<String> sendGroupContent(long groupId, int contentType, byte[] payload) throws IOException, ApiException {
+    public List<String> sendGroupText(long groupId, String text, long expireSeconds) throws IOException, ApiException {
+        return sendGroupContent(groupId, expiring(CONTENT_CHAT, ChatMessage.text(text).encode(), expireSeconds));
+    }
+
+    private List<String> sendGroupContent(long groupId, Content content) throws IOException, ApiException {
+        int contentType = content.type();
+        byte[] payload = content.payload();
         Packet.GroupInfo group = groups.get(groupId);
         if (group == null) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
         List<String> members = group.members().stream().map(Packet.Member::username).toList();
@@ -561,9 +654,9 @@ public final class ChatClient implements AutoCloseable {
             byte[] payload = r.bytes(MAX_CONTENT_BYTES);
             r.expectEnd();
             switch (contentType) {
-                case CONTENT_CHAT -> listener.message(envelope.sender(), ChatMessage.decode(payload), envelope.id());
+                case CONTENT_CHAT, CONTENT_FILE, CONTENT_EXPIRING, CONTENT_TIMER ->
+                        deliver(envelope.sender(), 0, contentType, payload, envelope.id());
                 case CONTENT_SENDER_KEY -> acceptSenderKey(envelope.sender(), payload);
-                case CONTENT_FILE -> listener.file(envelope.sender(), FileMessage.decode(payload), envelope.id());
                 default -> throw new ProtocolException("Unknown content type " + contentType);
             }
         } catch (KeyChangedException e) {
@@ -594,11 +687,43 @@ public final class ChatClient implements AutoCloseable {
         byte[] payload = r.bytes(MAX_CONTENT_BYTES);
         r.expectEnd();
         switch (contentType) {
-            case CONTENT_CHAT -> listener.groupMessage(envelope.groupId(), envelope.sender(), ChatMessage.decode(payload),
-                    envelope.id());
-            case CONTENT_FILE -> listener.groupFile(envelope.groupId(), envelope.sender(), FileMessage.decode(payload),
-                    envelope.id());
+            case CONTENT_CHAT, CONTENT_FILE, CONTENT_EXPIRING, CONTENT_TIMER ->
+                    deliver(envelope.sender(), envelope.groupId(), contentType, payload, envelope.id());
             default -> throw new ProtocolException("Unknown group content");
+        }
+    }
+
+    /** Hands a decrypted chat, file or timer message to the listener (groupId 0 for a DM). */
+    private void deliver(String from, long groupId, int contentType, byte[] payload, long envelopeId) throws ProtocolException {
+        long expire = 0;
+        if (contentType == CONTENT_TIMER) {
+            Wire.Reader r = new Wire.Reader(payload);
+            long seconds = r.i64();
+            r.expectEnd();
+            if (seconds < 0 || seconds > MAX_TIMER_SECONDS) throw new ProtocolException("Invalid timer");
+            listener.timerChanged(from, groupId, seconds);
+            return;
+        }
+        if (contentType == CONTENT_EXPIRING) {
+            Wire.Reader r = new Wire.Reader(payload);
+            expire = r.i64();
+            contentType = r.u8();
+            payload = r.bytes(MAX_CONTENT_BYTES);
+            r.expectEnd();
+            if (expire <= 0 || expire > MAX_TIMER_SECONDS) throw new ProtocolException("Invalid timer");
+        }
+        switch (contentType) {
+            case CONTENT_CHAT -> {
+                ChatMessage m = ChatMessage.decode(payload);
+                if (groupId == 0) listener.message(from, m, envelopeId, expire);
+                else listener.groupMessage(groupId, from, m, envelopeId, expire);
+            }
+            case CONTENT_FILE -> {
+                FileMessage f = FileMessage.decode(payload);
+                if (groupId == 0) listener.file(from, f, envelopeId, expire);
+                else listener.groupFile(groupId, from, f, envelopeId, expire);
+            }
+            default -> throw new ProtocolException("Unknown content type " + contentType);
         }
     }
 

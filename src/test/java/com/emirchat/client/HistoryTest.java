@@ -78,6 +78,42 @@ class HistoryTest {
     }
 
     @Test
+    void disappearingMessagesAreDeletedOnTime() throws Exception {
+        try (History h = History.open(dir.resolve("h.db"), "pw", 1000)) {
+            com.emirchat.chat.FileMessage f = new com.emirchat.chat.FileMessage(new byte[16], new byte[32], new byte[32],
+                    10, "foto.png", "image/png", 1);
+            h.add("dm:efe", "efe", "kalıcı", 1, false, History.RECEIVED, 1);
+            long soon = h.add("dm:efe", "efe", "5 dakika sonra silinir", 2, false, History.RECEIVED, 2, 10_000);
+            long file = h.addFile("dm:efe", "efe", f, 3, false, History.RECEIVED, 3, 20_000);
+            h.add("g:1", "ayse", "bir gün", 4, false, History.RECEIVED, 4, 90_000);
+
+            assertEquals(10_000, h.load("dm:efe", 10).get(1).expiresAt());
+            assertTrue(h.deleteExpired(9_999).isEmpty(), "nothing is due yet");
+
+            List<History.Expired> gone = h.deleteExpired(20_000);
+            assertEquals(List.of(soon, file), gone.stream().map(History.Expired::id).toList());
+            assertEquals(f, gone.get(1).file(), "the file is reported so its cached copy can be deleted");
+            assertEquals(List.of("kalıcı"), h.load("dm:efe", 10).stream().map(History.Message::text).toList());
+            assertEquals(1, h.load("g:1", 10).size());
+        }
+    }
+
+    @Test
+    void timersArePerConversationAndPersist() throws Exception {
+        Path file = dir.resolve("h.db");
+        try (History h = History.open(file, "pw", 1000)) {
+            assertEquals(0, h.timer("dm:efe"));
+            h.setTimer("dm:efe", 3600);
+            h.setTimer("g:2", 300);
+            h.setTimer("g:2", 0);
+        }
+        try (History h = History.open(file, "pw", 1000)) {
+            assertEquals(3600, h.timer("dm:efe"));
+            assertEquals(0, h.timer("g:2"));
+        }
+    }
+
+    @Test
     void historiesFromBeforeFileSupportAreUpgraded() throws Exception {
         Path file = dir.resolve("old.db");
         try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + file);
