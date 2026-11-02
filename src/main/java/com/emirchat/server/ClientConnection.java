@@ -153,6 +153,22 @@ final class ClientConnection {
                 services.groups().add(me(), a.groupId(), a.username());
                 yield new Packet.Ok();
             }
+            case Packet.CreateCommunity c -> services.groups().createCommunity(me());
+            case Packet.CreateChannel c -> services.groups().createChannel(me(), c.communityId());
+            case Packet.DeleteChannel d -> {
+                services.groups().deleteChannel(me(), d.channelId());
+                yield new Packet.Ok();
+            }
+            case Packet.SetAdmin s -> {
+                services.groups().setAdmin(me(), s.communityId(), s.username(), s.admin());
+                yield new Packet.Ok();
+            }
+            case Packet.CreateInvite i -> services.groups().createInvite(me(), i.communityId(), i.maxUses(), i.hours());
+            case Packet.JoinCommunity j -> services.groups().join(me(), j.code());
+            case Packet.RevokeInvites r -> {
+                services.groups().revokeInvites(me(), r.communityId());
+                yield new Packet.Ok();
+            }
             case Packet.RenameGroup r -> {
                 services.groups().rename(me(), r.groupId(), r.sealedName());
                 yield new Packet.Ok();

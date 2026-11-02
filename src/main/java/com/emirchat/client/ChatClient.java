@@ -688,9 +688,84 @@ public final class ChatClient implements AutoCloseable {
         if (clean.isEmpty() || clean.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > GroupNames.MAX_NAME_BYTES) {
             throw new ApiException(ErrorCode.INVALID_REQUEST, "Group names are 1-" + GroupNames.MAX_NAME_BYTES + " bytes.");
         }
-        if (!groupNames.hasKey(groupId)) groupNames.rotate(groupId);
+        if (!groupNames.hasKey(groupId)) groupNames.rotateAbove(groupId, GroupNames.versionOf(g.sealedName()));
         connection.call(new Packet.RenameGroup(groupId, groupNames.seal(groupId, clean)));
         distributeNameKey(g);
+    }
+
+    // ------------------------------------------------------------------ communities
+
+    /** A new community (with only us in it); its name is encrypted like a group's. */
+    public Packet.GroupInfo createCommunity(String name) throws IOException, ApiException {
+        String clean = checkName(name);
+        Packet response = connection.call(new Packet.CreateCommunity());
+        if (!(response instanceof Packet.GroupInfo created)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        return nameNew(created, clean);
+    }
+
+    /** A new channel in a community we own or administer. */
+    public Packet.GroupInfo createChannel(long communityId, String name) throws IOException, ApiException {
+        String clean = checkName(name);
+        Packet response = connection.call(new Packet.CreateChannel(communityId));
+        if (!(response instanceof Packet.GroupInfo created)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        return nameNew(created, clean);
+    }
+
+    private Packet.GroupInfo nameNew(Packet.GroupInfo created, String name) throws IOException, ApiException {
+        groupNames.rotate(created.id());
+        byte[] sealed = groupNames.seal(created.id(), name);
+        connection.call(new Packet.RenameGroup(created.id(), sealed));
+        Packet.GroupInfo g = new Packet.GroupInfo(created.id(), "", created.owner(), created.members(), sealed,
+                created.kind(), created.parentId(), created.position(), created.admins());
+        remember(g);
+        distributeNameKey(g);
+        return groups.get(g.id());
+    }
+
+    private static String checkName(String name) throws ApiException {
+        String clean = name == null ? "" : name.strip();
+        if (clean.isEmpty() || clean.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > GroupNames.MAX_NAME_BYTES) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST, "Names are 1-" + GroupNames.MAX_NAME_BYTES + " bytes.");
+        }
+        return clean;
+    }
+
+    public void deleteChannel(long channelId) throws IOException, ApiException {
+        connection.call(new Packet.DeleteChannel(channelId));
+    }
+
+    public void setAdmin(long communityId, String user, boolean admin) throws IOException, ApiException {
+        connection.call(new Packet.SetAdmin(communityId, user, admin));
+    }
+
+    /** @return the invite code (shown once; the server keeps only its hash) */
+    public String createInvite(long communityId, int maxUses, int hours) throws IOException, ApiException {
+        Packet response = connection.call(new Packet.CreateInvite(communityId, maxUses, hours));
+        if (!(response instanceof Packet.InviteCreated created)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        return created.code();
+    }
+
+    public void revokeInvites(long communityId) throws IOException, ApiException {
+        connection.call(new Packet.RevokeInvites(communityId));
+    }
+
+    /** Joins a community with an invite code; its channels arrive as group updates. */
+    public Packet.GroupInfo joinCommunity(String code) throws IOException, ApiException {
+        Packet response = connection.call(new Packet.JoinCommunity(code));
+        if (!(response instanceof Packet.GroupInfo g)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        remember(g);
+        return groups.get(g.id());
+    }
+
+    /** The channels of a community we are in (the community itself first: it is the general channel). */
+    public List<Packet.GroupInfo> channels(long communityId) {
+        List<Packet.GroupInfo> result = new ArrayList<>();
+        Packet.GroupInfo root = groups.get(communityId);
+        if (root != null) result.add(root);
+        groups.values().stream().filter(g -> g.isChannel() && g.parentId() == communityId)
+                .sorted(java.util.Comparator.comparingInt(Packet.GroupInfo::position).thenComparingLong(Packet.GroupInfo::id))
+                .forEach(result::add);
+        return result;
     }
 
     /**
@@ -699,12 +774,13 @@ public final class ChatClient implements AutoCloseable {
      * who lack it. Other members do nothing here.
      */
     private void maintainGroupName(Packet.GroupInfo g, boolean someoneLeft) {
-        if (!g.owner().equals(username)) return;
+        boolean owner = g.owner().equals(username);
+        if (!owner && !g.canManage(username)) return; // community admins hand out keys they hold, too
         try {
             byte[] sealed = g.sealedName();
             String plain = sealed.length > 0 ? groupNames.open(g.id(), sealed) : legacyName(g);
             if (plain == null || plain.isEmpty()) return; // a name we cannot read cannot be re-encrypted
-            if (sealed.length == 0 || someoneLeft || !groupNames.hasKey(g.id())) {
+            if (owner && (sealed.length == 0 || someoneLeft || !groupNames.hasKey(g.id()))) {
                 groupNames.rotate(g.id());
                 connection.call(new Packet.RenameGroup(g.id(), groupNames.seal(g.id(), plain)));
             }
@@ -730,11 +806,11 @@ public final class ChatClient implements AutoCloseable {
     private void acceptGroupNameKey(String sender, byte[] distribution) throws IOException, ApiException {
         long groupId = GroupNames.groupOf(distribution);
         Packet.GroupInfo group = groups.get(groupId);
-        if (group == null || !group.owner().equals(sender)) {
+        if (group == null || !group.canManage(sender)) {
             refreshGroups();
             group = groups.get(groupId);
         }
-        if (group == null || !group.owner().equals(sender)) {
+        if (group == null || !group.canManage(sender)) {
             throw new SecurityException(sender + " sent a name key for a group they do not administer");
         }
         if (groupNames.accept(groupId, distribution)) {

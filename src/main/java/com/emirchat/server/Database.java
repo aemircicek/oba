@@ -16,7 +16,7 @@ import java.util.Optional;
  * synchronized: one connection, serialised writes, which is plenty for a self-hosted server.
  */
 final class Database implements AutoCloseable {
-    private static final int SCHEMA_VERSION = 6;
+    private static final int SCHEMA_VERSION = 7;
 
     record User(long id, String username, PasswordHasher.Hash password, byte[] identityKey) {}
 
@@ -156,6 +156,32 @@ final class Database implements AutoCloseable {
                 s.execute("PRAGMA user_version = 6");
             }
         }
+        if (version < 7) {
+            try (Statement s = connection.createStatement()) {
+                // Communities: a root group (kind 1) with channels (kind 2, parent_id = root).
+                s.execute("ALTER TABLE groups_ ADD COLUMN kind INTEGER NOT NULL DEFAULT 0");
+                s.execute("ALTER TABLE groups_ ADD COLUMN parent_id INTEGER NOT NULL DEFAULT 0");
+                s.execute("ALTER TABLE groups_ ADD COLUMN position INTEGER NOT NULL DEFAULT 0");
+                s.execute("CREATE INDEX groups_parent ON groups_(parent_id)");
+                s.execute("""
+                        CREATE TABLE community_admins (
+                            root_id INTEGER NOT NULL REFERENCES groups_(id) ON DELETE CASCADE,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            PRIMARY KEY (root_id, user_id)
+                        )""");
+                // Only a hash of each invite code is stored: the database alone cannot be used to join.
+                s.execute("""
+                        CREATE TABLE invites (
+                            code_hash  BLOB    PRIMARY KEY,
+                            root_id    INTEGER NOT NULL REFERENCES groups_(id) ON DELETE CASCADE,
+                            created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            expires_at INTEGER NOT NULL,
+                            max_uses   INTEGER NOT NULL,
+                            uses       INTEGER NOT NULL
+                        )""");
+                s.execute("PRAGMA user_version = 7");
+            }
+        }
     }
 
     // ------------------------------------------------------------------ attachments
@@ -245,8 +271,140 @@ final class Database implements AutoCloseable {
 
     // ------------------------------------------------------------------ groups
 
-    /** @param name plaintext name of a group from before names were encrypted, else empty */
-    record Group(long id, String name, long ownerId, byte[] sealedName) {}
+    /**
+     * @param name plaintext name of a group from before names were encrypted, else empty
+     * @param kind 0 group, 1 community, 2 channel of the community {@code parentId}
+     */
+    record Group(long id, String name, long ownerId, byte[] sealedName, int kind, long parentId, int position) {
+        Group(long id, String name, long ownerId, byte[] sealedName) {
+            this(id, name, ownerId, sealedName, 0, 0, 0);
+        }
+
+        boolean isCommunity() { return kind == 1; }
+
+        boolean isChannel() { return kind == 2; }
+
+        /** The community this group belongs to (itself for a community), or 0 for a plain group. */
+        long root() { return kind == 1 ? id : kind == 2 ? parentId : 0; }
+    }
+
+    static final int KIND_GROUP = 0;
+    static final int KIND_COMMUNITY = 1;
+    static final int KIND_CHANNEL = 2;
+
+    synchronized long createGroup(String name, long ownerId, List<Long> members, int kind, long parentId, int position)
+            throws SQLException {
+        boolean auto = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            long id;
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO groups_ (name, owner_id, created_at, kind, parent_id, position) VALUES (?, ?, ?, ?, ?, ?)",
+                    Statement.RETURN_GENERATED_KEYS)) {
+                ps.setString(1, name);
+                ps.setLong(2, ownerId);
+                ps.setLong(3, System.currentTimeMillis());
+                ps.setInt(4, kind);
+                ps.setLong(5, parentId);
+                ps.setInt(6, position);
+                ps.executeUpdate();
+                try (ResultSet keys = ps.getGeneratedKeys()) {
+                    keys.next();
+                    id = keys.getLong(1);
+                }
+            }
+            for (long m : members) insertMember(id, m);
+            connection.commit();
+            return id;
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(auto);
+        }
+    }
+
+    /** Channels of a community, in their display order. */
+    synchronized List<Long> channels(long rootId) throws SQLException {
+        List<Long> result = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT id FROM groups_ WHERE parent_id = ? AND kind = 2 ORDER BY position, id")) {
+            ps.setLong(1, rootId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) result.add(rs.getLong(1));
+            }
+        }
+        return result;
+    }
+
+    synchronized int nextPosition(long rootId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT COALESCE(MAX(position), 0) + 1 FROM groups_ WHERE parent_id = ?")) {
+            ps.setLong(1, rootId);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        }
+    }
+
+    synchronized boolean isAdmin(long rootId, long userId) throws SQLException {
+        return exists("SELECT 1 FROM community_admins WHERE root_id = ? AND user_id = ?", rootId, userId);
+    }
+
+    synchronized void setAdmin(long rootId, long userId, boolean admin) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(admin
+                ? "INSERT OR IGNORE INTO community_admins (root_id, user_id) VALUES (?, ?)"
+                : "DELETE FROM community_admins WHERE root_id = ? AND user_id = ?")) {
+            ps.setLong(1, rootId);
+            ps.setLong(2, userId);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized List<String> adminNames(long rootId) throws SQLException {
+        return names("SELECT u.username FROM community_admins a JOIN users u ON u.id = a.user_id WHERE a.root_id = ? "
+                + "ORDER BY u.username", rootId);
+    }
+
+    record Invite(long rootId, long createdBy, long expiresAt, int maxUses, int uses) {}
+
+    synchronized void createInvite(byte[] codeHash, long rootId, long createdBy, long expiresAt, int maxUses)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO invites (code_hash, root_id, created_by, expires_at, max_uses, uses) VALUES (?, ?, ?, ?, ?, 0)")) {
+            ps.setBytes(1, codeHash);
+            ps.setLong(2, rootId);
+            ps.setLong(3, createdBy);
+            ps.setLong(4, expiresAt);
+            ps.setInt(5, maxUses);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized Optional<Invite> invite(byte[] codeHash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT root_id, created_by, expires_at, max_uses, uses FROM invites WHERE code_hash = ?")) {
+            ps.setBytes(1, codeHash);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(new Invite(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getInt(4), rs.getInt(5)))
+                        : Optional.empty();
+            }
+        }
+    }
+
+    synchronized void useInvite(byte[] codeHash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE invites SET uses = uses + 1 WHERE code_hash = ?")) {
+            ps.setBytes(1, codeHash);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized void deleteInvites(long rootId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM invites WHERE root_id = ?")) {
+            ps.setLong(1, rootId);
+            ps.executeUpdate();
+        }
+    }
 
     synchronized long createGroup(String name, long ownerId, List<Long> members) throws SQLException {
         boolean auto = connection.getAutoCommit();
@@ -315,11 +473,11 @@ final class Database implements AutoCloseable {
 
     synchronized Optional<Group> group(long groupId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT id, name, owner_id, sealed_name FROM groups_ WHERE id = ?")) {
+                "SELECT id, name, owner_id, sealed_name, kind, parent_id, position FROM groups_ WHERE id = ?")) {
             ps.setLong(1, groupId);
             try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(new Group(rs.getLong(1), rs.getString(2), rs.getLong(3), rs.getBytes(4)))
-                        : Optional.empty();
+                return rs.next() ? Optional.of(new Group(rs.getLong(1), rs.getString(2), rs.getLong(3), rs.getBytes(4),
+                        rs.getInt(5), rs.getLong(6), rs.getInt(7))) : Optional.empty();
             }
         }
     }
