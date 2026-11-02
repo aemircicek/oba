@@ -5,6 +5,7 @@ import com.emirchat.api.Packet;
 import com.emirchat.client.ChatClient;
 import com.emirchat.client.History;
 import com.emirchat.crypto.Identity;
+import com.emirchat.trust.SafetyNumber;
 import com.emirchat.trust.KeyChangedException;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -428,10 +429,9 @@ final class MainView implements AccountSession.View {
             box.getChildren().add(new VBox(6, UiKit.label("TRUSTED BEFORE", "overline"), FingerprintView.compact(pinned)));
         }
         if (current != null) {
-            VBox theirs = new VBox(14, UiKit.label(changed ? "NEW KEY" : user.toUpperCase() + "'S KEY", "overline"),
-                    FingerprintView.large(current));
-            theirs.setAlignment(Pos.CENTER);
-            theirs.getStyleClass().add("card");
+            VBox theirs = new VBox(8, UiKit.label(changed ? "NEW KEY" : user.toUpperCase() + "'S KEY", "overline"),
+                    FingerprintView.compact(current));
+            theirs.getStyleClass().add("card-flat");
             box.getChildren().add(theirs);
         }
         box.getChildren().add(mine);
@@ -449,10 +449,64 @@ final class MainView implements AccountSession.View {
             if (this.current != null) this.current.refreshHeader();
             refreshSidebar();
         }));
+        if (current != null) box.getChildren().add(safetyNumber(user, current, confirm));
         HBox buttons = new HBox(10, UiKit.grow(), close, confirm);
         box.getChildren().add(buttons);
         box.setId("contact-dialog");
         overlay.show(box);
+    }
+
+    /**
+     * The safety number and QR code both sides compute from both keys. Checking a picture of the
+     * friend's QR code verifies them in one step; a mismatch is shown loudly.
+     */
+    private Node safetyNumber(String user, String theirFingerprint, Button confirm) {
+        ChatClient c = session.client();
+        SafetyNumber number = SafetyNumber.of(c.username(), Identity.fingerprint(myKey()), user, theirFingerprint);
+        javafx.scene.image.ImageView qr = new javafx.scene.image.ImageView(QrCodes.render(number.qrPayload(), 300));
+        qr.setFitWidth(132);
+        qr.setPreserveRatio(true);
+        qr.setId("safety-qr");
+        Label digits = UiKit.label(number.digits(), "safety-digits");
+        digits.setId("safety-digits");
+        Label result = UiKit.label("", "caption");
+        result.setWrapText(true);
+        Button check = new Button("Check their QR code…");
+        check.setId("check-qr");
+        check.getStyleClass().add("small");
+        check.setOnAction(e -> {
+            javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
+            chooser.setTitle("Picture of " + user + "'s QR code");
+            chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("Images", "*.png", "*.jpg", "*.jpeg", "*.bmp", "*.gif"));
+            java.io.File file = chooser.showOpenDialog(stack.getScene().getWindow());
+            if (file == null) return;
+            String scanned = QrCodes.read(new javafx.scene.image.Image(file.toURI().toString()));
+            result.getStyleClass().removeAll("danger-text", "accent-text");
+            if (scanned == null) {
+                result.setText("No QR code found in that picture.");
+                result.getStyleClass().add("danger-text");
+            } else if (number.matches(scanned)) {
+                result.setText("✓ The codes match. Marking " + user + " as verified…");
+                result.getStyleClass().add("accent-text");
+                confirm.fire();
+            } else {
+                result.setText("✗ The codes do NOT match. Do not trust this key until you find out why "
+                        + "(a reinstall on one side, or someone in the middle).");
+                result.getStyleClass().add("danger-text");
+            }
+        });
+        Label how = UiKit.label("Both of you see the same number and QR code if your keys are genuine. Read the "
+                + "numbers out on a call, or send each other a picture of the QR code and check it here.", "caption");
+        how.setWrapText(true);
+        how.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        result.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        result.setMaxWidth(260);
+        VBox right = new VBox(8, digits, check, result);
+        HBox row = new HBox(16, qr, right);
+        row.setAlignment(Pos.CENTER_LEFT);
+        VBox card = new VBox(8, UiKit.label("SAFETY NUMBER", "overline"), row, how);
+        card.getStyleClass().add("card-flat");
+        return card;
     }
 
     private byte[] myKey() {

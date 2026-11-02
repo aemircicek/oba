@@ -446,3 +446,5 @@
 .highlight .bubble { -fx-effect: dropshadow(gaussian, -sc-accent, 14, 0.5, 0, 0); }
 .search { -fx-background-radius: 999; -fx-border-radius: 999; -fx-padding: 7 14; -fx-background-color: -sc-surface-2; -fx-border-color: transparent; }
 .search:focused { -fx-border-color: -sc-accent; }
+.safety-digits { -fx-font-family: 'Consolas', 'Menlo', monospace; -fx-font-size: 13px; -fx-text-fill: -sc-text; -fx-line-spacing: 3px; }
+.danger-text { -fx-text-fill: -sc-danger; }
