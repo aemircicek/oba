@@ -74,7 +74,8 @@ use the same protocol and can talk to each other.
 ### Direct mode (no server)
 
 The version 2 peer-to-peer mode is still available: one person hosts, the other connects
-directly, and nothing is stored anywhere.
+directly, and nothing is stored anywhere. In the desktop app, choose *Direct connection without
+an account* on the login screen; in the terminal:
 
 ```sh
 java -jar secure-chat.jar host --name emir                  # wait for a peer on port 5055

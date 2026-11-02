@@ -6,10 +6,10 @@
 
   <groupId>com.emirchat</groupId>
   <artifactId>secure-chat</artifactId>
-  <version>3.0.0-SNAPSHOT</version>
+  <version>3.0.0</version>
   <packaging>jar</packaging>
   <name>secure-chat</name>
-  <description>End-to-end encrypted, mutually authenticated 1:1 chat for the desktop and the terminal.</description>
+  <description>End-to-end encrypted messenger (accounts, friends, direct messages and groups) for the desktop and the terminal.</description>
   <url>https://github.com/aemircicek/secure-chat</url>
 
   <licenses>
