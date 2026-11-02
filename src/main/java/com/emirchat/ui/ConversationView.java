@@ -186,10 +186,15 @@ final class ConversationView {
             titles.getChildren().addAll(UiKit.label(peer, "h2"), new HBox(8, status, UiKit.label("·", "row-sub"), badge));
         } else {
             Packet.GroupInfo g = group();
-            String name = g == null ? I18n.t("conv.group") : groupName(g);
+            boolean inCommunity = g != null && g.community() != 0;
+            Packet.GroupInfo root = inCommunity ? session.client().groups().stream()
+                    .filter(x -> x.id() == g.community()).findFirst().orElse(null) : null;
+            String name = g == null ? I18n.t("conv.group") : inCommunity ? channelTitle(g) : groupName(g);
             input.setPromptText(I18n.t("conv.prompt", name));
-            header.getChildren().add(UiKit.avatar(name, "avatar-sm", true));
-            Label members = UiKit.label(g == null ? "" : I18n.t("conv.members", g.members().size()), "badge-verified");
+            header.getChildren().add(UiKit.avatar(root != null ? groupName(root) : name, "avatar-sm", true));
+            Label members = UiKit.label(g == null ? "" : inCommunity && root != null
+                    ? I18n.t("community.headerSub", groupName(root), g.members().size())
+                    : I18n.t("conv.members", g.members().size()), "badge-verified");
             members.setId("group-info-link");
             members.setStyle("-fx-cursor: hand;");
             members.setOnMouseClicked(e -> actions.openGroupInfo(groupId));
@@ -199,7 +204,8 @@ final class ConversationView {
         }
         header.getChildren().addAll(titles, UiKit.grow(), timerButton());
         if (peer == null) {
-            Button info = new Button(I18n.t("conv.groupInfo"));
+            Packet.GroupInfo shown = group();
+            Button info = new Button(shown != null && shown.community() != 0 ? I18n.t("community.settings") : I18n.t("conv.groupInfo"));
             info.getStyleClass().add("small");
             info.setOnAction(e -> actions.openGroupInfo(groupId));
             header.getChildren().add(info);
@@ -319,6 +325,11 @@ final class ConversationView {
 
     private ChatClient.Chat chat() {
         return peer != null ? ChatClient.Chat.dm(peer) : ChatClient.Chat.group(groupId);
+    }
+
+    /** "# general" for a community's own channel, "# name" for its other channels. */
+    static String channelTitle(Packet.GroupInfo g) {
+        return "# " + (g.isCommunity() ? I18n.t("community.general") : groupName(g));
     }
 
     /** A group's name, or a translated placeholder while its name key has not arrived yet. */

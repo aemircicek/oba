@@ -177,6 +177,18 @@ public final class GroupKeys {
         }
     }
 
+    /**
+     * The sender's key for this message has not arrived (it travels separately, over the pairwise
+     * channel). The message is fine; it can be decrypted once the key is here.
+     */
+    public static final class MissingKeyException extends SecurityException {
+        private static final long serialVersionUID = 1L;
+
+        MissingKeyException(String sender) {
+            super("No sender key from " + sender + " (yet)");
+        }
+    }
+
     /** @throws SecurityException for unknown keys, bad signatures, replays or forgeries (state unchanged) */
     public synchronized byte[] decrypt(long groupId, String sender, byte[] message) throws IOException {
         try {
@@ -194,7 +206,7 @@ public final class GroupKeys {
 
             Map<Integer, Received> keys = state(groupId).received.get(sender);
             Received stored = keys == null ? null : keys.get(keyId);
-            if (stored == null) throw new SecurityException("No sender key from " + sender + " (yet)");
+            if (stored == null) throw new MissingKeyException(sender);
             if (!verify(stored.signingPublic, new Wire.Writer().bytes(header).bytes(ciphertext).toByteArray(), signature)) {
                 throw new SecurityException("Bad signature: not sent by " + sender);
             }

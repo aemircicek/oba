@@ -1044,6 +1044,10 @@ public final class ChatClient implements AutoCloseable {
             ack = false;
             seen.remove(envelope.id());
             listener.keyChanged(envelope.sender());
+        } catch (com.emirchat.e2e.GroupKeys.MissingKeyException e) {
+            // A group message overtook its sender's key: keep it (unacknowledged) until the key arrives.
+            ack = false;
+            waitForSenderKey(envelope);
         } catch (SecurityException | IOException | ApiException e) {
             listener.undecryptable(envelope.sender(), e.getMessage());
         } finally {
@@ -1155,6 +1159,27 @@ public final class ChatClient implements AutoCloseable {
         }
         if (group == null || !group.hasMember(sender)) throw new SecurityException(sender + " sent a key for a group they are not in");
         groupKeys.acceptDistribution(groupId, sender, distribution);
+        retryWaiting(groupId, sender);
+    }
+
+    /** Group messages waiting for their sender's key, by "groupId/sender". */
+    private final Map<String, List<Packet.Envelope>> waitingForKey = new java.util.HashMap<>();
+    private static final int MAX_WAITING = 500;
+
+    private void waitForSenderKey(Packet.Envelope envelope) {
+        List<Packet.Envelope> list = waitingForKey.computeIfAbsent(envelope.groupId() + "/" + envelope.sender(),
+                k -> new ArrayList<>());
+        if (list.size() < MAX_WAITING) list.add(envelope); // beyond that the server re-delivers them on the next login
+    }
+
+    /** The key arrived: decrypt what was waiting for it, in order (runs on the inbox thread). */
+    private void retryWaiting(long groupId, String sender) {
+        List<Packet.Envelope> waiting = waitingForKey.remove(groupId + "/" + sender);
+        if (waiting == null) return;
+        for (Packet.Envelope e : waiting) {
+            seen.remove(e.id());
+            receive(e);
+        }
     }
 
     /**
