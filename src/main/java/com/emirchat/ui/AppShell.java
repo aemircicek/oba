@@ -26,7 +26,7 @@ import javafx.util.Duration;
 final class AppShell {
     private final StackPane stage;
     private final Path home;
-    private final Identity identity;
+    private Identity identity; // replaced after restoring a backup
     private final Preferences prefs;
     private final ExecutorService worker = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "login");
@@ -49,8 +49,49 @@ final class AppShell {
             @Override public void submit(LoginScreen.Request r) { login(screen[0], r); }
 
             @Override public void directMode() { openDirectMode(); }
+
+            @Override public void restore() { restoreBackup(screen[0]); }
         });
         show(screen[0].root());
+    }
+
+    /**
+     * Restores an encrypted backup into the key directory. Whatever is there now is moved aside to
+     * a sibling folder, never deleted.
+     */
+    private void restoreBackup(LoginScreen screen) {
+        javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
+        chooser.setTitle("Choose a secure-chat backup");
+        chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("secure-chat backup", "*.scbackup"));
+        java.io.File file = chooser.showOpenDialog(stage.getScene() == null ? null : stage.getScene().getWindow());
+        if (file == null) return;
+        javafx.scene.control.Dialog<String> ask = new javafx.scene.control.Dialog<>();
+        ask.setTitle("Restore backup");
+        ask.setHeaderText("Restore " + file.getName() + "?\nYour current keys and history on this computer are kept in a separate folder.");
+        javafx.scene.control.PasswordField pass = new javafx.scene.control.PasswordField();
+        pass.setPromptText("Backup passphrase");
+        ask.getDialogPane().setContent(pass);
+        ask.getDialogPane().getButtonTypes().addAll(javafx.scene.control.ButtonType.OK, javafx.scene.control.ButtonType.CANCEL);
+        ask.setResultConverter(b -> b == javafx.scene.control.ButtonType.OK ? pass.getText() : null);
+        Platform.runLater(pass::requestFocus);
+        String passphrase = ask.showAndWait().orElse(null);
+        if (passphrase == null || passphrase.isEmpty()) return;
+        screen.setBusy(true);
+        worker.execute(() -> {
+            String message;
+            try {
+                Path aside = com.emirchat.client.Backup.restore(file.toPath(), passphrase.toCharArray(), home);
+                identity = Identity.loadOrCreate(home);
+                message = "Backup restored. Log in with your account password."
+                        + (aside == null ? "" : " Your previous data is kept in " + aside + ".");
+            } catch (SecurityException e) {
+                message = e.getMessage();
+            } catch (IOException | RuntimeException e) {
+                message = "Could not restore: " + e.getMessage();
+            }
+            String text = message;
+            Platform.runLater(() -> showLogin(text));
+        });
     }
 
     private void openDirectMode() {
@@ -90,6 +131,7 @@ final class AppShell {
                 Path accounts = home.resolve("accounts").resolve(finalHost.replace(':', '_') + "_" + finalPort);
                 History history = History.open(accounts.resolve(user).resolve("history.db"), r.password());
                 s = new AccountSession(history);
+                s.setHome(home);
                 ChatClient client = ChatClient.start(connection, identity, accounts, user, r.password(), r.register(), s);
                 s.attach(client);
                 AccountSession ready = s;

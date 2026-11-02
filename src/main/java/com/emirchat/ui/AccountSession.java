@@ -153,6 +153,18 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         this.client = client;
     }
 
+    private java.nio.file.Path home;
+
+    /** The key directory this account lives in (for backups). */
+    void setHome(java.nio.file.Path home) {
+        this.home = home;
+    }
+
+    /** Writes an encrypted backup of the key directory, including a consistent copy of this history. */
+    void backup(java.nio.file.Path out, char[] passphrase) throws IOException {
+        com.emirchat.client.Backup.create(home, out, passphrase, java.util.Map.of(history.file(), history));
+    }
+
     void setView(View view) {
         this.view = view;
     }

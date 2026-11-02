@@ -195,9 +195,67 @@ final class MainView implements AccountSession.View {
         done.getStyleClass().add("primary");
         done.setId("settings-done");
         done.setOnAction(e -> overlay.close());
-        VBox box = Overlay.dialog("Settings", toggles, new HBox(UiKit.grow(), done));
+        Button backup = new Button("Back up this account…");
+        backup.setId("backup");
+        backup.setOnAction(e -> openBackup());
+        VBox box = Overlay.dialog("Settings", toggles, new HBox(10, backup, UiKit.grow(), done));
         box.setId("settings-dialog");
         overlay.show(box);
+    }
+
+    /** An encrypted backup of keys, sessions and history, protected by its own passphrase. */
+    private void openBackup() {
+        javafx.scene.control.PasswordField pass = new javafx.scene.control.PasswordField();
+        pass.setPromptText("Backup passphrase (at least " + com.emirchat.client.Backup.MIN_PASSPHRASE + " characters)");
+        pass.setId("backup-pass");
+        javafx.scene.control.PasswordField repeat = new javafx.scene.control.PasswordField();
+        repeat.setPromptText("Repeat the passphrase");
+        repeat.setId("backup-repeat");
+        Label explain = UiKit.label("The backup holds your identity key, contacts, encryption sessions and message "
+                + "history, encrypted with this passphrase. Keep it somewhere safe; without the passphrase it is useless. "
+                + "Restoring it on another computer moves your account there, so stop using this one afterwards.", "caption");
+        explain.setWrapText(true);
+        explain.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        Label status = UiKit.label("", "caption");
+        status.setWrapText(true);
+        Button cancel = new Button("Cancel");
+        cancel.setOnAction(e -> overlay.close());
+        Button save = new Button("Save backup…");
+        save.getStyleClass().add("primary");
+        save.setId("backup-save");
+        save.disableProperty().bind(pass.textProperty().length().lessThan(com.emirchat.client.Backup.MIN_PASSPHRASE)
+                .or(pass.textProperty().isNotEqualTo(repeat.textProperty())));
+        save.setOnAction(e -> {
+            javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
+            chooser.setTitle("Save backup");
+            chooser.setInitialFileName(com.emirchat.client.Backup.suggestedName(session.client().username()));
+            java.io.File target = chooser.showSaveDialog(stack.getScene().getWindow());
+            if (target == null) return;
+            char[] secret = pass.getText().toCharArray();
+            status.setText("Encrypting… (this takes a few seconds)");
+            save.disableProperty().unbind();
+            save.setDisable(true);
+            session.background().execute(() -> {
+                String result;
+                try {
+                    session.backup(target.toPath(), secret);
+                    result = "Backup saved to " + target.getAbsolutePath() + ".";
+                } catch (Exception ex) {
+                    result = "Backup failed: " + ex.getMessage();
+                } finally {
+                    java.util.Arrays.fill(secret, '\0');
+                }
+                String text = result;
+                Platform.runLater(() -> {
+                    overlay.close();
+                    problem(text);
+                });
+            });
+        });
+        VBox box = Overlay.dialog("Back up this account", explain, pass, repeat, status, new HBox(10, UiKit.grow(), cancel, save));
+        box.setId("backup-dialog");
+        overlay.show(box);
+        Platform.runLater(pass::requestFocus);
     }
 
     private Node toggle(String title, String explanation, String key) {

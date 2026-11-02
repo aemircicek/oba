@@ -23,6 +23,9 @@ final class LoginScreen {
         void submit(Request request);
 
         void directMode();
+
+        /** Restore keys and history from an encrypted backup file. */
+        default void restore() {}
     }
 
     private final VBox root;
@@ -114,7 +117,11 @@ final class LoginScreen {
             n.setMaxWidth(Double.MAX_VALUE);
             column.getChildren().add(n);
         }
-        column.getChildren().addAll(form, direct);
+        Button restore = new Button("Restore from a backup");
+        restore.getStyleClass().add("link");
+        restore.setId("restore-backup");
+        restore.setOnAction(e -> actions.restore());
+        column.getChildren().addAll(form, direct, restore);
         column.setAlignment(Pos.TOP_CENTER);
         column.setMaxWidth(400);
         root = new VBox(column);

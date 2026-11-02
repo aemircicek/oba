@@ -101,10 +101,17 @@ public final class History implements AutoCloseable {
 
     private final Connection db;
     private final SecretKey key;
+    private final Path file;
 
-    private History(Connection db, SecretKey key) {
+    private History(Connection db, SecretKey key, Path file) {
         this.db = db;
         this.key = key;
+        this.file = file;
+    }
+
+    /** The database file (for backups). */
+    public Path file() {
+        return file;
     }
 
     public static History open(Path file, String password) throws IOException {
@@ -167,7 +174,7 @@ public final class History implements AutoCloseable {
                 putMeta(db, "salt", salt);
             }
             restrictPermissions(file);
-            return new History(db, deriveKey(password, salt, iterations));
+            return new History(db, deriveKey(password, salt, iterations), file.toAbsolutePath());
         } catch (SQLException e) {
             throw new IOException("Could not open message history: " + e.getMessage(), e);
         }

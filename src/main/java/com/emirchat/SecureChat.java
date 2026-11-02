@@ -35,14 +35,17 @@ public final class SecureChat {
             "",
             "Type " + ChatSession.QUIT_COMMAND + " to leave a chat.",
             "",
-            AccountCli.USAGE);
+            AccountCli.USAGE,
+            "",
+            BackupCli.USAGE);
 
     private SecureChat() {}
 
     public static void main(String[] args) {
         int code;
         try {
-            code = AccountCli.handles(args[0]) ? AccountCli.run(args) : run(args);
+            code = AccountCli.handles(args[0]) ? AccountCli.run(args)
+                    : BackupCli.handles(args[0]) ? BackupCli.run(args) : run(args);
         } catch (IllegalArgumentException e) {
             System.err.println("Error: " + e.getMessage());
             System.err.println();
