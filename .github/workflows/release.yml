@@ -1,25 +1,33 @@
 name: Release
 
-# Publishing a GitHub release builds one runnable jar per platform (JavaFX ships native
-# libraries, so each OS needs its own) and attaches them to the release.
+# Publishing a GitHub release builds, for each OS: a runnable jar (JavaFX ships native libraries,
+# so each OS needs its own) and a package with a bundled Java runtime (Windows: portable zip,
+# macOS: dmg, Linux: deb). Every file gets a signed build-provenance attestation (Sigstore), and a
+# SHA256SUMS file is added at the end.
 on:
   release:
     types: [published]
 
 permissions:
-  contents: write
+  contents: write      # upload release assets
+  id-token: write      # sign attestations with the workflow's identity
+  attestations: write
 
 jobs:
-  jar:
+  package:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
             platform: macos-arm64
+            type: dmg
           - os: windows-latest
             platform: windows-x64
+            type: app-image
           - os: ubuntu-latest
             platform: linux-x64
+            type: deb
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -30,10 +38,55 @@ jobs:
           cache: maven
       - name: Build and test
         run: mvn -B verify
-      - name: Attach jar to the release
+      - name: Tools for .deb packages
+        if: matrix.type == 'deb'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot
+      - name: Package
+        shell: bash
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p dist input
+          cp target/secure-chat.jar input/
+          cp target/secure-chat.jar "dist/secure-chat-${{ matrix.platform }}.jar"
+          EXTRA=()
+          if [ "${{ matrix.type }}" = "deb" ]; then EXTRA=(--linux-shortcut --linux-menu-group Network); fi
+          jpackage --type "${{ matrix.type }}" --name secure-chat --input input --main-jar secure-chat.jar \
+            --main-class com.emirchat.Main --app-version "$VERSION" --vendor "Emir Cicek" \
+            --description "End-to-end encrypted messenger" --dest pkg ${EXTRA[@]+"${EXTRA[@]}"}
+          case "${{ matrix.type }}" in
+            app-image)
+              ZIP="dist/secure-chat-${VERSION}-${{ matrix.platform }}.zip"
+              if command -v 7z > /dev/null; then (cd pkg && 7z a -tzip "../$ZIP" secure-chat > /dev/null)
+              else powershell -NoProfile -Command "Compress-Archive -Path pkg/secure-chat -DestinationPath '$ZIP'"; fi ;;
+            dmg)       cp pkg/*.dmg "dist/secure-chat-${VERSION}-${{ matrix.platform }}.dmg" ;;
+            deb)       cp pkg/*.deb "dist/secure-chat-${VERSION}-${{ matrix.platform }}.deb" ;;
+          esac
+          ls -l dist
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - name: Attach to the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+
+  checksums:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          cp target/secure-chat.jar "secure-chat-${{ matrix.platform }}.jar"
-          gh release upload "${{ github.event.release.tag_name }}" "secure-chat-${{ matrix.platform }}.jar" --clobber
+          set -euo pipefail
+          mkdir assets && cd assets
+          gh release download "$TAG" -R "${{ github.repository }}" --pattern 'secure-chat-*'
+          sha256sum secure-chat-* > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS -R "${{ github.repository }}" --clobber
