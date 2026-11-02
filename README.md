@@ -19,11 +19,22 @@ direct message, and Sender Keys for groups.
 
 ## Quick start
 
-Download the jar for your platform from the [latest release](https://github.com/aemircicek/secure-chat/releases/latest)
-(Java 21+ required), or build it yourself with `mvn verify`.
+From the [latest release](https://github.com/aemircicek/secure-chat/releases/latest), download
+either a package with Java included (Windows: portable `.zip`, macOS: `.dmg`, Linux: `.deb`) or
+the jar for your platform (Java 21+ required). Or build it yourself with `mvn verify`.
+
+Check a download before running it, with the checksum file or GitHub's signed build provenance:
 
 ```sh
-java -jar secure-chat.jar server                    # run a server on port 5056
+sha256sum -c SHA256SUMS --ignore-missing                       # on Windows: Get-FileHash <file>
+gh attestation verify secure-chat-windows-x64.jar -R aemircicek/secure-chat
+```
+
+The packages are not code-signed (that needs paid certificates), so Windows SmartScreen and macOS
+Gatekeeper warn on first start.
+
+```sh
+java -jar secure-chat.jar server                    # run a server on port 5056 (or see docs/deploy.md)
 java -jar secure-chat.jar                           # desktop app: register or log in
 ```
 
@@ -43,12 +54,16 @@ java -jar secure-chat.jar gui --home ./bob
   that it is pinned and a different key is refused.
 - **Friends**: send, accept and decline requests; see who is online.
 - **Direct messages**: end-to-end encrypted, delivered later if your friend is offline, with
-  ✓ sent / ✓✓ delivered marks and unread counts.
+  ✓ sent / ✓✓ delivered / blue ✓✓ read marks and unread counts.
+- **Replies, reactions, edits and deletes**: right-click a message to reply to it, react, edit
+  your own text, or delete it for everyone. Only the author's edits and deletions are accepted.
+- **Typing and read receipts**: friends who are online see when you type, and blue ticks when
+  you have read their messages; both can be turned off in Settings.
 - **Groups**: create a group from your friends, add and remove members, rename it, leave; the
   owner role passes to the longest-standing member if the owner leaves. Group names are end-to-end
   encrypted: the server stores only ciphertext.
-- **Contact verification**: compare a friend's key as a colour pattern and hex code, then mark
-  them verified.
+- **Contact verification**: compare a 60-digit safety number on a call, or check a picture of
+  your friend's QR code; both sides compute the same code from both keys.
 - **Key-change warning**: if a friend's key changes (new device, or an attack), messages to them
   are held back until you verify the new key.
 - **Files and images**: send any file up to 25 MB to a friend or a group (📎 next to the message
@@ -58,10 +73,17 @@ java -jar secure-chat.jar gui --home ./bob
   Everyone in the chat gets the same setting, and new messages and files are deleted from every
   device's history that long after they arrive.
 - **Encrypted history**: messages are stored on disk encrypted under a key derived from your password.
+- **Search**: find messages and file names across all chats (decrypted locally, never sent anywhere).
+- **Notifications**: a desktop notification when a message arrives while the window is in the
+  background; showing the text in it is optional.
+- **Encrypted backup**: Settings → *Back up this account* saves keys, sessions and history in one
+  file encrypted with a passphrase of your choice; *Restore from a backup* on the login screen
+  moves the account to another computer.
 - Light and dark themes, following the system.
 
 <p align="center">
-  <img src="docs/screenshots/account-files-dark.png" width="560" alt="An encrypted image and document in a chat">
+  <img src="docs/screenshots/account-files-dark.png" width="420" alt="An encrypted image and document in a chat">
+  <img src="docs/screenshots/account-rich-light.png" width="420" alt="A reply, an edit, a reaction, read ticks and typing">
 </p>
 
 <p align="center">
@@ -76,6 +98,8 @@ java -jar secure-chat.jar gui --home ./bob
 java -jar secure-chat.jar server [--port 5056] [--bind 0.0.0.0] [--data ~/.securechat-server]
 java -jar secure-chat.jar register --server localhost:5056 --username emir
 java -jar secure-chat.jar client   --server localhost:5056 --username emir
+java -jar secure-chat.jar backup   --out emir.scbackup [--home ~/.securechat]
+java -jar secure-chat.jar restore  --in emir.scbackup  [--home ~/.securechat]
 ```
 
 `client` opens an interactive shell (`msg`, `file`, `save`, `timer`, `friends`, `add`, `accept`, `group`, `gmsg`,
@@ -93,6 +117,11 @@ java -jar secure-chat.jar host --name emir                  # wait for a peer on
 java -jar secure-chat.jar connect 192.168.1.3 --name efe    # connect to a host
 java -jar secure-chat.jar fingerprint                       # show your identity key
 ```
+
+## Hosting a server
+
+[docs/deploy.md](docs/deploy.md) walks through running the server on a small VPS with Docker (or
+systemd): firewall, verifying the server fingerprint, updates and server backups.
 
 ## Security design
 
@@ -123,6 +152,9 @@ must not be able to read or forge messages. User devices are trusted.
 | File confidentiality | Each file is encrypted with a fresh AES-256-GCM key; the server stores only the ciphertext, and the key travels in an end-to-end encrypted message |
 | File integrity | The receiver checks the SHA-256 digest of the blob (sent end-to-end) before decrypting; GCM authenticates the content |
 | File access | Only the uploader and the named audience (the friend, or current group members) can download; unknown and forbidden ids look the same |
+| Edits and deletions | Messages carry a random id inside the ciphertext; an edit or "delete for everyone" is applied only if it comes from the message's author |
+| Contact verification | A safety number (60 digits or a QR code) derived from both identity keys; both sides compute the same value, so a substituted key shows up as a mismatch |
+| Backups | Zip of the key directory encrypted with AES-256-GCM under PBKDF2-HMAC-SHA256 (600k) of a separate passphrase; restore refuses paths outside the target folder |
 | Disappearing messages | The timer travels inside the encrypted message; expired rows are deleted with SQLite `secure_delete` and cached files are removed |
 | Resource exhaustion | Frame and message size limits, offline queue and prekey caps, prekey-fetch rate limits, 25 MB per file, 250 MB of stored files per user |
 
@@ -201,19 +233,19 @@ Users then authenticate with their password inside the channel. Low-order X25519
 |---|---|
 | `com.emirchat.crypto` | `Hkdf` (RFC 5869), `Identity` (Ed25519 keys, fingerprints), `X25519` |
 | `com.emirchat.protocol` | `FrameIO` (bounded framing), `Wire` (strict encoding), `Handshake` (SIGMA-I), `SecureChannel` |
-| `com.emirchat.e2e` | `X3dh`, `DoubleRatchet`, `GroupKeys` (Sender Keys), `Attachments` (file encryption), `Messenger`, `DeviceKeys`, `PrekeyBundle` |
+| `com.emirchat.e2e` | `X3dh`, `DoubleRatchet`, `GroupKeys` (Sender Keys), `GroupNames`, `Attachments` (file encryption), `Messenger`, `DeviceKeys`, `PrekeyBundle` |
 | `com.emirchat.server` | `ChatServer`, accounts, friends, groups, offline queue, `AttachmentService`, `PasswordHasher`, `RateLimiter`, SQLite |
-| `com.emirchat.client` | `ChatClient`, `ServerConnection`, encrypted `History` |
+| `com.emirchat.client` | `ChatClient`, `ServerConnection`, encrypted `History`, `Backup` |
 | `com.emirchat.api` | `Packet` (client–server messages), error codes |
-| `com.emirchat.trust` | `KnownPeers` (TOFU store for servers and contacts) |
-| `com.emirchat.ui` | JavaFX desktop app: screens, theme, fingerprint art |
+| `com.emirchat.trust` | `KnownPeers` (TOFU store for servers and contacts), `SafetyNumber` |
+| `com.emirchat.ui` | JavaFX desktop app: screens, theme, fingerprint art, QR codes, notifications |
 | `com.emirchat.chat` | `ChatMessage`, `FileMessage` (file description and safe names), terminal sanitising |
 | `com.emirchat.net` | Direct mode: connect/host |
-| `com.emirchat` | `Main`, `SecureChat` and `AccountCli` command lines, `ClientShell` |
+| `com.emirchat` | `Main`, `SecureChat`, `AccountCli` and `BackupCli` command lines, `ClientShell` |
 
 ### Tests
 
-`mvn verify` runs 139 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 160 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -227,6 +259,13 @@ Users then authenticate with their password inside the channel. Low-order X25519
 - **Files**: a blob swapped or modified on the server is refused, a wrong key fails, only the
   recipient or current group members can download, uploads must arrive in order and in full,
   expiry and per-user quotas, hostile file names (`../../etc/passwd`, right-to-left overrides).
+- **Messages**: ids shared by both sides, replies, reactions, edits and deletes accepted only from
+  the author, read receipts that only touch our own messages and are never undone by a late
+  "sent", search that skips deleted messages.
+- **Verification and backups**: safety numbers are symmetric and change when a key is swapped, QR
+  codes survive a round trip through a picture; backups detect a wrong passphrase and tampering,
+  never delete existing data, reject zip-slip paths, and a restored account keeps chatting with no
+  key change.
 - **Server**: registration and login rules, identical errors for wrong password and unknown user,
   brute-force limits, friend and group permissions, the offline queue in order, delivery
   receipts, a tampering server being caught, and the server storing only ciphertext.
@@ -253,16 +292,24 @@ Honest notes on what this project does **not** do:
 - **Disappearing messages rely on the other side's app.** They protect against a device being
   lost or seized later, not against a recipient who takes a screenshot or runs a modified client.
   The terminal client keeps no history at all.
+- **Typing notices and read receipts** tell friends when you are active (turn them off in Settings);
+  their timing, like any message, is visible to the server even though their content is encrypted.
+- **Notifications** may show message text in the operating system's notification centre unless
+  you turn that off.
+- **A backup is as strong as its passphrase**, and restoring it moves the account: keep using
+  only one computer afterwards.
+- **Releases are not code-signed** (no Authenticode or Apple notarization). Check downloads with
+  `SHA256SUMS` and `gh attestation verify`.
 - **Registration reveals whether a username is taken.**
 - **Best-effort key wiping** only: the JVM may keep copies of key material in memory.
 
 ## Roadmap
 
 - Passphrase-encrypted identity keys and session state
-- QR-code contact verification
-- Fuzzing the decoders (Jazzer)
-- Deployment guide for a VPS (Docker, firewall)
-- Multiple devices per account; voice messages
+- Fuzzing the decoders (Jazzer) and a written security report
+- Sealed sender and message-size padding (less metadata for the server)
+- A formal model of the handshake and X3DH (ProVerif or Tamarin)
+- Multiple devices per account; servers and channels; voice messages
 
 ## Security
 

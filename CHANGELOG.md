@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased (3.2.0)
+
+### Added
+- **Replies, reactions, edits and "delete for everyone"**: messages carry an id inside the
+  ciphertext; reactions, edits and deletions refer to it, and edits and deletions are accepted
+  only from the author. Right-click a message in the desktop app.
+- **Read receipts and typing indicators** for direct chats, both optional (Settings). Typing
+  notices are only sent to friends who are online, so none are queued on the server.
+- **Search** across all chats, decrypted locally.
+- **Desktop notifications** through the system tray, with optional message preview.
+- **Safety numbers and QR codes** for contact verification: 60 digits to read out, or check a
+  picture of the friend's QR code.
+- **Encrypted backup and restore** of keys, sessions and history (desktop and
+  `secure-chat backup` / `restore`), protected by a separate passphrase.
+- **Server deployment**: Dockerfile, docker-compose.yml, a hardened systemd unit and
+  [docs/deploy.md](docs/deploy.md).
+- **Release packages** with Java included (Windows zip, macOS dmg, Linux deb), Sigstore build
+  provenance for every file, and `SHA256SUMS`.
+- 21 new tests (160 in total).
+
+### Changed
+- New messages use a format with message ids; 3.1 messages are still read. Update all clients
+  together.
+
 ## Unreleased (3.1.0)
 
 ### Added
