@@ -145,10 +145,17 @@ final class AppShell {
             w.setHeight(Math.max(w.getHeight(), 720));
             w.centerOnScreen();
         }
-        show(new MainView(s, this::logout).root());
+        mainView = new MainView(s, this::logout);
+        show(mainView.root());
     }
 
+    private MainView mainView;
+
     private void logout() {
+        if (mainView != null) {
+            mainView.dispose();
+            mainView = null;
+        }
         if (session != null) {
             boolean lost = session.client() != null && !session.client().connection().isOpen();
             session.close();
@@ -158,6 +165,7 @@ final class AppShell {
     }
 
     void shutdown() {
+        if (mainView != null) mainView.dispose();
         if (session != null) session.close();
         if (direct != null) direct.shutdown();
         worker.shutdownNow();

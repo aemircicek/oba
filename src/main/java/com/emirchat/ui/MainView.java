@@ -48,6 +48,9 @@ final class MainView implements AccountSession.View {
     private final ToggleButton friendsTab = new ToggleButton("Friends");
     private final Label friendsBadge = UiKit.label("", "unread-badge");
     private ConversationView current;
+    private final TextField search = new TextField();
+    private final Notifier notifier = new Notifier();
+    private boolean focusHooked;
 
     MainView(AccountSession session, Runnable onLogout) {
         this.session = session;
@@ -67,7 +70,13 @@ final class MainView implements AccountSession.View {
         me.setTooltip(new Tooltip("Your security fingerprint"));
         me.setOnAction(e -> openMyKey());
         VBox meText = new VBox(0, UiKit.label(client.username(), "me-name"), UiKit.label("● connected", "row-sub", "accent-text"));
-        HBox header = new HBox(me, meText, UiKit.grow(), logout);
+        Button settings = new Button();
+        settings.setGraphic(Icons.of(Icons.SETTINGS, 16, null));
+        settings.getStyleClass().add("icon-button");
+        settings.setTooltip(new Tooltip("Settings"));
+        settings.setId("settings");
+        settings.setOnAction(e -> openSettings());
+        HBox header = new HBox(me, meText, UiKit.grow(), settings, logout);
         header.getStyleClass().add("sidebar-header");
         header.setAlignment(Pos.CENTER_LEFT);
 
@@ -90,7 +99,13 @@ final class MainView implements AccountSession.View {
         chatsTab.setSelected(true);
         HBox segmented = new HBox(chatsTab, friendsTab);
         segmented.getStyleClass().add("segmented");
-        VBox tabBox = new VBox(segmented);
+        search.setId("search");
+        search.setPromptText("Search messages");
+        search.getStyleClass().add("search");
+        search.textProperty().addListener((o, a, b) -> refreshSidebar());
+        search.visibleProperty().bind(chatsTab.selectedProperty());
+        search.managedProperty().bind(search.visibleProperty());
+        VBox tabBox = new VBox(10, segmented, search);
         tabBox.getStyleClass().add("sidebar-section");
 
         ScrollPane listScroll = new ScrollPane(list);
@@ -120,7 +135,79 @@ final class MainView implements AccountSession.View {
         friendsBadge.setText(String.valueOf(requests));
         friendsBadge.setVisible(requests > 0);
         list.getChildren().clear();
-        if (chatsTab.isSelected()) buildChats(); else buildFriends(friends);
+        if (!chatsTab.isSelected()) buildFriends(friends);
+        else if (!search.getText().isBlank()) buildSearch(search.getText());
+        else buildChats();
+    }
+
+    /** Search results across all conversations (decrypted locally; nothing is sent anywhere). */
+    private void buildSearch(String query) {
+        list.getChildren().add(heading("RESULTS"));
+        List<History.Message> found;
+        try {
+            found = session.history().search(query, 50);
+        } catch (IOException e) {
+            found = List.of();
+        }
+        if (found.isEmpty()) {
+            Label none = UiKit.label("No messages contain \"" + query.strip() + "\".", "caption");
+            none.setPadding(new Insets(6, 14, 0, 14));
+            list.getChildren().add(none);
+        }
+        for (History.Message m : found) {
+            String where = m.conversation().startsWith("g:") ? groupName(Long.parseLong(m.conversation().substring(2)))
+                    : m.conversation().substring(3);
+            Label sub = UiKit.label((m.outgoing() ? "You: " : m.conversation().startsWith("g:") ? m.sender() + ": " : "")
+                    + (m.file() != null ? "📎 " : "") + m.text(), "row-sub");
+            VBox text = new VBox(2, UiKit.label(where, "row-title"), sub);
+            text.setMinWidth(0);
+            HBox row = new HBox(10, text, UiKit.grow(), UiKit.label(UiKit.time(m.sentAt()), "row-time"));
+            row.getStyleClass().add("list-row");
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.setId("result-" + m.id());
+            row.setOnMouseClicked(e -> {
+                open(m.conversation());
+                if (current != null) current.reveal(m.id());
+            });
+            list.getChildren().add(row);
+        }
+    }
+
+    private String groupName(long id) {
+        return session.client().groups().stream().filter(g -> g.id() == id).map(Packet.GroupInfo::name).findFirst()
+                .orElse("Former group");
+    }
+
+    // ------------------------------------------------------------------ settings
+
+    private void openSettings() {
+        VBox toggles = new VBox(10,
+                toggle("Send read receipts", "Friends see ✓✓ in colour once you have read their messages.",
+                        AccountSession.SEND_READ_RECEIPTS),
+                toggle("Send typing indicators", "Friends who are online see when you are typing to them.",
+                        AccountSession.SEND_TYPING),
+                toggle("Desktop notifications", "Show a notification when a message arrives while the window is in the background.",
+                        AccountSession.NOTIFICATIONS),
+                toggle("Show message text in notifications", "Off: notifications only say who wrote, not what.",
+                        AccountSession.NOTIFICATION_PREVIEW));
+        Button done = new Button("Done");
+        done.getStyleClass().add("primary");
+        done.setId("settings-done");
+        done.setOnAction(e -> overlay.close());
+        VBox box = Overlay.dialog("Settings", toggles, new HBox(UiKit.grow(), done));
+        box.setId("settings-dialog");
+        overlay.show(box);
+    }
+
+    private Node toggle(String title, String explanation, String key) {
+        CheckBox box = new CheckBox(title);
+        box.setId("setting-" + key);
+        box.setSelected(session.setting(key));
+        box.selectedProperty().addListener((o, a, b) -> session.setSetting(key, b));
+        Label hint = UiKit.label(explanation, "caption");
+        hint.setWrapText(true);
+        hint.setPadding(new Insets(0, 0, 0, 26));
+        return new VBox(2, box, hint);
     }
 
     private void buildChats() {
@@ -303,6 +390,7 @@ final class MainView implements AccountSession.View {
     }
 
     void open(String conversation) {
+        hookFocus();
         ConversationView.Actions actions = new ConversationView.Actions() {
             @Override public void openContact(String user) { MainView.this.openContact(user); }
 
@@ -554,6 +642,46 @@ final class MainView implements AccountSession.View {
                     .map(History.Expired::id).toList());
         }
         refreshSidebar();
+    }
+
+    @Override
+    public void messageChanged(String conversation, long localId) {
+        if (current != null && current.conversation().equals(conversation)) current.refresh(localId);
+        refreshSidebar();
+    }
+
+    @Override
+    public void typing(String conversation, String who) {
+        if (current != null && current.conversation().equals(conversation)) current.typing(who);
+    }
+
+    @Override
+    public void notifyIncoming(History.Message m) {
+        if (!session.setting(AccountSession.NOTIFICATIONS) || !Boolean.parseBoolean(System.getProperty("securechat.notifications", "true"))) return;
+        boolean focused = stack.getScene() != null && stack.getScene().getWindow() != null
+                && stack.getScene().getWindow().isFocused();
+        boolean visible = current != null && current.conversation().equals(m.conversation());
+        if (focused && visible) return;
+        String where = m.conversation().startsWith("g:") ? groupName(Long.parseLong(m.conversation().substring(2)))
+                : m.sender();
+        String title = m.conversation().startsWith("g:") ? m.sender() + " in " + where : where;
+        String body = session.setting(AccountSession.NOTIFICATION_PREVIEW)
+                ? (m.file() != null ? "📎 " + m.text() : m.text())
+                : "New message";
+        notifier.show(title, body);
+    }
+
+    /** Called once the view is in a window: report reads when the window comes back into focus. */
+    private void hookFocus() {
+        if (focusHooked || stack.getScene() == null || stack.getScene().getWindow() == null) return;
+        focusHooked = true;
+        stack.getScene().getWindow().focusedProperty().addListener((o, a, focused) -> {
+            if (focused && current != null) current.windowFocused();
+        });
+    }
+
+    void dispose() {
+        notifier.close();
     }
 
     @Override

@@ -60,6 +60,20 @@ final class ConversationView {
     private final Map<Long, Label> statusLabels = new HashMap<>();
     private final Map<Long, Node> rows = new HashMap<>();
     private final TextField input = new TextField();
+    private final Map<Long, Boolean> continuedById = new HashMap<>();
+    private Map<Long, Map<String, String>> reactions = new HashMap<>();
+    private final HBox contextBar = new HBox(8);
+    private final Label contextText = new Label();
+    private final Label presence = new Label();
+    private final javafx.animation.PauseTransition typingTimeout =
+            new javafx.animation.PauseTransition(javafx.util.Duration.seconds(5));
+    private final javafx.animation.PauseTransition readDelay =
+            new javafx.animation.PauseTransition(javafx.util.Duration.millis(700));
+    private byte[] replyTo;            // uid of the message being answered, or null
+    private History.Message editing;   // our own message being edited, or null
+    private byte[] pendingRead;        // newest incoming uid not yet reported as read
+    private long lastTypingSent;
+    private String typingWho;
     private String lastSender;
     private long lastAt;
 
@@ -103,9 +117,32 @@ final class ConversationView {
         composer.getStyleClass().add("composer");
         composer.setAlignment(Pos.CENTER);
 
+        // "Replying to …" / "Editing message" bar above the composer
+        Button cancelContext = new Button("✕");
+        cancelContext.getStyleClass().addAll("small", "attach");
+        cancelContext.setId("cancel-context");
+        cancelContext.setOnAction(e -> clearContext());
+        contextText.getStyleClass().add("context-text");
+        contextText.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(contextText, Priority.ALWAYS);
+        contextBar.getChildren().addAll(contextText, cancelContext);
+        contextBar.getStyleClass().add("context-bar");
+        contextBar.setAlignment(Pos.CENTER_LEFT);
+        contextBar.setVisible(false);
+        contextBar.setManaged(false);
+        input.setOnKeyPressed(e -> {
+            if (e.getCode() == javafx.scene.input.KeyCode.ESCAPE) clearContext();
+        });
+        input.textProperty().addListener((o, a, b) -> maybeSendTyping(b));
+        typingTimeout.setOnFinished(e -> {
+            typingWho = null;
+            refreshPresence();
+        });
+        readDelay.setOnFinished(e -> sendReadReceipt());
+
         root.setTop(top);
         root.setCenter(scroller);
-        root.setBottom(composer);
+        root.setBottom(new VBox(contextBar, composer));
         refreshHeader();
         load();
         Platform.runLater(input::requestFocus);
@@ -138,7 +175,9 @@ final class ConversationView {
         if (peer != null) {
             input.setPromptText("Message " + peer);
             header.getChildren().add(UiKit.avatarWithPresence(peer, client.isOnline(peer)));
-            Label status = UiKit.label(client.isOnline(peer) ? "online" : "offline", "row-sub");
+            presence.getStyleClass().setAll("label", "row-sub");
+            refreshPresence();
+            Label status = presence;
             Label badge = client.isVerified(peer) && !client.keyChanged(peer)
                     ? UiKit.label("✓ Verified", "badge-verified")
                     : UiKit.label("Not verified", "badge-unverified");
@@ -154,7 +193,9 @@ final class ConversationView {
             members.setId("group-info-link");
             members.setStyle("-fx-cursor: hand;");
             members.setOnMouseClicked(e -> actions.openGroupInfo(groupId));
-            titles.getChildren().addAll(UiKit.label(name, "h2"), members);
+            presence.getStyleClass().setAll("label", "row-sub", "typing");
+            refreshPresence();
+            titles.getChildren().addAll(UiKit.label(name, "h2"), new HBox(8, members, presence));
         }
         header.getChildren().addAll(titles, UiKit.grow(), timerButton());
         if (peer == null) {
@@ -243,6 +284,43 @@ final class ConversationView {
         if (!ids.isEmpty()) lastSender = null;
     }
 
+    /** "online"/"offline" for a friend, or "… is typing" while someone types. */
+    private void refreshPresence() {
+        if (typingWho != null) {
+            presence.setText(peer != null ? "typing…" : typingWho + " is typing…");
+            if (!presence.getStyleClass().contains("typing")) presence.getStyleClass().add("typing");
+        } else {
+            presence.getStyleClass().remove("typing");
+            presence.setText(peer != null ? (session.client().isOnline(peer) ? "online" : "offline") : "");
+        }
+    }
+
+    /** Someone is typing here; the notice fades after a few seconds without news. */
+    void typing(String who) {
+        typingWho = who;
+        refreshPresence();
+        typingTimeout.playFromStart();
+    }
+
+    private void maybeSendTyping(String text) {
+        if (peer == null || text == null || text.isBlank() || editing != null) return;
+        long now = System.currentTimeMillis();
+        if (now - lastTypingSent < 3000 || !session.setting(AccountSession.SEND_TYPING)) return;
+        if (!session.client().isOnline(peer)) return; // never queue typing notices on the server
+        lastTypingSent = now;
+        session.background().execute(() -> {
+            try {
+                session.client().sendAction(ChatClient.Chat.dm(peer), ChatClient.ActionKind.TYPING, null, "1");
+            } catch (Exception ignored) {
+                // a typing notice is best effort
+            }
+        });
+    }
+
+    private ChatClient.Chat chat() {
+        return peer != null ? ChatClient.Chat.dm(peer) : ChatClient.Chat.group(groupId);
+    }
+
     private Packet.GroupInfo group() {
         return session.client().groups().stream().filter(g -> g.id() == groupId).findFirst().orElse(null);
     }
@@ -262,6 +340,7 @@ final class ConversationView {
                 row.setPadding(new Insets(14, 0, 4, 0));
                 messages.getChildren().add(row);
             }
+            reactions = session.history().reactions(conversation);
             for (History.Message m : list) append(m);
             session.history().markRead(conversation);
         } catch (IOException e) {
@@ -270,13 +349,60 @@ final class ConversationView {
     }
 
     void append(History.Message m) {
-        boolean own = m.outgoing();
         boolean continued = m.sender().equals(lastSender) && m.sentAt() - lastAt < GROUP_WINDOW_MS;
+        Node row = buildRow(m, continued);
+        messages.getChildren().add(row);
+        rows.put(m.id(), row);
+        continuedById.put(m.id(), continued);
+        lastSender = m.sender();
+        lastAt = m.sentAt();
+        if (!m.outgoing() && m.hasUid() && peer != null) {
+            pendingRead = m.uid();
+            readDelay.playFromStart();
+        }
+    }
+
+    /** Re-draws one message after an edit, deletion or reaction. */
+    void refresh(long localId) {
+        Node old = rows.get(localId);
+        if (old == null) return;
+        try {
+            History.Message m = session.history().get(localId);
+            reactions = session.history().reactions(conversation);
+            int index = messages.getChildren().indexOf(old);
+            if (m == null || index < 0) return;
+            Node row = buildRow(m, continuedById.getOrDefault(localId, false));
+            messages.getChildren().set(index, row);
+            rows.put(localId, row);
+        } catch (IOException ignored) {
+            // the old rendering stays
+        }
+    }
+
+    /** Scrolls to a message and highlights it briefly (search results). */
+    void reveal(long localId) {
+        Node row = rows.get(localId);
+        if (row == null) return;
+        Platform.runLater(() -> {
+            double content = messages.getHeight() - scroller.getViewportBounds().getHeight();
+            if (content > 0) scroller.setVvalue(Math.max(0, Math.min(1, row.getBoundsInParent().getMinY() / content)));
+            row.getStyleClass().add("highlight");
+            javafx.animation.PauseTransition t = new javafx.animation.PauseTransition(javafx.util.Duration.seconds(2));
+            t.setOnFinished(e -> row.getStyleClass().remove("highlight"));
+            t.play();
+        });
+    }
+
+    private Node buildRow(History.Message m, boolean continued) {
+        boolean own = m.outgoing();
         VBox bubble = new VBox(2);
         bubble.getStyleClass().addAll("bubble", own ? "own" : "peer");
         if (continued) bubble.getStyleClass().add("continued");
+        if (m.replyTo().length > 0 && !m.deleted()) bubble.getChildren().add(quote(m.replyTo()));
         Node body;
-        if (m.file() != null) {
+        if (m.deleted()) {
+            body = UiKit.label("🚫 " + History.DELETED_TEXT, "bubble-text", "bubble-deleted");
+        } else if (m.file() != null) {
             body = fileCard(m.file());
         } else {
             Label text = UiKit.label(m.text(), "bubble-text");
@@ -284,6 +410,7 @@ final class ConversationView {
             body = text;
         }
         HBox meta = new HBox(5, UiKit.label(UiKit.clock(m.sentAt()), "bubble-time"));
+        if (m.edited()) meta.getChildren().add(0, UiKit.label("edited", "bubble-time"));
         if (m.expiresAt() > 0) {
             Label timer = UiKit.label("⏱", "bubble-time");
             Tooltip.install(timer, new Tooltip("Disappears at " + UiKit.clock(m.expiresAt())));
@@ -300,6 +427,9 @@ final class ConversationView {
         bubble.maxWidthProperty().bind(messages.widthProperty().multiply(0.70));
         bubble.setMinWidth(Region.USE_PREF_SIZE);
         bubble.setMinHeight(Region.USE_PREF_SIZE);
+        if (m.hasUid() && !m.deleted()) {
+            bubble.setOnContextMenuRequested(e -> menu(m).show(bubble, e.getScreenX(), e.getScreenY()));
+        }
 
         VBox column = new VBox(bubble);
         column.setAlignment(own ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
@@ -308,13 +438,187 @@ final class ConversationView {
             name.setStyle("-fx-text-fill: " + UiKit.css(UiKit.colorFor(m.sender())) + ";");
             column.getChildren().add(0, name);
         }
+        Map<String, String> theirs = reactions.get(m.id());
+        if (theirs != null && !theirs.isEmpty()) column.getChildren().add(reactionChips(m, theirs, own));
         HBox row = new HBox(column);
         row.setAlignment(own ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
         row.setPadding(new Insets(continued ? 3 : 12, 0, 0, 0));
-        messages.getChildren().add(row);
-        rows.put(m.id(), row);
-        lastSender = m.sender();
-        lastAt = m.sentAt();
+        row.setUserData(m.id());
+        return row;
+    }
+
+    /** The answered message, shown small at the top of a reply. */
+    private Node quote(byte[] target) {
+        String who;
+        String text;
+        try {
+            History.Message original = session.history().find(conversation, target);
+            who = original == null ? "" : original.outgoing() ? "You" : original.sender();
+            text = original == null ? "Message not available" : original.text();
+        } catch (IOException e) {
+            who = "";
+            text = "Message not available";
+        }
+        Label sender = UiKit.label(who, "quote-sender");
+        Label snippet = UiKit.label(text, "quote-text");
+        snippet.setMaxWidth(320);
+        VBox box = new VBox(1, sender, snippet);
+        box.getStyleClass().add("reply-quote");
+        return box;
+    }
+
+    private Node reactionChips(History.Message m, Map<String, String> byPerson, boolean own) {
+        Map<String, List<String>> byEmoji = new java.util.LinkedHashMap<>();
+        byPerson.forEach((person, emoji) -> byEmoji.computeIfAbsent(AccountSession.displayEmoji(emoji), k -> new java.util.ArrayList<>()).add(person));
+        HBox chips = new HBox(4);
+        chips.setAlignment(own ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+        String me = session.client().username();
+        byEmoji.forEach((emoji, people) -> {
+            Label chip = UiKit.label(emoji + (people.size() > 1 ? " " + people.size() : ""), "reaction-chip");
+            if (people.contains(me)) chip.getStyleClass().add("mine");
+            Tooltip.install(chip, new Tooltip(String.join(", ", people.stream().map(p -> p.equals(me) ? "you" : p).toList())));
+            chip.setOnMouseClicked(e -> react(m, people.contains(me) ? "" : emoji));
+            chips.getChildren().add(chip);
+        });
+        return chips;
+    }
+
+    private javafx.scene.control.ContextMenu menu(History.Message m) {
+        javafx.scene.control.ContextMenu menu = new javafx.scene.control.ContextMenu();
+        MenuItem reply = new MenuItem("Reply");
+        reply.setId("menu-reply");
+        reply.setOnAction(e -> startReply(m));
+        javafx.scene.control.Menu react = new javafx.scene.control.Menu("React");
+        String mine = AccountSession.displayEmoji(reactions.getOrDefault(m.id(), Map.of()).getOrDefault(session.client().username(), ""));
+        for (String emoji : AccountSession.REACTIONS) {
+            MenuItem item = new MenuItem(emoji.equals(mine) ? emoji + "  ✓" : emoji);
+            item.setId("react-" + AccountSession.REACTIONS.indexOf(emoji));
+            item.setOnAction(e -> react(m, emoji.equals(mine) ? "" : emoji));
+            react.getItems().add(item);
+        }
+        menu.getItems().addAll(reply, react);
+        if (m.file() == null) {
+            MenuItem copy = new MenuItem("Copy text");
+            copy.setOnAction(e -> {
+                javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
+                content.putString(m.text());
+                javafx.scene.input.Clipboard.getSystemClipboard().setContent(content);
+            });
+            menu.getItems().add(copy);
+        }
+        if (m.outgoing()) {
+            if (m.file() == null) {
+                MenuItem edit = new MenuItem("Edit");
+                edit.setId("menu-edit");
+                edit.setOnAction(e -> startEdit(m));
+                menu.getItems().add(edit);
+            }
+            MenuItem delete = new MenuItem("Delete for everyone");
+            delete.setId("menu-delete");
+            delete.setOnAction(e -> deleteForEveryone(m));
+            menu.getItems().add(delete);
+        }
+        return menu;
+    }
+
+    void act(long localId, String action) {
+        try {
+            History.Message m = session.history().get(localId);
+            if (m == null) return;
+            switch (action) {
+                case "reply" -> startReply(m);
+                case "edit" -> startEdit(m);
+                case "delete" -> deleteForEveryone(m);
+                default -> react(m, action);
+            }
+        } catch (IOException ignored) {
+            // nothing to act on
+        }
+    }
+
+    private void startReply(History.Message m) {
+        editing = null;
+        replyTo = m.uid();
+        String who = m.outgoing() ? "yourself" : m.sender();
+        showContext("↩ Replying to " + who + ": " + m.text());
+        input.requestFocus();
+    }
+
+    private void startEdit(History.Message m) {
+        replyTo = null;
+        editing = m;
+        showContext("✎ Editing message");
+        input.setText(m.text());
+        input.positionCaret(input.getText().length());
+        input.requestFocus();
+    }
+
+    private void showContext(String text) {
+        contextText.setText(text);
+        contextBar.setVisible(true);
+        contextBar.setManaged(true);
+    }
+
+    private void clearContext() {
+        if (editing != null) input.clear();
+        replyTo = null;
+        editing = null;
+        contextBar.setVisible(false);
+        contextBar.setManaged(false);
+    }
+
+    private void react(History.Message m, String emoji) {
+        String me = session.client().username();
+        try {
+            session.history().react(conversation, m.uid(), me, emoji);
+        } catch (IOException e) {
+            return;
+        }
+        refresh(m.id());
+        sendAction(ChatClient.ActionKind.REACT, m.uid(), emoji);
+    }
+
+    private void deleteForEveryone(History.Message m) {
+        try {
+            History.Message deleted = session.history().delete(conversation, m.uid(), session.client().username());
+            if (deleted != null && deleted.file() != null) session.client().forgetFile(deleted.file());
+        } catch (IOException e) {
+            return;
+        }
+        refresh(m.id());
+        sendAction(ChatClient.ActionKind.DELETE, m.uid(), "");
+    }
+
+    private void sendAction(ChatClient.ActionKind kind, byte[] target, String value) {
+        session.background().execute(() -> {
+            String problem = null;
+            try {
+                session.client().sendAction(chat(), kind, target, value);
+            } catch (KeyChangedException e) {
+                problem = peer + "'s key changed. Verify it first.";
+            } catch (Exception e) {
+                problem = "Could not send the change: " + e.getMessage();
+            }
+            String p = problem;
+            if (p != null) Platform.runLater(() -> systemLine(p, true));
+        });
+    }
+
+    /** Tells a friend we read their messages up to the newest one shown (if they allow receipts). */
+    private void sendReadReceipt() {
+        byte[] target = pendingRead;
+        pendingRead = null;
+        if (target == null || peer == null || !session.setting(AccountSession.SEND_READ_RECEIPTS)) return;
+        if (root.getScene() == null || root.getScene().getWindow() == null || !root.getScene().getWindow().isFocused()) {
+            pendingRead = target; // read when the window is looked at again
+            return;
+        }
+        sendAction(ChatClient.ActionKind.READ, target, "");
+    }
+
+    /** The window regained focus: report what is now visible as read. */
+    void windowFocused() {
+        if (pendingRead != null) readDelay.playFromStart();
     }
 
     void setStatus(long localId, int status) {
@@ -327,7 +631,14 @@ final class ConversationView {
         switch (status) {
             case History.PENDING -> l.setText("…");
             case History.SENT -> l.setText(groupId != 0 ? "✓" : "✓");
-            case History.DELIVERED -> l.setText("✓✓");
+            case History.DELIVERED -> {
+                l.setText("✓✓");
+                l.getStyleClass().remove("read");
+            }
+            case History.READ -> {
+                l.setText("✓✓");
+                if (!l.getStyleClass().contains("read")) l.getStyleClass().add("read");
+            }
             case History.FAILED -> {
                 l.setText("not sent");
                 l.getStyleClass().add("failed");
@@ -346,29 +657,45 @@ final class ConversationView {
             return;
         }
         input.setStyle("");
-        input.clear();
         String me = session.client().username();
+        if (editing != null) {
+            History.Message target = editing;
+            clearContext();
+            input.clear();
+            if (text.equals(target.text())) return;
+            try {
+                session.history().edit(conversation, target.uid(), me, text);
+            } catch (IOException e) {
+                return;
+            }
+            refresh(target.id());
+            sendAction(ChatClient.ActionKind.EDIT, target.uid(), text);
+            return;
+        }
+        input.clear();
+        byte[] answering = replyTo;
+        clearContext();
+        byte[] uid = ChatClient.newMessageId();
         long now = System.currentTimeMillis();
         long expire = session.timer(conversation);
         long expiresAt = AccountSession.expiresAt(now, expire);
         long localId;
+        History.Message stored;
         try {
-            localId = session.history().add(conversation, me, text, now, true, History.PENDING, 0, expiresAt);
+            localId = session.history().add(conversation, me, text, now, true, History.PENDING, 0, expiresAt, uid, answering);
+            stored = session.history().get(localId);
         } catch (IOException e) {
             return;
         }
-        append(new History.Message(localId, conversation, me, text, now, true, History.PENDING, 0, null, expiresAt));
+        append(stored);
         session.background().execute(() -> {
             int status;
             String problem = null;
             try {
-                if (peer != null) {
-                    long envelope = session.client().sendText(peer, text, expire).id();
-                    status = session.sent(localId, envelope);
-                } else {
-                    List<String> skipped = session.client().sendGroupText(groupId, text, expire);
-                    status = session.sent(localId, 0);
-                    if (!skipped.isEmpty()) problem = "Not sent to " + String.join(", ", skipped) + " until their new key is verified.";
+                ChatClient.Sent sent = session.client().send(chat(), text, expire, answering, uid);
+                status = session.sent(localId, sent.envelopeId());
+                if (!sent.skipped().isEmpty()) {
+                    problem = "Not sent to " + String.join(", ", sent.skipped()) + " until their new key is verified.";
                 }
             } catch (KeyChangedException e) {
                 status = History.FAILED;
@@ -447,6 +774,8 @@ final class ConversationView {
         row.setPadding(new Insets(12, 0, 0, 0));
         messages.getChildren().add(row);
         long expire = session.timer(conversation);
+        byte[] answering = replyTo;
+        clearContext();
         session.background().execute(() -> {
             String problem = null;
             History.Message stored = null;
@@ -454,24 +783,14 @@ final class ConversationView {
                 byte[] data = Files.readAllBytes(chosen.toPath());
                 String mime = mimeType(chosen.toPath());
                 String me = session.client().username();
-                if (peer != null) {
-                    ChatClient.SentFile sent = session.client().sendFile(peer, name, mime, data, expire);
-                    long expiresAt = AccountSession.expiresAt(System.currentTimeMillis(), expire);
-                    long id = session.history().addFile(conversation, me, sent.file(), sent.file().sentAtMillis(), true,
-                            History.SENT, sent.envelopeId(), expiresAt);
-                    int status = session.sent(id, sent.envelopeId());
-                    stored = new History.Message(id, conversation, me, name, sent.file().sentAtMillis(), true, status,
-                            sent.envelopeId(), sent.file(), expiresAt);
-                } else {
-                    Map.Entry<FileMessage, List<String>> sent = session.client().sendGroupFile(groupId, name, mime, data, expire);
-                    long expiresAt = AccountSession.expiresAt(System.currentTimeMillis(), expire);
-                    long id = session.history().addFile(conversation, me, sent.getKey(), sent.getKey().sentAtMillis(), true,
-                            History.SENT, 0, expiresAt);
-                    stored = new History.Message(id, conversation, me, name, sent.getKey().sentAtMillis(), true, History.SENT,
-                            0, sent.getKey(), expiresAt);
-                    if (!sent.getValue().isEmpty()) {
-                        problem = "Not sent to " + String.join(", ", sent.getValue()) + " until their new key is verified.";
-                    }
+                ChatClient.Sent sent = session.client().sendFile(chat(), name, mime, data, expire, answering);
+                long expiresAt = AccountSession.expiresAt(System.currentTimeMillis(), expire);
+                long id = session.history().addFile(conversation, me, sent.file(), sent.file().sentAtMillis(), true,
+                        History.SENT, sent.envelopeId(), expiresAt, sent.messageId(), answering);
+                session.sent(id, sent.envelopeId());
+                stored = session.history().get(id);
+                if (!sent.skipped().isEmpty()) {
+                    problem = "Not sent to " + String.join(", ", sent.skipped()) + " until their new key is verified.";
                 }
             } catch (KeyChangedException e) {
                 problem = peer + "'s key changed. Verify it, then send again.";

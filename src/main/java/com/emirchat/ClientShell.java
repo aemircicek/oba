@@ -281,6 +281,16 @@ final class ClientShell {
                     + " so nothing is stored here."));
         }
 
+        @Override public void action(ChatClient.Action a) {
+            String where = a.groupId() == 0 ? "" : " in #" + a.groupId();
+            switch (a.kind()) {
+                case REACT -> show(a.from() + (a.value().isEmpty() ? " took back a reaction" : " reacted " + a.value()) + where + ".");
+                case EDIT -> show(a.from() + " edited a message" + where + ": " + a.value());
+                case DELETE -> show(a.from() + " deleted a message" + where + ".");
+                default -> { } // read receipts and typing are for the desktop app
+            }
+        }
+
         @Override public void groupRemoved(long groupId) {
             show("You are no longer in group #" + groupId + ".");
         }

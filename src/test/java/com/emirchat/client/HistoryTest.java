@@ -113,6 +113,111 @@ class HistoryTest {
         }
     }
 
+    private static byte[] uid(int n) {
+        byte[] id = new byte[16];
+        id[0] = (byte) n;
+        id[15] = 1;
+        return id;
+    }
+
+    @Test
+    void onlyTheAuthorCanEditOrDelete() throws Exception {
+        try (History h = History.open(dir.resolve("h.db"), "pw", 1000)) {
+            long theirs = h.add("dm:efe", "efe", "orijinal", 1, false, History.RECEIVED, 1, 0, uid(1), null);
+            assertEquals(-1, h.edit("dm:efe", uid(1), "mallory", "sahte"), "someone else cannot edit");
+            assertEquals(theirs, h.edit("dm:efe", uid(1), "efe", "düzeltilmiş"));
+            History.Message edited = h.get(theirs);
+            assertEquals("düzeltilmiş", edited.text());
+            assertTrue(edited.edited());
+
+            assertEquals(null, h.delete("dm:efe", uid(1), "mallory"));
+            h.react("dm:efe", uid(1), "emir", "👍");
+            assertTrue(h.delete("dm:efe", uid(1), "efe") != null, "the author can delete");
+            History.Message gone = h.get(theirs);
+            assertTrue(gone.deleted());
+            assertEquals(History.DELETED_TEXT, gone.text());
+            assertTrue(h.reactions("dm:efe").isEmpty(), "reactions go with the message");
+            assertEquals(-1, h.edit("dm:efe", uid(1), "efe", "geri getir"), "a deleted message stays deleted");
+            assertEquals(-1, h.react("dm:efe", uid(1), "emir", "❤️"));
+            assertEquals(History.DELETED_TEXT, h.summaries().get(0).lastText());
+            assertEquals(-1, h.edit("g:1", uid(1), "efe", "x"), "ids are looked up per conversation");
+        }
+    }
+
+    @Test
+    void reactionsOnePerPersonAndRemovable() throws Exception {
+        try (History h = History.open(dir.resolve("h.db"), "pw", 1000)) {
+            long id = h.add("g:4", "ayse", "toplantı yarın", 1, false, History.RECEIVED, 1, 0, uid(2), null);
+            h.react("g:4", uid(2), "emir", "👍");
+            h.react("g:4", uid(2), "efe", "❤️");
+            h.react("g:4", uid(2), "emir", "😂"); // changes emir's reaction
+            assertEquals(java.util.Map.of("emir", "😂", "efe", "❤️"), h.reactions("g:4").get(id));
+            h.react("g:4", uid(2), "efe", "");
+            assertEquals(java.util.Map.of("emir", "😂"), h.reactions("g:4").get(id));
+        }
+    }
+
+    @Test
+    void readReceiptsMarkOurMessagesUpToTheTarget() throws Exception {
+        try (History h = History.open(dir.resolve("h.db"), "pw", 1000)) {
+            long a = h.add("dm:efe", "emir", "bir", 1, true, History.DELIVERED, 1, 0, uid(3), null);
+            long b = h.add("dm:efe", "emir", "iki", 2, true, History.SENT, 2, 0, uid(4), null);
+            h.add("dm:efe", "efe", "cevap", 3, false, History.RECEIVED, 3, 0, uid(5), null);
+            long c = h.add("dm:efe", "emir", "üç", 4, true, History.SENT, 4, 0, uid(6), null);
+            assertEquals(List.of(a, b), h.markReadUpTo("dm:efe", uid(4)));
+            assertEquals(History.READ, h.get(b).status());
+            assertEquals(History.SENT, h.get(c).status(), "later messages are not read yet");
+            assertTrue(h.markReadUpTo("dm:efe", uid(5)).isEmpty(), "a receipt must point at one of our messages");
+            assertTrue(h.markReadUpTo("dm:ayse", uid(6)).isEmpty(), "only in that conversation");
+
+            // a receipt that overtakes our own bookkeeping is not undone by it
+            long d = h.add("dm:efe", "emir", "dört", 5, true, History.PENDING, 0, 0, uid(13), null);
+            assertEquals(List.of(c, d), h.markReadUpTo("dm:efe", uid(13)));
+            h.setStatus(d, History.SENT, 99);
+            assertEquals(History.READ, h.get(d).status());
+            h.markDelivered(99);
+            assertEquals(History.READ, h.get(d).status());
+        }
+    }
+
+    @Test
+    void repliesKeepTheirTarget() throws Exception {
+        try (History h = History.open(dir.resolve("h.db"), "pw", 1000)) {
+            h.add("dm:efe", "efe", "akşam müsait misin?", 1, false, History.RECEIVED, 1, 0, uid(7), null);
+            long reply = h.add("dm:efe", "emir", "evet", 2, true, History.SENT, 2, 0, uid(8), uid(7));
+            History.Message m = h.get(reply);
+            assertTrue(java.util.Arrays.equals(uid(7), m.replyTo()));
+            assertEquals("akşam müsait misin?", h.find("dm:efe", m.replyTo()).text());
+        }
+    }
+
+    @Test
+    void searchFindsTextsAndFileNamesButNotDeletedMessages() throws Exception {
+        try (History h = History.open(dir.resolve("h.db"), "pw", 1000)) {
+            h.add("dm:efe", "efe", "MobilCAD toplantısı yarın", 1, false, History.RECEIVED, 1, 0, uid(9), null);
+            h.add("g:2", "ayse", "mobilcad için DWG araştırdım", 2, false, History.RECEIVED, 2, 0, uid(10), null);
+            h.addFile("dm:efe", "efe", new com.emirchat.chat.FileMessage(new byte[16], new byte[32], new byte[32], 1,
+                    "MobilCAD-sunum.pdf", "application/pdf", 3), 3, false, History.RECEIVED, 3, 0, uid(11), null);
+            h.add("dm:efe", "efe", "silinecek mobilcad notu", 4, false, History.RECEIVED, 4, 0, uid(12), null);
+            h.delete("dm:efe", uid(12), "efe");
+            List<String> found = h.search("mobilcad", 10).stream().map(History.Message::text).toList();
+            assertEquals(List.of("MobilCAD-sunum.pdf", "mobilcad için DWG araştırdım", "MobilCAD toplantısı yarın"), found);
+            assertTrue(h.search("   ", 10).isEmpty());
+        }
+    }
+
+    @Test
+    void settingsPersist() throws Exception {
+        Path file = dir.resolve("h.db");
+        try (History h = History.open(file, "pw", 1000)) {
+            assertEquals("true", h.setting("send-typing", "true"));
+            h.setSetting("send-typing", "false");
+        }
+        try (History h = History.open(file, "pw", 1000)) {
+            assertEquals("false", h.setting("send-typing", "true"));
+        }
+    }
+
     @Test
     void historiesFromBeforeFileSupportAreUpgraded() throws Exception {
         Path file = dir.resolve("old.db");

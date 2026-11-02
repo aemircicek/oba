@@ -7,6 +7,7 @@ import com.emirchat.chat.TerminalSanitizer;
 import com.emirchat.client.ChatClient;
 import com.emirchat.client.History;
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import javafx.application.Platform;
@@ -38,7 +39,43 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
         /** The disappearing-message timer of a conversation changed (by us or by someone else). */
         void timerChanged(String conversation, String by, long seconds);
+
+        /** A stored message was edited, deleted or reacted to: re-read it from history. */
+        void messageChanged(String conversation, long localId);
+
+        /** Someone is typing in a conversation. */
+        void typing(String conversation, String who);
+
+        /** A new message arrived (after it was stored); used for notifications. */
+        default void notifyIncoming(History.Message message) {}
     }
+
+    /** Setting keys (stored per account in the history database). */
+    static final String SEND_READ_RECEIPTS = "send-read-receipts";
+    static final String SEND_TYPING = "send-typing";
+    static final String NOTIFICATIONS = "notifications";
+    static final String NOTIFICATION_PREVIEW = "notification-preview";
+
+    boolean setting(String key) {
+        return Boolean.parseBoolean(history.setting(key, "true"));
+    }
+
+    void setSetting(String key, boolean value) {
+        try {
+            history.setSetting(key, Boolean.toString(value));
+        } catch (IOException ignored) {
+            // a setting that could not be saved keeps its old value next time
+        }
+    }
+
+    /** The reactions offered in the app. */
+    static final List<String> REACTIONS = List.of("👍", "❤", "😂", "😮", "😢", "🙏");
+
+    /** Emoji variation selectors (U+FE0E/U+FE0F) render as boxes in JavaFX fonts; the base symbol is enough. */
+    static String displayEmoji(String emoji) {
+        return emoji.replace("\uFE0F", "").replace("\uFE0E", "");
+    }
+    private static final int MAX_REACTION_BYTES = 32;
 
     /** The timer choices offered in the app, in seconds (0 = off). */
     static final long[] TIMER_CHOICES = {0, 5 * 60, 3600, 24 * 3600, 7 * 24 * 3600};
@@ -149,32 +186,62 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     /** Records a completed send; returns the status to show (delivered if the receipt already came). */
     int sent(long localId, long envelopeId) throws IOException {
         history.setStatus(localId, History.SENT, envelopeId);
-        if (envelopeId > 0 && earlyDeliveries.remove(envelopeId) && history.markDelivered(envelopeId) >= 0) {
-            return History.DELIVERED;
-        }
-        return History.SENT;
+        if (envelopeId > 0 && earlyDeliveries.remove(envelopeId)) history.markDelivered(envelopeId);
+        History.Message m = history.get(localId);
+        return m == null ? History.SENT : m.status(); // a read receipt may already have arrived
     }
 
     // ------------------------------------------------------------------ ChatClient.Listener (inbox thread)
 
     @Override
-    public void message(String from, ChatMessage message, long envelopeId, long expireSeconds) {
-        store(dm(from), from, message, envelopeId, expireSeconds);
+    public void incoming(ChatClient.Incoming m) {
+        String conversation = m.groupId() == 0 ? dm(m.from()) : group(m.groupId());
+        if (m.text() != null) {
+            store(conversation, m.from(), m.text(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo());
+        } else {
+            storeFile(conversation, m.from(), m.file(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo());
+        }
     }
 
+    /**
+     * Applies a reaction, edit, deletion, read receipt or typing notice. History enforces who may
+     * do what: only the author can edit or delete a message, and a read receipt only touches our
+     * own messages in that direct chat.
+     */
     @Override
-    public void groupMessage(long groupId, String from, ChatMessage message, long envelopeId, long expireSeconds) {
-        store(group(groupId), from, message, envelopeId, expireSeconds);
-    }
-
-    @Override
-    public void file(String from, FileMessage file, long envelopeId, long expireSeconds) {
-        storeFile(dm(from), from, file, envelopeId, expireSeconds);
-    }
-
-    @Override
-    public void groupFile(long groupId, String from, FileMessage file, long envelopeId, long expireSeconds) {
-        storeFile(group(groupId), from, file, envelopeId, expireSeconds);
+    public void action(ChatClient.Action a) {
+        String conversation = a.groupId() == 0 ? dm(a.from()) : group(a.groupId());
+        try {
+            switch (a.kind()) {
+                case REACT -> {
+                    String emoji = TerminalSanitizer.sanitize(a.value()).strip();
+                    if (emoji.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_REACTION_BYTES) return;
+                    long id = history.react(conversation, a.target(), a.from(), emoji);
+                    if (id >= 0) fx(v -> v.messageChanged(conversation, id));
+                }
+                case EDIT -> {
+                    long id = history.edit(conversation, a.target(), a.from(), TerminalSanitizer.sanitize(a.value()));
+                    if (id >= 0) fx(v -> v.messageChanged(conversation, id));
+                }
+                case DELETE -> {
+                    History.Message deleted = history.delete(conversation, a.target(), a.from());
+                    if (deleted != null) {
+                        ChatClient c = client;
+                        if (deleted.file() != null && c != null) c.forgetFile(deleted.file());
+                        fx(v -> v.messageChanged(conversation, deleted.id()));
+                    }
+                }
+                case READ -> {
+                    if (a.groupId() != 0) return; // receipts are for direct chats only
+                    for (long id : history.markReadUpTo(conversation, a.target())) fx(v -> v.statusChanged(id, History.READ));
+                }
+                case TYPING -> {
+                    if ("1".equals(a.value())) fx(v -> v.typing(conversation, a.from()));
+                }
+            }
+        } catch (IOException e) {
+            fx(v -> v.problem("Could not apply a change from " + a.from() + ": " + e.getMessage()));
+        }
     }
 
     @Override
@@ -189,29 +256,35 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         fx(v -> v.timerChanged(conversation, from, seconds));
     }
 
-    private void storeFile(String conversation, String from, FileMessage file, long envelopeId, long expireSeconds) {
+    private void storeFile(String conversation, String from, FileMessage file, long envelopeId, long expireSeconds,
+                           byte[] uid, byte[] replyTo) {
         try {
             // A disappearing message's clock starts when it arrives (clocks of different devices may differ).
             long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
             long id = history.addFile(conversation, from, file, file.sentAtMillis(), false, History.RECEIVED, envelopeId,
-                    expiresAt);
-            History.Message stored = new History.Message(id, conversation, from, file.name(), file.sentAtMillis(), false,
-                    History.RECEIVED, envelopeId, file, expiresAt);
-            fx(v -> v.messageStored(stored));
+                    expiresAt, uid, replyTo);
+            History.Message stored = history.get(id);
+            fx(v -> {
+                v.messageStored(stored);
+                v.notifyIncoming(stored);
+            });
         } catch (IOException e) {
             fx(v -> v.problem("Could not save a file message: " + e.getMessage()));
         }
     }
 
-    private void store(String conversation, String from, ChatMessage message, long envelopeId, long expireSeconds) {
+    private void store(String conversation, String from, ChatMessage message, long envelopeId, long expireSeconds,
+                       byte[] uid, byte[] replyTo) {
         try {
             String text = TerminalSanitizer.sanitize(message.text());
             long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
             long id = history.add(conversation, from, text, message.sentAtMillis(), false, History.RECEIVED, envelopeId,
-                    expiresAt);
-            History.Message stored = new History.Message(id, conversation, from, text, message.sentAtMillis(), false,
-                    History.RECEIVED, envelopeId, null, expiresAt);
-            fx(v -> v.messageStored(stored));
+                    expiresAt, uid, replyTo);
+            History.Message stored = history.get(id);
+            fx(v -> {
+                v.messageStored(stored);
+                v.notifyIncoming(stored);
+            });
         } catch (IOException e) {
             fx(v -> v.problem("Could not save a message: " + e.getMessage()));
         }
@@ -223,7 +296,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
             long id = history.markDelivered(envelopeId);
             if (id >= 0) {
                 fx(v -> v.statusChanged(id, History.DELIVERED));
-            } else {
+            } else if (earlyDeliveries.size() < 1000) { // receipts for typing notices etc. match nothing
                 earlyDeliveries.add(envelopeId);
             }
         } catch (IOException ignored) {

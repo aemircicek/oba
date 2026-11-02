@@ -51,6 +51,7 @@ public final class AccountPreview {
     private static final class Bot {
         final String name;
         final BlockingQueue<String> inbox = new LinkedBlockingQueue<>();
+        final java.util.List<ChatClient.Incoming> received = new java.util.concurrent.CopyOnWriteArrayList<>();
         ChatClient client;
 
         Bot(String name, Path device, boolean register) throws Exception {
@@ -62,6 +63,11 @@ public final class AccountPreview {
                 @Override public void message(String from, ChatMessage m, long e) { inbox.add(from + ": " + m.text()); }
 
                 @Override public void groupMessage(long g, String from, ChatMessage m, long e) { inbox.add("#" + g + " " + from + ": " + m.text()); }
+
+                @Override public void incoming(ChatClient.Incoming m) {
+                    received.add(m);
+                    ChatClient.Listener.super.incoming(m);
+                }
             });
         }
 
@@ -183,6 +189,39 @@ public final class AccountPreview {
         efe.client.sendFile("emir", "MobilCAD-sunum.pdf", "application/pdf", new byte[184_320]);
         Thread.sleep(1500);
         snap("05b-files");
+
+        // Replies, reactions, edits and read receipts, driven from efe's side
+        System.setProperty("securechat.notifications", "false");
+        ChatClient.Chat toEmir = ChatClient.Chat.dm("emir");
+        java.util.List<ChatClient.Incoming> fromEmir = efe.received.stream().filter(m -> m.text() != null).toList();
+        ChatClient.Incoming first = fromEmir.get(0);
+        ChatClient.Incoming second = fromEmir.get(fromEmir.size() - 1);
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.READ, second.messageId(), "");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.REACT, second.messageId(), "❤️");
+        efe.client.send(toEmir, "Tamam, 8'de görüşürüz 👍", 0, first.messageId());
+        ChatClient.Sent typo = efe.client.send(toEmir, "Sunumu yarn bitiririm", 0, null);
+        Thread.sleep(400);
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.EDIT, typo.messageId(), "Sunumu yarın bitiririm");
+        Thread.sleep(400);
+        type("Süper, sunumu bekliyorum!");
+        efe.next();
+        ChatClient.Incoming latest = efe.received.get(efe.received.size() - 1);
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.READ, latest.messageId(), "");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.REACT, latest.messageId(), "❤️");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.TYPING, null, "1");
+        Thread.sleep(900);
+        snap("05d-rich");
+
+        fx(() -> { ((TextField) find("#search")).setText("sunum"); return null; });
+        Thread.sleep(400);
+        snap("05e-search");
+        fx(() -> { ((TextField) find("#search")).setText(""); return null; });
+        fx(() -> { ((Button) find("#settings")).fire(); return null; });
+        waitFor("#settings-dialog");
+        pause();
+        snap("05f-settings");
+        fx(() -> { ((Button) find("#settings-done")).fire(); return null; });
+        Thread.sleep(300);
 
         // Disappearing messages: turn on a one-hour timer, then send a message
         fx(() -> {
