@@ -32,7 +32,7 @@ final class ClientShell {
             "  groups             list your groups        gmsg <id> <text>  message a group",
             "  group <name> <user,user,...>   create a group with friends",
             "  gadd <id> <user>   add a friend (admin)    gremove <id> <user>  remove a member (admin)",
-            "  gleave <id>        leave a group",
+            "  gleave <id>        leave a group       grename <id> <name>  rename a group (admin)",
             "  file <user> <path> send an encrypted file  gfile <id> <path>  send a file to a group",
             "  save <n> <folder>  save received file number n",
             "  timer <user|#id> <off|5m|1h|1d|1w>  disappearing messages for a chat",
@@ -114,6 +114,14 @@ final class ClientShell {
                     case "gremove" -> {
                         String[] a = (parts.length > 2 ? arg + " " + parts[2] : arg).split("\\s+");
                         client.removeGroupMember(Long.parseLong(a[0]), a[1]);
+                    }
+                    case "grename" -> {
+                        if (parts.length < 3) {
+                            System.out.println("Usage: grename <id> <new name>");
+                        } else {
+                            client.renameGroup(Long.parseLong(arg), parts[2]);
+                            System.out.println("Renamed (the name is end-to-end encrypted).");
+                        }
                     }
                     case "gleave" -> {
                         client.leaveGroup(Long.parseLong(arg));

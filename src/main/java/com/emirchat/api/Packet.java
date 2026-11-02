@@ -24,6 +24,8 @@ public sealed interface Packet {
     int MAX_ACKS = 500;
     int MAX_GROUP_NAME_BYTES = 64;
     int MAX_GROUP_MEMBERS = 100;
+    /** An encrypted group name as stored by the server (see {@code com.emirchat.e2e.GroupNames}). */
+    int MAX_SEALED_NAME_BYTES = 256;
     /** Attachment upload and download chunk size (well under the 64 KiB frame limit). */
     int MAX_CHUNK_BYTES = 32 * 1024;
     int ATTACHMENT_ID_BYTES = com.emirchat.e2e.Attachments.ID_LENGTH;
@@ -93,6 +95,19 @@ public sealed interface Packet {
     }
 
     record AddGroupMember(long groupId, String username) implements Packet {}
+
+    /** Sets the group's end-to-end encrypted name (admin only); the server cannot read it. */
+    record RenameGroup(long groupId, byte[] sealedName) implements Packet {
+        public RenameGroup { sealedName = sealedName.clone(); }
+
+        @Override public byte[] sealedName() { return sealedName.clone(); }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof RenameGroup r && r.groupId == groupId && java.util.Arrays.equals(r.sealedName, sealedName);
+        }
+
+        @Override public int hashCode() { return Long.hashCode(groupId); }
+    }
 
     record RemoveGroupMember(long groupId, String username) implements Packet {}
 
@@ -205,12 +220,38 @@ public sealed interface Packet {
         @Override public int hashCode() { return username.hashCode(); }
     }
 
-    record GroupInfo(long id, String name, String owner, List<Member> members) implements Packet {
-        public GroupInfo { members = List.copyOf(members); }
+    /**
+     * @param name       from the server: a plaintext name of a group created before names were
+     *                   encrypted (else empty). Clients replace it with the decrypted name.
+     * @param sealedName the end-to-end encrypted name, or empty
+     */
+    record GroupInfo(long id, String name, String owner, List<Member> members, byte[] sealedName) implements Packet {
+        public GroupInfo {
+            members = List.copyOf(members);
+            sealedName = sealedName.clone();
+        }
+
+        public GroupInfo(long id, String name, String owner, List<Member> members) {
+            this(id, name, owner, members, new byte[0]);
+        }
+
+        @Override public byte[] sealedName() { return sealedName.clone(); }
 
         public boolean hasMember(String username) {
             return members.stream().anyMatch(m -> m.username().equals(username));
         }
+
+        /** The same group shown under another name. */
+        public GroupInfo withName(String displayName) {
+            return new GroupInfo(id, displayName, owner, members, sealedName);
+        }
+
+        @Override public boolean equals(Object o) {
+            return o instanceof GroupInfo g && g.id == id && g.name.equals(name) && g.owner.equals(owner)
+                    && g.members.equals(members) && java.util.Arrays.equals(g.sealedName, sealedName);
+        }
+
+        @Override public int hashCode() { return Long.hashCode(id); }
     }
 
     record GroupList(List<GroupInfo> groups) implements Packet {
@@ -315,6 +356,7 @@ public sealed interface Packet {
                 writeNames(w, c.members());
             }
             case AddGroupMember a -> w.u8(31).i64(requestId).i64(a.groupId()).string(a.username());
+            case RenameGroup r -> w.u8(36).i64(requestId).i64(r.groupId()).bytes(r.sealedName());
             case RemoveGroupMember r -> w.u8(32).i64(requestId).i64(r.groupId()).string(r.username());
             case LeaveGroup l -> w.u8(33).i64(requestId).i64(l.groupId());
             case ListGroups l -> w.u8(34).i64(requestId);
@@ -394,6 +436,7 @@ public sealed interface Packet {
             case 25 -> new FetchPending();
             case 30 -> new CreateGroup(r.string(MAX_GROUP_NAME_BYTES), readNames(r));
             case 31 -> new AddGroupMember(r.i64(), r.string(MAX_USERNAME_BYTES));
+            case 36 -> new RenameGroup(r.i64(), r.bytes(MAX_SEALED_NAME_BYTES));
             case 32 -> new RemoveGroupMember(r.i64(), r.string(MAX_USERNAME_BYTES));
             case 33 -> new LeaveGroup(r.i64());
             case 34 -> new ListGroups();
@@ -456,7 +499,7 @@ public sealed interface Packet {
     private static Wire.Writer writeGroup(Wire.Writer w, GroupInfo g) {
         w.i64(g.id()).string(g.name()).string(g.owner()).u16(g.members().size());
         for (Member m : g.members()) w.string(m.username()).bytes(m.identityKey());
-        return w;
+        return w.bytes(g.sealedName());
     }
 
     private static GroupInfo readGroup(Wire.Reader r) throws ProtocolException {
@@ -468,7 +511,7 @@ public sealed interface Packet {
         for (int i = 0; i < n; i++) {
             members.add(new Member(r.string(MAX_USERNAME_BYTES), r.exactBytes(Identity.ENCODED_PUBLIC_KEY_LENGTH)));
         }
-        return new GroupInfo(id, name, owner, members);
+        return new GroupInfo(id, name, owner, members, r.bytes(MAX_SEALED_NAME_BYTES));
     }
 
     private static void writeFriend(Wire.Writer w, Friend f) {

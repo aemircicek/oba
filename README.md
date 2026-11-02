@@ -44,8 +44,9 @@ java -jar secure-chat.jar gui --home ./bob
 - **Friends**: send, accept and decline requests; see who is online.
 - **Direct messages**: end-to-end encrypted, delivered later if your friend is offline, with
   ✓ sent / ✓✓ delivered marks and unread counts.
-- **Groups**: create a group from your friends, add and remove members, leave; the owner role
-  passes to the longest-standing member if the owner leaves.
+- **Groups**: create a group from your friends, add and remove members, rename it, leave; the
+  owner role passes to the longest-standing member if the owner leaves. Group names are end-to-end
+  encrypted: the server stores only ciphertext.
 - **Contact verification**: compare a friend's key as a colour pattern and hex code, then mark
   them verified.
 - **Key-change warning**: if a friend's key changes (new device, or an attack), messages to them
@@ -112,6 +113,7 @@ must not be able to read or forge messages. User devices are trusted.
 | Key changes | A changed key holds outgoing messages until the user verifies it |
 | Group confidentiality | Sender Keys: each member's chain key is sent to other members over the pairwise encrypted channel |
 | Group authenticity | Each group message is signed with the sender's group signing key; members cannot forge each other |
+| Group names | Encrypted with a name key that the admin sends to members end-to-end, bound to the group id; a new key after anyone leaves |
 | Removed members | Everyone rotates to a fresh sender key that departed members never receive; new members cannot read earlier messages |
 | Replay | Ratchet and chain keys only move forward; decryption is transactional, so a forged or replayed message cannot corrupt state |
 | Password storage | PBKDF2-HMAC-SHA256, 600,000 iterations, 16-byte random salt per user |
@@ -154,6 +156,16 @@ chain only moves forward) and an Ed25519 signing key. A message is encrypted onc
 fanned out by the server. When anyone leaves or is removed, every remaining member rotates to a
 new sender key. Removal is also checked at send time, so a member removed while you were offline
 does not receive your next message.
+
+### Group names
+
+The group's admin creates a random 32-byte name key, encrypts the name with AES-256-GCM (the group
+id and key version are authenticated as associated data, so the server cannot move a name to
+another group) and stores only that ciphertext on the server. The key travels to each member over
+the pairwise Double Ratchet channel and is accepted only from the current admin. When anyone
+leaves or is removed, the admin makes a new key version and re-encrypts the name, so former
+members cannot read later names. Groups named in plain text by version 3.0 are moved to an
+encrypted name the next time their admin's app connects.
 
 ### Files
 
@@ -201,7 +213,7 @@ Users then authenticate with their password inside the channel. Low-order X25519
 
 ### Tests
 
-`mvn verify` runs 128 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 139 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -210,7 +222,8 @@ Users then authenticate with their password inside the channel. Low-order X25519
   one-time prekeys used only once, simultaneous first messages, sessions surviving a restart.
 - **Groups**: removed members cannot read after rotation (even if the removal happened while a
   member was offline), new members cannot read old messages, members cannot forge each other,
-  redistributing an old chain state cannot enable replays.
+  redistributing an old chain state cannot enable replays; group names are unreadable to the
+  server, bound to their group, re-keyed after a removal, and old name keys cannot be replayed.
 - **Files**: a blob swapped or modified on the server is refused, a wrong key fails, only the
   recipient or current group members can download, uploads must arrive in order and in full,
   expiry and per-user quotas, hostile file names (`../../etc/passwd`, right-to-left overrides).
@@ -227,9 +240,9 @@ every step; the images above come from it.
 Honest notes on what this project does **not** do:
 
 - **Not audited.** It is a learning and portfolio project. For real-world secrecy use Signal.
-- **The server sees metadata**: who is friends with whom, who messages whom and when, group names
-  and member lists, online status, and the approximate size of each file. It cannot see message
-  content, file names or file content.
+- **The server sees metadata**: who is friends with whom, who messages whom and when, group
+  member lists, online status, and the approximate size of each file. It cannot see message
+  content, group names, file names or file content.
 - **The server can hide or delay messages**, and can claim a user has a new device. The app then
   shows a key-change warning; users must compare fingerprints to detect a fake key.
 - **TOFU trusts first contact.** Until friends compare fingerprints, a malicious server could
@@ -245,8 +258,6 @@ Honest notes on what this project does **not** do:
 
 ## Roadmap
 
-
-- Encrypting group names and descriptions with the group key
 - Passphrase-encrypted identity keys and session state
 - QR-code contact verification
 - Fuzzing the decoders (Jazzer)

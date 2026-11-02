@@ -442,8 +442,8 @@ final class MainView implements AccountSession.View {
             row.setAlignment(Pos.CENTER_LEFT);
             rows.getChildren().add(row);
         }
-        Label about = UiKit.label(g.members().size() + " members · messages are end-to-end encrypted; "
-                + "the group name and member list are visible to the server.", "caption");
+        Label about = UiKit.label(g.members().size() + " members · messages and the group name are end-to-end "
+                + "encrypted; the member list is visible to the server.", "caption");
         about.setWrapText(true);
         VBox box = Overlay.dialog(g.name(), about, rows);
         if (admin) {
@@ -460,6 +460,19 @@ final class MainView implements AccountSession.View {
                 return null;
             }, r -> overlay.close()));
             box.getChildren().add(new HBox(8, candidates, add));
+            TextField newName = new TextField(g.name().equals(ChatClient.ENCRYPTED_GROUP_NAME) ? "" : g.name());
+            newName.setId("group-name");
+            newName.setPromptText("Group name");
+            HBox.setHgrow(newName, Priority.ALWAYS);
+            Button rename = new Button("Rename");
+            rename.setId("rename-group");
+            rename.getStyleClass().add("small");
+            rename.disableProperty().bind(newName.textProperty().isEmpty());
+            rename.setOnAction(e -> call(() -> {
+                c.renameGroup(groupId, newName.getText());
+                return null;
+            }, r -> overlay.close()));
+            box.getChildren().add(new HBox(8, newName, rename));
         }
         Button leave = new Button("Leave group");
         leave.setId("leave-group");

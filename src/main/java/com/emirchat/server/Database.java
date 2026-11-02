@@ -16,7 +16,7 @@ import java.util.Optional;
  * synchronized: one connection, serialised writes, which is plenty for a self-hosted server.
  */
 final class Database implements AutoCloseable {
-    private static final int SCHEMA_VERSION = 5;
+    private static final int SCHEMA_VERSION = 6;
 
     record User(long id, String username, PasswordHasher.Hash password, byte[] identityKey) {}
 
@@ -149,6 +149,13 @@ final class Database implements AutoCloseable {
                 s.execute("PRAGMA user_version = 5");
             }
         }
+        if (version < 6) {
+            try (Statement s = connection.createStatement()) {
+                // End-to-end encrypted group names; the plaintext column stays only for older groups.
+                s.execute("ALTER TABLE groups_ ADD COLUMN sealed_name BLOB NOT NULL DEFAULT x''");
+                s.execute("PRAGMA user_version = 6");
+            }
+        }
     }
 
     // ------------------------------------------------------------------ attachments
@@ -238,7 +245,8 @@ final class Database implements AutoCloseable {
 
     // ------------------------------------------------------------------ groups
 
-    record Group(long id, String name, long ownerId) {}
+    /** @param name plaintext name of a group from before names were encrypted, else empty */
+    record Group(long id, String name, long ownerId, byte[] sealedName) {}
 
     synchronized long createGroup(String name, long ownerId, List<Long> members) throws SQLException {
         boolean auto = connection.getAutoCommit();
@@ -306,11 +314,22 @@ final class Database implements AutoCloseable {
     }
 
     synchronized Optional<Group> group(long groupId) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement("SELECT id, name, owner_id FROM groups_ WHERE id = ?")) {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT id, name, owner_id, sealed_name FROM groups_ WHERE id = ?")) {
             ps.setLong(1, groupId);
             try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(new Group(rs.getLong(1), rs.getString(2), rs.getLong(3))) : Optional.empty();
+                return rs.next() ? Optional.of(new Group(rs.getLong(1), rs.getString(2), rs.getLong(3), rs.getBytes(4)))
+                        : Optional.empty();
             }
+        }
+    }
+
+    /** Stores an encrypted name and drops any plaintext one. */
+    synchronized void renameGroup(long groupId, byte[] sealedName) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE groups_ SET sealed_name = ?, name = '' WHERE id = ?")) {
+            ps.setBytes(1, sealedName);
+            ps.setLong(2, groupId);
+            ps.executeUpdate();
         }
     }
 

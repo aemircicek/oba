@@ -7,6 +7,7 @@ import com.emirchat.chat.ChatMessage;
 import com.emirchat.chat.FileMessage;
 import com.emirchat.crypto.Identity;
 import com.emirchat.e2e.Attachments;
+import com.emirchat.e2e.GroupNames;
 import com.emirchat.e2e.Messenger;
 import com.emirchat.protocol.Wire;
 import com.emirchat.trust.KeyChangedException;
@@ -45,6 +46,10 @@ public final class ChatClient implements AutoCloseable {
     private static final int CONTENT_TIMER = 4;
     /** Wraps a chat or file message that disappears: i64 seconds ‖ u8 inner type ‖ bytes inner payload. */
     private static final int CONTENT_EXPIRING = 5;
+    /** Hands out the group's name key (admin only): see {@link GroupNames}. */
+    private static final int CONTENT_GROUP_NAME_KEY = 6;
+    /** Shown for a group whose name key has not arrived yet. */
+    public static final String ENCRYPTED_GROUP_NAME = "Encrypted group";
     /** Longest disappearing-message timer accepted (four weeks). */
     public static final long MAX_TIMER_SECONDS = 28L * 24 * 3600;
     private static final int MAX_CONTENT_BYTES = ChatMessage.MAX_TEXT_BYTES + 256;
@@ -112,6 +117,7 @@ public final class ChatClient implements AutoCloseable {
     private final Map<String, Boolean> online = new ConcurrentHashMap<>();
     private volatile Packet.FriendList lastFriends = new Packet.FriendList(List.of(), List.of(), List.of());
     private Path dataDir;
+    private GroupNames groupNames;
     private final KnownPeers contacts;
     private final String username;
     private final Map<String, byte[]> friendKeys = new ConcurrentHashMap<>();
@@ -152,6 +158,7 @@ public final class ChatClient implements AutoCloseable {
                 contacts, loggedIn.username());
         client.listener = listener;
         client.dataDir = dir;
+        client.groupNames = new GroupNames(dir.resolve("e2e"));
         client.deviceKey = device.publicKeyBytes();
         connection.onPush(p -> client.inbox.execute(() -> client.onPush(p)));
         connection.onClosed(() -> {
@@ -160,6 +167,7 @@ public final class ChatClient implements AutoCloseable {
         client.publishKeys();
         client.refreshFriends();
         client.refreshGroups();
+        for (Packet.GroupInfo g : client.groups()) client.maintainGroupName(g, false);
         connection.fetchPending();
         return client;
     }
@@ -461,22 +469,128 @@ public final class ChatClient implements AutoCloseable {
 
     // ------------------------------------------------------------------ groups
 
+    /** Re-reads our groups; names are shown decrypted. */
     public List<Packet.GroupInfo> refreshGroups() throws IOException, ApiException {
         Packet.GroupList list = expectGroups(connection.call(new Packet.ListGroups()));
-        groups.clear();
-        for (Packet.GroupInfo g : list.groups()) remember(g);
-        return list.groups();
+        java.util.Set<Long> current = new java.util.HashSet<>();
+        for (Packet.GroupInfo g : list.groups()) {
+            remember(g);
+            current.add(g.id());
+        }
+        groups.keySet().retainAll(current);
+        return groups();
     }
 
+    /** Our groups, with names decrypted (or {@link #ENCRYPTED_GROUP_NAME} until the key arrives). */
     public List<Packet.GroupInfo> groups() {
         return List.copyOf(groups.values());
     }
 
+    /**
+     * Creates a group whose name only its members can read: the group is created without a name,
+     * then a fresh name key encrypts the name, and the key goes to every member end-to-end.
+     */
     public Packet.GroupInfo createGroup(String name, List<String> members) throws IOException, ApiException {
-        Packet response = connection.call(new Packet.CreateGroup(name, members));
-        if (!(response instanceof Packet.GroupInfo g)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        String clean = name == null ? "" : name.strip();
+        if (clean.isEmpty() || clean.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > GroupNames.MAX_NAME_BYTES) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST, "Group names are 1-" + GroupNames.MAX_NAME_BYTES + " bytes.");
+        }
+        Packet response = connection.call(new Packet.CreateGroup("", members));
+        if (!(response instanceof Packet.GroupInfo created)) throw new ApiException(ErrorCode.PROTOCOL, "Unexpected response");
+        groupNames.rotate(created.id());
+        byte[] sealed = groupNames.seal(created.id(), clean);
+        connection.call(new Packet.RenameGroup(created.id(), sealed));
+        Packet.GroupInfo g = new Packet.GroupInfo(created.id(), "", created.owner(), created.members(), sealed);
         remember(g);
-        return g;
+        distributeNameKey(g);
+        return groups.get(g.id());
+    }
+
+    /** Renames a group we administer; the new name is encrypted like the first. */
+    public void renameGroup(long groupId, String name) throws IOException, ApiException {
+        Packet.GroupInfo g = groups.get(groupId);
+        if (g == null) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
+        String clean = name == null ? "" : name.strip();
+        if (clean.isEmpty() || clean.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > GroupNames.MAX_NAME_BYTES) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST, "Group names are 1-" + GroupNames.MAX_NAME_BYTES + " bytes.");
+        }
+        if (!groupNames.hasKey(groupId)) groupNames.rotate(groupId);
+        connection.call(new Packet.RenameGroup(groupId, groupNames.seal(groupId, clean)));
+        distributeNameKey(g);
+    }
+
+    /**
+     * The admin's upkeep of the group's encrypted name: moves a plaintext name from older versions
+     * to an encrypted one, makes a new key after someone left, and hands the current key to members
+     * who lack it. Other members do nothing here.
+     */
+    private void maintainGroupName(Packet.GroupInfo g, boolean someoneLeft) {
+        if (!g.owner().equals(username)) return;
+        try {
+            byte[] sealed = g.sealedName();
+            String plain = sealed.length > 0 ? groupNames.open(g.id(), sealed) : legacyName(g);
+            if (plain == null || plain.isEmpty()) return; // a name we cannot read cannot be re-encrypted
+            if (sealed.length == 0 || someoneLeft || !groupNames.hasKey(g.id())) {
+                groupNames.rotate(g.id());
+                connection.call(new Packet.RenameGroup(g.id(), groupNames.seal(g.id(), plain)));
+            }
+            distributeNameKey(g);
+        } catch (IOException | ApiException | IllegalArgumentException e) {
+            listener.undecryptable("", "could not update the group name key: " + e.getMessage());
+        }
+    }
+
+    private void distributeNameKey(Packet.GroupInfo g) throws IOException, ApiException {
+        List<String> members = g.members().stream().map(Packet.Member::username).toList();
+        for (String member : groupNames.needsKey(g.id(), members, username)) {
+            try {
+                sendPairwise(member, CONTENT_GROUP_NAME_KEY, groupNames.distribution(g.id()));
+                groupNames.markDistributed(g.id(), member);
+            } catch (KeyChangedException e) {
+                listener.keyChanged(member); // they get the key once their new key is verified
+            }
+        }
+    }
+
+    /** A name key from the group's admin (the only one allowed to hand it out). */
+    private void acceptGroupNameKey(String sender, byte[] distribution) throws IOException, ApiException {
+        long groupId = GroupNames.groupOf(distribution);
+        Packet.GroupInfo group = groups.get(groupId);
+        if (group == null || !group.owner().equals(sender)) {
+            refreshGroups();
+            group = groups.get(groupId);
+        }
+        if (group == null || !group.owner().equals(sender)) {
+            throw new SecurityException(sender + " sent a name key for a group they do not administer");
+        }
+        if (groupNames.accept(groupId, distribution)) {
+            remember(group);
+            listener.groupUpdated(groups.get(groupId));
+        }
+    }
+
+    private static String legacyName(Packet.GroupInfo g) {
+        return com.emirchat.chat.TerminalSanitizer.sanitize(g.name()).strip();
+    }
+
+    /** The name to show: decrypted, else the previous one we showed, else a placeholder. */
+    private String displayName(Packet.GroupInfo g) {
+        byte[] sealed = g.sealedName();
+        if (sealed.length == 0) {
+            String legacy = legacyName(g);
+            return legacy.isEmpty() ? "New group" : legacy;
+        }
+        try {
+            String name = groupNames.open(g.id(), sealed);
+            if (name != null) return com.emirchat.chat.TerminalSanitizer.sanitize(name);
+        } catch (IOException ignored) {
+            // fall through
+        }
+        Packet.GroupInfo shown = groups.get(g.id());
+        if (shown != null && !shown.name().equals(ENCRYPTED_GROUP_NAME) && GroupNames.versionOf(sealed) > 1) {
+            return shown.name(); // a rename or new key is on its way; keep the last name we could read
+        }
+        return ENCRYPTED_GROUP_NAME;
     }
 
     public void addGroupMember(long groupId, String user) throws IOException, ApiException {
@@ -491,6 +605,7 @@ public final class ChatClient implements AutoCloseable {
         connection.call(new Packet.LeaveGroup(groupId));
         groups.remove(groupId);
         groupKeys.forgetGroup(groupId);
+        groupNames.forget(groupId);
     }
 
     /**
@@ -530,7 +645,7 @@ public final class ChatClient implements AutoCloseable {
     }
 
     private void remember(Packet.GroupInfo g) {
-        groups.put(g.id(), g);
+        groups.put(g.id(), g.withName(displayName(g)));
         for (Packet.Member m : g.members()) memberKeys.put(m.username(), m.identityKey());
     }
 
@@ -553,11 +668,14 @@ public final class ChatClient implements AutoCloseable {
                     }
                 }
                 if (someoneLeft) groupKeys.rotate(now.id());
+                maintainGroupName(now, someoneLeft);
             } catch (IOException e) {
                 listener.undecryptable("", "could not update group keys: " + e.getMessage());
             }
+        } else {
+            maintainGroupName(now, false);
         }
-        listener.groupUpdated(now);
+        listener.groupUpdated(groups.get(now.id()));
     }
 
     /** Accepts a friend's new key after out-of-band verification, and starts fresh sessions. */
@@ -630,6 +748,7 @@ public final class ChatClient implements AutoCloseable {
                 groups.remove(g.groupId());
                 try {
                     groupKeys.forgetGroup(g.groupId());
+                    groupNames.forget(g.groupId());
                 } catch (IOException ignored) {
                     // keys of a group we are no longer in are useless anyway
                 }
@@ -657,6 +776,7 @@ public final class ChatClient implements AutoCloseable {
                 case CONTENT_CHAT, CONTENT_FILE, CONTENT_EXPIRING, CONTENT_TIMER ->
                         deliver(envelope.sender(), 0, contentType, payload, envelope.id());
                 case CONTENT_SENDER_KEY -> acceptSenderKey(envelope.sender(), payload);
+                case CONTENT_GROUP_NAME_KEY -> acceptGroupNameKey(envelope.sender(), payload);
                 default -> throw new ProtocolException("Unknown content type " + contentType);
             }
         } catch (KeyChangedException e) {

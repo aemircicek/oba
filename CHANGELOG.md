@@ -14,8 +14,15 @@
   the protocol) that every participant receives end-to-end encrypted. Messages and files sent
   with a timer are deleted from local history that long after they arrive, together with cached
   attachment copies.
-- Terminal client: `file`, `gfile`, `save` and `timer` commands.
-- 31 new tests (128 in total).
+- **Encrypted group names**: the admin encrypts the name with a name key that members receive
+  end-to-end; the server stores only ciphertext. A new key is made whenever someone leaves.
+  Admins can rename groups. Groups named in plain text by 3.0 are migrated automatically.
+- Terminal client: `file`, `gfile`, `save`, `timer` and `grename` commands.
+- 42 new tests (139 in total).
+
+### Changed
+- The client–server protocol changed (attachments, group info): update the server and all
+  clients to 3.1 together. Server data is migrated automatically (schema version 6).
 
 ## 3.0.0 (2026-11-02)
 

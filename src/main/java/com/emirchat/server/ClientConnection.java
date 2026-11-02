@@ -153,6 +153,10 @@ final class ClientConnection {
                 services.groups().add(me(), a.groupId(), a.username());
                 yield new Packet.Ok();
             }
+            case Packet.RenameGroup r -> {
+                services.groups().rename(me(), r.groupId(), r.sealedName());
+                yield new Packet.Ok();
+            }
             case Packet.RemoveGroupMember r -> {
                 services.groups().remove(me(), r.groupId(), r.username());
                 yield new Packet.Ok();
