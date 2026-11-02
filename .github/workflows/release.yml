@@ -9,6 +9,11 @@ name: Release
 on:
   release:
     types: [published]
+  workflow_dispatch:          # rebuild the packages of an existing release
+    inputs:
+      tag:
+        description: Release tag to package (for example v3.2.0)
+        required: true
 
 permissions:
   contents: write      # upload release assets
@@ -33,6 +38,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}   # build exactly the released code
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -42,7 +49,10 @@ jobs:
         run: mvn -B verify
       - name: Tools for the Windows installer (WiX 3)
         if: runner.os == 'Windows'
-        run: choco install wixtoolset --version 3.14.1 -y --no-progress
+        # GitHub's Windows images usually ship WiX 3 already; install it only when missing.
+        run: |
+          if (Test-Path "${env:ProgramFiles(x86)}\WiX Toolset v3*") { "WiX 3 is already installed" }
+          else { choco install wixtoolset -y --no-progress }
       - name: Tools for .deb packages
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fakeroot
@@ -52,7 +62,7 @@ jobs:
       - name: Package
         shell: bash
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
@@ -94,7 +104,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+        run: gh release upload "${{ github.event.release.tag_name || inputs.tag }}" dist/* --clobber
 
   checksums:
     needs: package
@@ -103,7 +113,7 @@ jobs:
       - name: Add SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           set -euo pipefail
           mkdir assets && cd assets
