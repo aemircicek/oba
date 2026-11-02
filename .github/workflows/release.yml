@@ -81,12 +81,12 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
-          VERSION="${TAG#v}"
+          VERSION="${TAG#v}"               # file names keep a suffix such as -rc.1; installers need plain numbers
           mkdir -p dist input
           cp target/secure-chat.jar input/
           cp target/secure-chat.jar "dist/Scorpion-${VERSION}-${PLATFORM}.jar"
           COMMON=(--name Scorpion --input input --main-jar secure-chat.jar --main-class com.emirchat.Main
-                  --app-version "$VERSION" --vendor "Emir Cicek" --copyright "(c) 2026 Emir Cicek, MIT License"
+                  --app-version "${VERSION%%-*}" --vendor "Emir Cicek" --copyright "(c) 2026 Emir Cicek, MIT License"
                   --description "End-to-end encrypted messenger")
           INSTALLER=(--about-url "https://github.com/aemircicek/secure-chat")   # not valid for app-image
           case "$RUNNER_OS" in
