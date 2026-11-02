@@ -57,9 +57,17 @@ public final class GroupNames {
 
     /** Makes a new name key (the next version); members must receive it before they can read new names. */
     public synchronized void rotate(long groupId) throws IOException {
+        rotateAbove(groupId, 0);
+    }
+
+    /**
+     * Like {@link #rotate}, but the new version is also above {@code seenVersion}: someone who manages
+     * a community without holding the current key (another admin made it) must not reuse its number.
+     */
+    public synchronized void rotateAbove(long groupId, long seenVersion) throws IOException {
         State old = state(groupId);
         State s = new State();
-        s.version = old == null ? 1 : old.version + 1;
+        s.version = Math.max(old == null ? 0 : old.version, seenVersion) + 1;
         s.key = new byte[KEY_LENGTH];
         RANDOM.nextBytes(s.key);
         cache.put(groupId, s);

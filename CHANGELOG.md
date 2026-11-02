@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.3.0 (unreleased)
+
+### Added
+- **Communities with channels**: a "Communities" tab; each community has a "# general" channel and
+  up to 50 more; owner and admins; invite codes (valid 1 hour to 30 days, optionally limited in
+  uses, revocable, stored only as a hash) let people join without being friends. Channel names are
+  end-to-end encrypted.
+- **Voice calls** between friends: a call button in each chat, a call bar with answer, decline,
+  mute and hang up, ringing and missed-call notifications. Every call gets its own keys; audio is
+  end-to-end encrypted and relayed by the server without being stored. The macOS app asks for
+  microphone access.
+
+### Fixed
+- A group message that arrived before its sender's key (for example from a friend's new device)
+  was lost as "could not be decrypted"; it now waits for the key.
+
 ## 3.2.0 (2026-11-02)
 
 ### Added

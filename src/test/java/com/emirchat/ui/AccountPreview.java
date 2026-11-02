@@ -106,7 +106,16 @@ public final class AccountPreview {
         return bytes.toByteArray();
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
+        try {
+            run(args);
+        } catch (Throwable t) { // never hang with the JavaFX thread still alive
+            t.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    private static void run(String[] args) throws Exception {
         out = Path.of(args[0]);
         theme = args.length > 1 ? args[1] : "dark";
         System.setProperty("securechat.theme", theme);
@@ -304,6 +313,59 @@ public final class AccountPreview {
         pause();
         snap("11-key-changed-dialog");
         if (efeNew.client == null) throw new AssertionError();
+
+        // A community: created in the app, joined by others with an invite code
+        fx(() -> { ((ToggleButton) find("#tab-communities")).setSelected(true); return null; });
+        fx(() -> { ((Button) find("#new-community")).fire(); return null; });
+        waitFor("#community-name");
+        fx(() -> {
+            ((TextField) find("#community-name")).setText("MobilCAD Topluluğu");
+            ((Button) find("#create-community")).fire();
+            return null;
+        });
+        waitFor("#add-channel");
+        for (String channel : new String[] {"duyurular", "tasarım"}) {
+            fx(() -> { ((Button) find("#add-channel")).fire(); return null; });
+            waitFor("#channel-name");
+            fx(() -> {
+                ((TextField) find("#channel-name")).setText(channel);
+                ((Button) find("#create-channel")).fire();
+                return null;
+            });
+            Thread.sleep(800);
+        }
+        fx(() -> { ((Button) find("#community-invite")).fire(); return null; });
+        waitFor("#invite-make");
+        fx(() -> { ((Button) find("#invite-make")).fire(); return null; });
+        Thread.sleep(800);
+        String code = fx(() -> ((javafx.scene.control.Label) find("#invite-code-shown")).getText());
+        snap("14-invite");
+        fx(() -> { ((Button) find("#invite-close")).fire(); return null; });
+        com.emirchat.api.Packet.GroupInfo joined = efeNew.client.joinCommunity(code);
+        ayse.client.joinCommunity(code);
+        Thread.sleep(1500);
+        java.util.List<com.emirchat.api.Packet.GroupInfo> channels = ayse.client.channels(joined.id());
+        ayse.client.sendGroupText(channels.get(1).id(), "Toplantı perşembe 18:00'de 📅");
+        ayse.client.sendGroupText(joined.id(), "Selam millet, topluluk harika olmuş!");
+        ayse.client.sendGroupText(joined.id(), "Tasarım kanalına çizimleri atarım.");
+        Thread.sleep(1500);
+        fx(() -> { click(find("#channel-" + joined.id())); return null; });
+        Thread.sleep(800);
+        snap("15-community");
+
+        // A voice call from ayse: ringing, answered, talking (silent devices: no real microphone)
+        ayse.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
+        ayse.client.calls().call("emir");
+        waitFor("#call-accept");
+        Thread.sleep(300);
+        snap("16-incoming-call");
+        fx(() -> { ((Button) find("#call-accept")).fire(); return null; });
+        waitFor("#call-mute");
+        Thread.sleep(2300);
+        snap("17-in-call");
+        fx(() -> { ((Button) find("#call-hangup")).fire(); return null; });
+        Thread.sleep(800);
+        snap("18-call-ended");
 
         // The server goes away and comes back: the app reconnects by itself, without logging out
         int port = server.port();

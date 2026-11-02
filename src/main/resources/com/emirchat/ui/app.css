@@ -450,3 +450,12 @@
 .danger-text { -fx-text-fill: -sc-danger; }
 
 .update-banner { -fx-background-color: -sc-accent-weak; -fx-padding: 8 14; -fx-border-color: transparent transparent -sc-border transparent; }
+
+/* Communities */
+.invite-code { -fx-font-family: 'Consolas', 'Menlo', monospace; -fx-font-size: 15px; -fx-font-weight: bold; -fx-text-fill: -sc-accent-text; }
+.channel-row { -fx-padding: 7 16; }
+.channel-row .row-title { -fx-font-weight: normal; -fx-text-fill: -sc-text-2; }
+.channel-row.selected .row-title { -fx-text-fill: -sc-text; -fx-font-weight: bold; }
+
+/* Voice calls */
+.call-bar { -fx-padding: 10 18; -fx-background-color: -sc-accent-weak; -fx-border-color: transparent transparent -sc-border transparent; }

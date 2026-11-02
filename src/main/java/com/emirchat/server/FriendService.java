@@ -147,4 +147,10 @@ final class FriendService {
     private static ApiException storage() {
         return new ApiException(ErrorCode.INTERNAL, "Server storage error.");
     }
+
+    /** @return the user id of {@code name} if they are a friend of {@code me}, otherwise 0 */
+    long friendId(Database.User me, String name) throws SQLException {
+        Database.User other = db.findUser(name).orElse(null);
+        return other != null && db.areFriends(me.id(), other.id()) ? other.id() : 0;
+    }
 }

@@ -5,7 +5,8 @@
 [![CI](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml)
 
 **Scorpion** is an end-to-end encrypted messenger for Windows, macOS and Linux (plus a terminal
-client): accounts, friends, direct messages, groups and files, in English and Turkish. It is
+client): accounts, friends, direct messages, groups, communities with channels, voice calls and
+files, in English and Turkish. It is
 written in Java using only the JDK's standard cryptography (no third-party crypto libraries), and
 the server relays and stores messages it cannot read. This repository was called *secure-chat*
 before the desktop app got its name.
@@ -13,6 +14,8 @@ before the desktop app got its name.
 <p align="center">
   <img src="docs/screenshots/account-dm-dark.png" width="420" alt="Encrypted direct messages">
   <img src="docs/screenshots/account-group-light.png" width="420" alt="Encrypted group chat">
+  <img src="docs/screenshots/community-dark.png" width="420" alt="A community with channels">
+  <img src="docs/screenshots/call-dark.png" width="420" alt="An end-to-end encrypted voice call">
 </p>
 
 It started as a small socket chat that "encrypted" messages with a hard-coded AES key in ECB
@@ -220,6 +223,47 @@ leaves or is removed, the admin makes a new key version and re-encrypts the name
 members cannot read later names. Groups named in plain text by version 3.0 are moved to an
 encrypted name the next time their admin's app connects.
 
+### Communities and channels
+
+A community is a group that is also its "# general" channel, with up to 50 more channels under it.
+Everyone in the community is in every channel; the server keeps channel membership in step, and
+each channel is an ordinary encrypted group (its own sender keys and its own encrypted name). The
+owner appoints admins; the owner and admins add channels, rename them, remove members and make
+invite codes. If the owner leaves, the longest-standing member takes over.
+
+Invite codes are 26 random symbols (130 bits) typed in groups of five, valid from an hour to 30
+days, optionally limited in uses and revocable. The server stores only their SHA-256, so a copy
+of its database does not contain working codes. People who join with a code do not have to be
+anyone's friend. Channel name keys come from the owner or an admin, and a newer key version
+always wins, so two admins renaming at once cannot lock members out.
+
+### Voice calls
+
+```mermaid
+sequenceDiagram
+    participant A as Alice
+    participant S as Server
+    participant B as Bob
+    Note over A: callId = 16 random bytes<br/>a = fresh X25519 key
+    A->>S: Double Ratchet message {OFFER, callId, a.public}
+    S->>B: deliver
+    Note over B: b = fresh X25519 key
+    B->>S: Double Ratchet message {ANSWER, callId, b.public}
+    S->>A: deliver
+    Note over A,B: keys = HKDF(salt = callId, X25519(a, b))<br/>one AES-256-GCM key per direction
+    A->>S: callId ‖ seq ‖ AES-GCM(audio), 50 a second
+    S->>B: relayed live (not stored)
+```
+
+Call offers and answers are ordinary end-to-end encrypted messages, so they are authenticated by
+the same keys as chat messages: the server cannot place or answer a call in someone's name, and
+an offer from a friend whose key changed waits until the key is verified. Each call has its own
+X25519 keys, forgotten when it ends. Audio is 8 kHz G.711 μ-law (64 kbit/s) in 20 ms packets with
+a sequence number; old, repeated and modified packets are dropped. The server relays audio only
+between friends, at most 100 packets a second, and drops packets for a device that falls behind
+instead of queueing them. Calls are one-to-one; an offer that arrives more than a minute late is
+shown as a missed call.
+
 ### Files
 
 ```mermaid
@@ -255,7 +299,8 @@ Users then authenticate with their password inside the channel. Low-order X25519
 | `com.emirchat.crypto` | `Hkdf` (RFC 5869), `Identity` (Ed25519 keys, fingerprints), `X25519` |
 | `com.emirchat.protocol` | `FrameIO` (bounded framing), `Wire` (strict encoding), `Handshake` (SIGMA-I), `SecureChannel` |
 | `com.emirchat.e2e` | `X3dh`, `DoubleRatchet`, `GroupKeys` (Sender Keys), `GroupNames`, `Attachments` (file encryption), `Messenger`, `DeviceKeys`, `PrekeyBundle` |
-| `com.emirchat.server` | `ChatServer`, accounts, friends, groups, offline queue, `AttachmentService`, `PasswordHasher`, `RateLimiter`, SQLite |
+| `com.emirchat.server` | `ChatServer`, accounts, friends, groups and communities, offline queue, call audio relay, `AttachmentService`, `PasswordHasher`, `RateLimiter`, SQLite |
+| `com.emirchat.call` | `Calls` (call signalling and state), `CallCrypto` (per-call keys, audio packets), `Mulaw` (G.711), `SoundDevice` (microphone and speaker) |
 | `com.emirchat.client` | `ChatClient`, `ServerConnection`, encrypted `History`, `Backup` |
 | `com.emirchat.api` | `Packet` (client–server messages), error codes |
 | `com.emirchat.trust` | `KnownPeers` (TOFU store for servers and contacts), `SafetyNumber` |
@@ -266,7 +311,7 @@ Users then authenticate with their password inside the channel. Low-order X25519
 
 ### Tests
 
-`mvn verify` runs 170 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 185 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -277,6 +322,13 @@ Users then authenticate with their password inside the channel. Low-order X25519
   member was offline), new members cannot read old messages, members cannot forge each other,
   redistributing an old chain state cannot enable replays; group names are unreadable to the
   server, bound to their group, re-keyed after a removal, and old name keys cannot be replayed.
+- **Communities**: strangers join with an invite code (typed in any case, with spaces), single-use,
+  expired and revoked codes fail, only the owner appoints admins, admins cannot remove the owner,
+  removal reaches every channel, the longest member takes over, the server stores no channel
+  names; a group message that arrives before its sender's key waits for it instead of being lost.
+- **Calls**: audio both ways through the server, mute sends silence, a reflected, replayed, older or
+  modified packet is dropped, another call id gives other keys, busy and declined calls, and the
+  server relays audio only between friends.
 - **Files**: a blob swapped or modified on the server is refused, a wrong key fails, only the
   recipient or current group members can download, uploads must arrive in order and in full,
   expiry and per-user quotas, hostile file names (`../../etc/passwd`, right-to-left overrides).
@@ -303,7 +355,13 @@ Honest notes on what this project does **not** do:
 - **Not audited.** It is a learning and portfolio project. For real-world secrecy use Signal.
 - **The server sees metadata**: who is friends with whom, who messages whom and when, group
   member lists, online status, and the approximate size of each file. It cannot see message
-  content, group names, file names or file content.
+  content, group names, file names or file content. For calls it sees who calls whom, when and
+  for how long, but not what is said.
+- **The server decides who is in a community.** Channel names and messages are encrypted for the
+  members the server lists, so a malicious server could add a member (who would then appear in
+  the member list). Check the member list of sensitive communities.
+- **Calls go through the server** (no direct peer-to-peer connection), so they add a little delay;
+  voice quality is that of a telephone (8 kHz). There are no video calls or group calls yet.
 - **The server can hide or delay messages**, and can claim a user has a new device. The app then
   shows a key-change warning; users must compare fingerprints to detect a fake key.
 - **TOFU trusts first contact.** Until friends compare fingerprints, a malicious server could
@@ -331,7 +389,7 @@ Honest notes on what this project does **not** do:
 - Fuzzing the decoders (Jazzer) and a written security report
 - Sealed sender and message-size padding (less metadata for the server)
 - A formal model of the handshake and X3DH (ProVerif or Tamarin)
-- Multiple devices per account; servers and channels; voice messages
+- Multiple devices per account; voice messages; group and video calls; a better voice codec (Opus)
 
 ## Security
 

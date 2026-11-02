@@ -47,12 +47,17 @@ final class MainView implements AccountSession.View {
     private final StackPane content = new StackPane();
     private final ToggleButton chatsTab = new ToggleButton(I18n.t("main.chats"));
     private final ToggleButton friendsTab = new ToggleButton(I18n.t("main.friends"));
+    private final ToggleButton communitiesTab = new ToggleButton(I18n.t("community.tab"));
+    private long selectedCommunity; // 0: the list of communities
     private final Label friendsBadge = UiKit.label("", "unread-badge");
     private ConversationView current;
     private final TextField search = new TextField();
 
     private boolean focusHooked;
     private final HBox updateBanner = new HBox(8);
+    private final HBox callBar = new HBox(10);
+    private javafx.animation.Timeline callTicker;
+    private javafx.animation.PauseTransition callHide;
     private final Label connectionLabel = UiKit.label("● " + I18n.t("main.connected"), "row-sub", "accent-text");
 
     MainView(AccountSession session, Runnable onLogout) {
@@ -85,13 +90,14 @@ final class MainView implements AccountSession.View {
 
         // Tabs
         ToggleGroup tabs = new ToggleGroup();
-        for (ToggleButton t : new ToggleButton[] {chatsTab, friendsTab}) {
+        for (ToggleButton t : new ToggleButton[] {chatsTab, communitiesTab, friendsTab}) {
             t.setToggleGroup(tabs);
             t.setMaxWidth(Double.MAX_VALUE);
             HBox.setHgrow(t, Priority.ALWAYS);
         }
         chatsTab.setId("tab-chats");
         friendsTab.setId("tab-friends");
+        communitiesTab.setId("tab-communities");
         friendsBadge.managedProperty().bind(friendsBadge.visibleProperty());
         friendsTab.setGraphic(friendsBadge);
         friendsTab.setContentDisplay(javafx.scene.control.ContentDisplay.RIGHT);
@@ -100,7 +106,7 @@ final class MainView implements AccountSession.View {
             refreshSidebar();
         });
         chatsTab.setSelected(true);
-        HBox segmented = new HBox(chatsTab, friendsTab);
+        HBox segmented = new HBox(chatsTab, communitiesTab, friendsTab);
         segmented.getStyleClass().add("segmented");
         search.setId("search");
         search.setPromptText(I18n.t("main.search"));
@@ -122,7 +128,10 @@ final class MainView implements AccountSession.View {
 
         showEmpty();
         frame.setLeft(sidebar);
-        frame.setCenter(content);
+        callBar.managedProperty().bind(callBar.visibleProperty());
+        callBar.setVisible(false);
+        VBox.setVgrow(content, Priority.ALWAYS);
+        frame.setCenter(new VBox(callBar, content));
         stack.getChildren().add(frame);
         refreshSidebar();
         session.setView(this);
@@ -242,7 +251,8 @@ final class MainView implements AccountSession.View {
         friendsBadge.setVisible(requests > 0);
         list.getChildren().clear();
         showUnread();
-        if (!chatsTab.isSelected()) buildFriends(friends);
+        if (communitiesTab.isSelected()) buildCommunities();
+        else if (!chatsTab.isSelected()) buildFriends(friends);
         else if (!search.getText().isBlank()) buildSearch(search.getText());
         else buildChats();
     }
@@ -281,8 +291,332 @@ final class MainView implements AccountSession.View {
     }
 
     private String groupName(long id) {
-        return session.client().groups().stream().filter(g -> g.id() == id).map(ConversationView::groupName).findFirst()
+        return session.client().groups().stream().filter(g -> g.id() == id)
+                .map(g -> g.community() == 0 ? ConversationView.groupName(g)
+                        : communityName(g.community()) + " › " + ConversationView.channelTitle(g))
+                .findFirst()
                 .orElse(I18n.t("main.formerGroup"));
+    }
+
+    // ------------------------------------------------------------------ communities
+
+    private String communityName(long id) {
+        Packet.GroupInfo root = group(id);
+        return root == null ? I18n.t("main.formerGroup") : ConversationView.groupName(root);
+    }
+
+    private int unread(String conversation, Map<String, History.Summary> summaries) {
+        History.Summary s = summaries.get(conversation);
+        boolean open = current != null && current.conversation().equals(conversation);
+        return s == null || open ? 0 : s.unread();
+    }
+
+    private Map<String, History.Summary> summaries() {
+        Map<String, History.Summary> map = new java.util.HashMap<>();
+        try {
+            for (History.Summary s : session.history().summaries()) map.put(s.conversation(), s);
+        } catch (IOException ignored) {
+            // no counts
+        }
+        return map;
+    }
+
+    private void buildCommunities() {
+        ChatClient c = session.client();
+        if (selectedCommunity != 0 && group(selectedCommunity) == null) selectedCommunity = 0; // left or removed
+        Map<String, History.Summary> summaries = summaries();
+        if (selectedCommunity == 0) {
+            Button create = new Button(I18n.t("community.new"));
+            create.setId("new-community");
+            create.getStyleClass().add("small");
+            create.setOnAction(e -> openNewCommunity());
+            Button join = new Button(I18n.t("community.join"));
+            join.setId("join-community");
+            join.getStyleClass().add("small");
+            join.setOnAction(e -> openJoinCommunity());
+            HBox heading = new HBox(6, UiKit.label(I18n.t("community.heading"), "overline"), UiKit.grow(), join, create);
+            heading.getStyleClass().add("list-heading");
+            heading.setAlignment(Pos.CENTER_LEFT);
+            list.getChildren().add(heading);
+            List<Packet.GroupInfo> roots = c.groups().stream().filter(Packet.GroupInfo::isCommunity)
+                    .sorted(java.util.Comparator.comparing(ConversationView::groupName, String.CASE_INSENSITIVE_ORDER)).toList();
+            if (roots.isEmpty()) {
+                Label empty = UiKit.label(I18n.t("community.none"), "caption");
+                empty.setWrapText(true);
+                empty.setPadding(new Insets(10, 14, 0, 14));
+                list.getChildren().add(empty);
+            }
+            for (Packet.GroupInfo root : roots) {
+                int unread = c.channels(root.id()).stream().mapToInt(ch -> unread(AccountSession.group(ch.id()), summaries)).sum();
+                String name = ConversationView.groupName(root);
+                VBox text = new VBox(2, UiKit.label(name, "row-title"),
+                        UiKit.label(I18n.t("community.summary", root.members().size(), c.channels(root.id()).size()), "row-sub"));
+                text.setMinWidth(0);
+                HBox row = new HBox(10, UiKit.avatar(name, "avatar-sm", true), text, UiKit.grow());
+                if (unread > 0) row.getChildren().add(UiKit.label(String.valueOf(unread), "unread-badge"));
+                row.getStyleClass().add("list-row");
+                row.setAlignment(Pos.CENTER_LEFT);
+                row.setId("community-" + root.id());
+                row.setOnMouseClicked(e -> {
+                    selectedCommunity = root.id();
+                    open(AccountSession.group(root.id()));
+                });
+                list.getChildren().add(row);
+            }
+            return;
+        }
+        Packet.GroupInfo root = group(selectedCommunity);
+        boolean manager = root.canManage(c.username());
+        Button back = new Button("←");
+        back.getStyleClass().addAll("small", "attach");
+        back.setId("community-back");
+        back.setOnAction(e -> {
+            selectedCommunity = 0;
+            refreshSidebar();
+        });
+        Label name = UiKit.label(ConversationView.groupName(root), "row-title");
+        name.setMinWidth(0);
+        Button settings = new Button();
+        settings.setGraphic(Icons.of(Icons.SETTINGS, 15, "muted"));
+        settings.getStyleClass().addAll("small", "attach");
+        settings.setTooltip(new Tooltip(I18n.t("community.settings")));
+        settings.setId("community-settings");
+        settings.setOnAction(e -> openCommunityInfo(root.id()));
+        HBox top = new HBox(6, back, name, UiKit.grow(), settings);
+        top.setAlignment(Pos.CENTER_LEFT);
+        top.setPadding(new Insets(4, 10, 4, 6));
+        list.getChildren().add(top);
+        if (manager) {
+            Button invite = new Button(I18n.t("community.invite"));
+            invite.getStyleClass().addAll("small", "primary");
+            invite.setId("community-invite");
+            invite.setOnAction(e -> openInvite(root.id()));
+            Button addChannel = new Button(I18n.t("community.addChannel"));
+            addChannel.getStyleClass().add("small");
+            addChannel.setId("add-channel");
+            addChannel.setOnAction(e -> openNewChannel(root.id()));
+            HBox actions = new HBox(8, invite, addChannel);
+            actions.setPadding(new Insets(0, 14, 6, 14));
+            list.getChildren().add(actions);
+        }
+        list.getChildren().add(heading(I18n.t("community.channels")));
+        for (Packet.GroupInfo ch : c.channels(root.id())) {
+            String conversation = AccountSession.group(ch.id());
+            Label title = UiKit.label(ConversationView.channelTitle(ch), "row-title");
+            HBox row = new HBox(8, title, UiKit.grow());
+            int unread = unread(conversation, summaries);
+            if (unread > 0) {
+                row.getChildren().add(UiKit.label(String.valueOf(unread), "unread-badge"));
+                title.setStyle("-fx-font-weight: bold;");
+            }
+            boolean open = current != null && current.conversation().equals(conversation);
+            row.getStyleClass().addAll("list-row", "channel-row");
+            if (open) row.getStyleClass().add("selected");
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.setId("channel-" + ch.id());
+            row.setOnMouseClicked(e -> open(conversation));
+            list.getChildren().add(row);
+        }
+    }
+
+    private void openNewCommunity() {
+        TextField name = new TextField();
+        name.setId("community-name");
+        name.setPromptText(I18n.t("community.namePrompt"));
+        Label explain = UiKit.label(I18n.t("community.newExplain"), "caption");
+        explain.setWrapText(true);
+        Button cancel = new Button(I18n.t("common.cancel"));
+        cancel.setOnAction(e -> overlay.close());
+        Button create = new Button(I18n.t("community.create"));
+        create.getStyleClass().add("primary");
+        create.setId("create-community");
+        create.disableProperty().bind(name.textProperty().isEmpty());
+        create.setOnAction(e -> call(() -> session.client().createCommunity(name.getText()), g -> {
+            overlay.close();
+            selectedCommunity = g.id();
+            communitiesTab.setSelected(true);
+            open(AccountSession.group(g.id()));
+        }));
+        overlay.show(Overlay.dialog(I18n.t("community.new"), explain, name, new HBox(10, UiKit.grow(), cancel, create)));
+        Platform.runLater(name::requestFocus);
+    }
+
+    private void openJoinCommunity() {
+        TextField code = new TextField();
+        code.setId("invite-code");
+        code.setPromptText("XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X");
+        Label explain = UiKit.label(I18n.t("community.joinExplain"), "caption");
+        explain.setWrapText(true);
+        Button cancel = new Button(I18n.t("common.cancel"));
+        cancel.setOnAction(e -> overlay.close());
+        Button join = new Button(I18n.t("community.joinButton"));
+        join.getStyleClass().add("primary");
+        join.setId("join-confirm");
+        join.disableProperty().bind(code.textProperty().length().lessThan(10));
+        join.setOnAction(e -> call(() -> session.client().joinCommunity(code.getText()), g -> {
+            overlay.close();
+            selectedCommunity = g.id();
+            communitiesTab.setSelected(true);
+            open(AccountSession.group(g.id()));
+        }));
+        overlay.show(Overlay.dialog(I18n.t("community.join"), explain, code, new HBox(10, UiKit.grow(), cancel, join)));
+        Platform.runLater(code::requestFocus);
+    }
+
+    private void openNewChannel(long communityId) {
+        TextField name = new TextField();
+        name.setId("channel-name");
+        name.setPromptText(I18n.t("community.channelPrompt"));
+        Button cancel = new Button(I18n.t("common.cancel"));
+        cancel.setOnAction(e -> overlay.close());
+        Button create = new Button(I18n.t("community.addChannel"));
+        create.getStyleClass().add("primary");
+        create.setId("create-channel");
+        create.disableProperty().bind(name.textProperty().isEmpty());
+        create.setOnAction(e -> call(() -> session.client().createChannel(communityId,
+                name.getText().strip().replaceFirst("^#\\s*", "")), g -> {
+            overlay.close();
+            open(AccountSession.group(g.id()));
+        }));
+        overlay.show(Overlay.dialog(I18n.t("community.addChannel"), name, new HBox(10, UiKit.grow(), cancel, create)));
+        Platform.runLater(name::requestFocus);
+    }
+
+    /** A fresh invite code, with how long and how often it works. */
+    private void openInvite(long communityId) {
+        javafx.scene.control.ComboBox<String> valid = new javafx.scene.control.ComboBox<>();
+        int[] hours = {24, 7 * 24, 30 * 24};
+        valid.getItems().addAll(I18n.plural(1, "day"), I18n.plural(7, "day"), I18n.plural(30, "day"));
+        valid.getSelectionModel().select(1);
+        javafx.scene.control.ComboBox<String> uses = new javafx.scene.control.ComboBox<>();
+        int[] limits = {1, 10, 0};
+        uses.getItems().addAll(I18n.t("invite.once"), I18n.t("invite.times", 10), I18n.t("invite.unlimited"));
+        uses.getSelectionModel().select(1);
+        Label codeLabel = UiKit.label("", "invite-code");
+        codeLabel.setId("invite-code-shown");
+        Button copy = new Button(I18n.t("invite.copy"));
+        copy.getStyleClass().add("small");
+        copy.setDisable(true);
+        copy.setOnAction(e -> {
+            javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
+            content.putString(codeLabel.getText());
+            javafx.scene.input.Clipboard.getSystemClipboard().setContent(content);
+            copy.setText(I18n.t("start.copied"));
+        });
+        Label note = UiKit.label(I18n.t("invite.note"), "caption");
+        note.setWrapText(true);
+        note.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        Button make = new Button(I18n.t("invite.make"));
+        make.getStyleClass().add("primary");
+        make.setId("invite-make");
+        make.setOnAction(e -> call(() -> session.client().createInvite(communityId,
+                limits[uses.getSelectionModel().getSelectedIndex()], hours[valid.getSelectionModel().getSelectedIndex()]), code -> {
+            codeLabel.setText(code);
+            copy.setDisable(false);
+        }));
+        Button revoke = new Button(I18n.t("invite.revoke"));
+        revoke.getStyleClass().addAll("small", "danger-ghost");
+        revoke.setOnAction(e -> call(() -> {
+            session.client().revokeInvites(communityId);
+            return null;
+        }, r -> {
+            codeLabel.setText("");
+            copy.setDisable(true);
+            note.setText(I18n.t("invite.revoked"));
+        }));
+        Button close = new Button(I18n.t("common.close"));
+        close.setId("invite-close");
+        close.setOnAction(e -> overlay.close());
+        HBox options = new HBox(10, UiKit.label(I18n.t("invite.valid"), "field-label"), valid,
+                UiKit.label(I18n.t("invite.uses"), "field-label"), uses);
+        options.setAlignment(Pos.CENTER_LEFT);
+        HBox codeRow = new HBox(10, codeLabel, UiKit.grow(), copy);
+        codeRow.setAlignment(Pos.CENTER_LEFT);
+        codeRow.getStyleClass().add("card-flat");
+        VBox box = Overlay.dialog(I18n.t("invite.title", communityName(communityId)), options, make, codeRow, note,
+                new HBox(10, revoke, UiKit.grow(), close));
+        box.setId("invite-dialog");
+        overlay.show(box);
+    }
+
+    /** Members and roles, renaming and leaving. */
+    private void openCommunityInfo(long communityId) {
+        ChatClient c = session.client();
+        Packet.GroupInfo root = group(communityId);
+        if (root == null) return;
+        String me = c.username();
+        boolean owner = root.owner().equals(me);
+        boolean manager = root.canManage(me);
+        VBox rows = new VBox(4);
+        for (Packet.Member m : root.members()) {
+            String who = m.username();
+            boolean isOwner = who.equals(root.owner());
+            boolean isAdmin = root.admins().contains(who);
+            HBox right = new HBox(6);
+            right.setAlignment(Pos.CENTER_RIGHT);
+            right.getChildren().add(UiKit.label(isOwner ? I18n.t("community.owner") : isAdmin ? I18n.t("group.admin") : "", "caption"));
+            if (owner && !isOwner) {
+                Button role = new Button(isAdmin ? I18n.t("community.unmakeAdmin") : I18n.t("community.makeAdmin"));
+                role.getStyleClass().add("small");
+                role.setId("role-" + who);
+                role.setOnAction(e -> call(() -> {
+                    c.setAdmin(communityId, who, !isAdmin);
+                    return null;
+                }, r -> overlay.close()));
+                right.getChildren().add(role);
+            }
+            if (manager && !who.equals(me) && !isOwner && (owner || !isAdmin)) {
+                Button remove = new Button(I18n.t("group.remove"));
+                remove.getStyleClass().addAll("small", "danger-ghost");
+                remove.setId("remove-" + who);
+                remove.setOnAction(e -> call(() -> {
+                    c.removeGroupMember(communityId, who);
+                    return null;
+                }, r -> overlay.close()));
+                right.getChildren().add(remove);
+            }
+            String label = who.equals(me) ? I18n.t("group.you", who) : who;
+            HBox row = new HBox(10, UiKit.avatar(who, "avatar-xs", false), UiKit.label(label, "row-title"), UiKit.grow(), right);
+            row.setAlignment(Pos.CENTER_LEFT);
+            rows.getChildren().add(row);
+        }
+        ScrollPane scroll = new ScrollPane(rows);
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportHeight(Math.min(260, 34.0 * root.members().size()));
+        Label about = UiKit.label(I18n.t("community.about", root.members().size()), "caption");
+        about.setWrapText(true);
+        about.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        VBox box = Overlay.dialog(ConversationView.groupName(root), about, scroll);
+        if (manager) {
+            TextField newName = new TextField(ConversationView.groupName(root));
+            newName.setId("community-rename");
+            HBox.setHgrow(newName, Priority.ALWAYS);
+            Button rename = new Button(I18n.t("group.rename"));
+            rename.getStyleClass().add("small");
+            rename.disableProperty().bind(newName.textProperty().isEmpty());
+            rename.setOnAction(e -> call(() -> {
+                c.renameGroup(communityId, newName.getText());
+                return null;
+            }, r -> overlay.close()));
+            box.getChildren().add(new HBox(8, newName, rename));
+        }
+        Button leave = new Button(I18n.t("community.leave"));
+        leave.setId("leave-community");
+        leave.getStyleClass().add("danger-ghost");
+        leave.setOnAction(e -> call(() -> {
+            c.leaveGroup(communityId);
+            return null;
+        }, r -> {
+            overlay.close();
+            selectedCommunity = 0;
+            showEmpty();
+            refreshSidebar();
+        }));
+        Button close = new Button(I18n.t("common.close"));
+        close.setOnAction(e -> overlay.close());
+        box.getChildren().add(new HBox(10, leave, UiKit.grow(), close));
+        box.setId("community-dialog");
+        overlay.show(box);
     }
 
     // ------------------------------------------------------------------ settings
@@ -454,6 +788,7 @@ final class MainView implements AccountSession.View {
             }
         }
         for (Packet.GroupInfo g : client.groups()) {
+            if (g.community() != 0) continue; // community channels live in their own tab
             String key = AccountSession.group(g.id());
             if (!shown.contains(key)) list.getChildren().add(chatRow(key, null));
         }
@@ -473,7 +808,7 @@ final class MainView implements AccountSession.View {
         if (group) {
             long id = Long.parseLong(conversation.substring(2));
             Packet.GroupInfo g = client.groups().stream().filter(x -> x.id() == id).findFirst().orElse(null);
-            if (g == null) return null; // a group we left: keep history, hide from the list
+            if (g == null || g.community() != 0) return null; // left, or a community channel (own tab)
             title = ConversationView.groupName(g);
             avatar = UiKit.avatar(title, "avatar-sm", true);
         } else {
@@ -614,12 +949,18 @@ final class MainView implements AccountSession.View {
             @Override public void openContact(String user) { MainView.this.openContact(user); }
 
             @Override public void openGroupInfo(long groupId) { MainView.this.openGroupInfo(groupId); }
+
+            @Override public void call(String friend) { session.client().calls().call(friend); }
         };
         current = conversation.startsWith("g:")
                 ? ConversationView.group(session, Long.parseLong(conversation.substring(2)), actions)
                 : ConversationView.dm(session, conversation.substring(3), actions);
         content.getChildren().setAll(current.root());
-        if (!chatsTab.isSelected() && conversation.startsWith("dm:")) {
+        Packet.GroupInfo opened = conversation.startsWith("g:") ? group(Long.parseLong(conversation.substring(2))) : null;
+        if (opened != null && opened.community() != 0) {
+            selectedCommunity = opened.community();
+            if (!communitiesTab.isSelected()) communitiesTab.setSelected(true); else refreshSidebar();
+        } else if (!chatsTab.isSelected() && conversation.startsWith("dm:")) {
             chatsTab.setSelected(true); // also refreshes
         } else {
             refreshSidebar();
@@ -774,10 +1115,18 @@ final class MainView implements AccountSession.View {
         Platform.runLater(name::requestFocus);
     }
 
+    private Packet.GroupInfo group(long id) {
+        return session.client().groups().stream().filter(x -> x.id() == id).findFirst().orElse(null);
+    }
+
     private void openGroupInfo(long groupId) {
         ChatClient c = session.client();
         Packet.GroupInfo g = c.groups().stream().filter(x -> x.id() == groupId).findFirst().orElse(null);
         if (g == null) return;
+        if (g.community() != 0) {
+            openCommunityInfo(g.community());
+            return;
+        }
         boolean admin = g.owner().equals(c.username());
         VBox rows = new VBox(4);
         for (Packet.Member m : g.members()) {
@@ -860,7 +1209,7 @@ final class MainView implements AccountSession.View {
                 // unread count is cosmetic
             }
         }
-        if (chatsTab.isSelected()) refreshSidebar();
+        if (!friendsTab.isSelected()) refreshSidebar();
     }
 
     @Override
@@ -941,6 +1290,134 @@ final class MainView implements AccountSession.View {
     @Override
     public void typing(String conversation, String who) {
         if (current != null && current.conversation().equals(conversation)) current.typing(who);
+    }
+
+    // ------------------------------------------------------------------ calls
+
+    @Override
+    public void call(com.emirchat.call.Calls.Call c) {
+        com.emirchat.call.Calls calls = session.client().calls();
+        if (callTicker != null) callTicker.stop();
+        if (callHide != null) callHide.stop();
+        if (c.state() == com.emirchat.call.Calls.State.ENDED) {
+            if (c.reason() == com.emirchat.call.Calls.EndReason.MISSED && !c.outgoing()) {
+                notifyCall(c.peer(), I18n.t("call.missedFrom", c.peer()));
+                if (calls.current() != null) return; // missed while talking to someone else: keep that bar
+            }
+            Label text = UiKit.label(endText(c), "row-title");
+            text.setWrapText(true);
+            showCallBar(c.peer(), text);
+            callHide = new javafx.animation.PauseTransition(javafx.util.Duration.seconds(4));
+            callHide.setOnFinished(e -> {
+                if (calls.current() == null) callBar.setVisible(false);
+            });
+            callHide.play();
+            return;
+        }
+        Label status = UiKit.label("", "row-sub");
+        Label title = UiKit.label(c.peer(), "row-title");
+        VBox text = new VBox(2, title, status);
+        HBox buttons = new HBox(8);
+        buttons.setAlignment(Pos.CENTER_RIGHT);
+        switch (c.state()) {
+            case CALLING -> {
+                status.setText(I18n.t("call.calling"));
+                buttons.getChildren().add(hangUpButton(I18n.t("call.cancel"), calls::hangUp));
+            }
+            case RINGING -> {
+                status.setText(I18n.t("call.incoming"));
+                Button accept = new Button(I18n.t("call.accept"));
+                accept.setGraphic(Icons.of(Icons.PHONE, 14, "on-accent"));
+                accept.getStyleClass().addAll("small", "primary");
+                accept.setId("call-accept");
+                accept.setOnAction(e -> calls.accept());
+                buttons.getChildren().addAll(hangUpButton(I18n.t("call.reject"), calls::reject), accept);
+                notifyCall(c.peer(), I18n.t("call.incomingFrom", c.peer()));
+                ring();
+            }
+            case CONNECTED -> {
+                Runnable tick = () -> status.setText("🔒 " + I18n.t("call.encrypted") + " · "
+                        + duration(System.currentTimeMillis() - c.connectedAt()));
+                tick.run();
+                callTicker = new javafx.animation.Timeline(new javafx.animation.KeyFrame(javafx.util.Duration.seconds(1),
+                        e -> tick.run()));
+                callTicker.setCycleCount(javafx.animation.Animation.INDEFINITE);
+                callTicker.play();
+                Button mute = new Button(c.muted() ? I18n.t("call.unmute") : I18n.t("call.mute"));
+                mute.setGraphic(Icons.of(c.muted() ? Icons.MIC_OFF : Icons.MIC, 14, c.muted() ? "danger" : "muted"));
+                mute.getStyleClass().add("small");
+                mute.setId("call-mute");
+                mute.setOnAction(e -> calls.setMuted(!c.muted()));
+                buttons.getChildren().addAll(mute, hangUpButton(I18n.t("call.hangUp"), calls::hangUp));
+            }
+            default -> { }
+        }
+        HBox row = new HBox(10, text, UiKit.grow(), buttons);
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(row, Priority.ALWAYS);
+        showCallBar(c.peer(), row);
+    }
+
+    private void showCallBar(String peer, Node body) {
+        callBar.getChildren().setAll(UiKit.avatar(peer, "avatar-sm", false), body);
+        HBox.setHgrow(body, Priority.ALWAYS);
+        callBar.getStyleClass().setAll("call-bar");
+        callBar.setAlignment(Pos.CENTER_LEFT);
+        callBar.setId("call-bar");
+        callBar.setVisible(true);
+    }
+
+    private static Button hangUpButton(String text, Runnable action) {
+        Button b = new Button(text);
+        b.setGraphic(Icons.of(Icons.PHONE, 14, "danger"));
+        b.getStyleClass().addAll("small", "danger-ghost");
+        b.setId("call-hangup");
+        b.setOnAction(e -> action.run());
+        return b;
+    }
+
+    private static String endText(com.emirchat.call.Calls.Call c) {
+        return switch (c.reason()) {
+            case HUNG_UP -> c.connectedAt() > 0
+                    ? I18n.t("call.ended", duration(System.currentTimeMillis() - c.connectedAt()))
+                    : I18n.t("call.cancelled");
+            case REJECTED -> c.outgoing() ? I18n.t("call.rejected", c.peer()) : I18n.t("call.cancelled");
+            case BUSY -> I18n.t("call.busy", c.peer());
+            case NO_ANSWER -> I18n.t("call.noAnswer", c.peer());
+            case MISSED -> I18n.t("call.missedFrom", c.peer());
+            case FAILED -> I18n.t("call.failed", c.error() == null ? "" : c.error());
+        };
+    }
+
+    static String duration(long ms) {
+        long s = Math.max(0, ms / 1000);
+        return s >= 3600 ? String.format("%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                : String.format("%02d:%02d", s / 60, s % 60);
+    }
+
+    /** Rings (a system beep) every two seconds while the call is ringing, and brings the window forward. */
+    private void ring() {
+        if (stack.getScene() != null && stack.getScene().getWindow() instanceof javafx.stage.Stage stage) {
+            if (stage.isIconified()) stage.setIconified(false);
+            stage.toFront();
+        }
+        if (!Boolean.parseBoolean(System.getProperty("securechat.notifications", "true"))) return;
+        Runnable beep = () -> {
+            try {
+                java.awt.Toolkit.getDefaultToolkit().beep();
+            } catch (UnsupportedOperationException ignored) { // includes HeadlessException
+                // no sound: the bar still shows the call
+            }
+        };
+        beep.run();
+        callTicker = new javafx.animation.Timeline(new javafx.animation.KeyFrame(javafx.util.Duration.seconds(2), e -> beep.run()));
+        callTicker.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        callTicker.play();
+    }
+
+    private void notifyCall(String title, String body) {
+        if (!session.setting(AccountSession.NOTIFICATIONS) || !Boolean.parseBoolean(System.getProperty("securechat.notifications", "true"))) return;
+        Tray.get().notify(title, body);
     }
 
     @Override

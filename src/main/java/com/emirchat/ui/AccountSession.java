@@ -51,6 +51,9 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
         /** Online again ({@code online}), or offline and retrying in {@code retryInSeconds}. */
         default void connection(boolean online, int retryInSeconds) {}
+
+        /** A voice call changed (started, rang, connected, muted or ended). */
+        default void call(com.emirchat.call.Calls.Call call) {}
     }
 
     private volatile Runnable onConnectionLost;
@@ -360,6 +363,11 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     @Override
     public void groupUpdated(Packet.GroupInfo group) {
         fx(View::groupsChanged);
+    }
+
+    @Override
+    public void call(com.emirchat.call.Calls.Call call) {
+        fx(v -> v.call(call));
     }
 
     @Override

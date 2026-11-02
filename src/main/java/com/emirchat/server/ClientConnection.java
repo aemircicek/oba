@@ -54,6 +54,10 @@ final class ClientConnection {
             writer = Thread.ofVirtual().name("writer-" + address).start(this::writeLoop);
             while (true) {
                 Packet.Frame frame = Packet.decode(session.channel().receive());
+                if (frame.packet() instanceof Packet.CallAudio audio) {
+                    relayAudio(audio); // never answered: live audio has no time for round trips
+                    continue;
+                }
                 Packet response;
                 try {
                     response = handle(frame.packet());
@@ -75,6 +79,44 @@ final class ClientConnection {
                 services.friends().onlineChanged(u, false);
             }
         }
+    }
+
+    private static final int AUDIO_PER_SECOND = 100; // 50 packets a second is a normal call
+    private static final long FRIEND_CHECK_MS = 10_000;
+    private long audioWindowStart;
+    private int audioInWindow;
+    private String audioPeer;
+    private long audioPeerId;
+    private long audioPeerCheckedAt;
+
+    /** Relays a call's audio packet to a friend's online devices; anything else is silently dropped. */
+    private void relayAudio(Packet.CallAudio audio) {
+        Database.User u = user;
+        if (u == null) return;
+        long now = System.currentTimeMillis();
+        if (now - audioWindowStart >= 1000) {
+            audioWindowStart = now;
+            audioInWindow = 0;
+        }
+        if (++audioInWindow > AUDIO_PER_SECOND) return;
+        try {
+            if (!audio.peer().equals(audioPeer) || now - audioPeerCheckedAt > FRIEND_CHECK_MS) {
+                audioPeer = null;
+                long peerId = services.friends().friendId(u, audio.peer());
+                if (peerId == 0) return;
+                audioPeer = audio.peer();
+                audioPeerId = peerId;
+                audioPeerCheckedAt = now;
+            }
+        } catch (java.sql.SQLException e) {
+            return;
+        }
+        services.presence().pushDroppable(audioPeerId, new Packet.CallAudioIn(u.username(), audio.data()));
+    }
+
+    /** Queues live audio unless this device is already behind; a lost packet is a moment of silence. */
+    void pushDroppable(Packet packet) {
+        if (outbound.size() < OUTBOUND_CAPACITY / 4) enqueue(Packet.encode(0, packet));
     }
 
     /** Queues a server push; drops the connection if the client is not keeping up. */
@@ -151,6 +193,22 @@ final class ClientConnection {
             case Packet.CreateGroup c -> services.groups().create(me(), c.name(), c.members());
             case Packet.AddGroupMember a -> {
                 services.groups().add(me(), a.groupId(), a.username());
+                yield new Packet.Ok();
+            }
+            case Packet.CreateCommunity c -> services.groups().createCommunity(me());
+            case Packet.CreateChannel c -> services.groups().createChannel(me(), c.communityId());
+            case Packet.DeleteChannel d -> {
+                services.groups().deleteChannel(me(), d.channelId());
+                yield new Packet.Ok();
+            }
+            case Packet.SetAdmin s -> {
+                services.groups().setAdmin(me(), s.communityId(), s.username(), s.admin());
+                yield new Packet.Ok();
+            }
+            case Packet.CreateInvite i -> services.groups().createInvite(me(), i.communityId(), i.maxUses(), i.hours());
+            case Packet.JoinCommunity j -> services.groups().join(me(), j.code());
+            case Packet.RevokeInvites r -> {
+                services.groups().revokeInvites(me(), r.communityId());
                 yield new Packet.Ok();
             }
             case Packet.RenameGroup r -> {
