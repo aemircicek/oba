@@ -39,6 +39,10 @@ final class Icons {
     static final String CHEVRON_LEFT = "M15 18l-6-6 6-6";
     static final String CHEVRON_RIGHT = "M9 18l6-6-6-6";
 
+    static final String PLAY = "M7 4l13 8-13 8V4z";
+    static final String PAUSE = "M7 4h3v16H7z M14 4h3v16h-3z";
+    static final String TRASH = "M3 6h18 M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6 M10 11v6 M14 11v6 M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2";
+
     private Icons() {}
 
     /** An icon of {@code size} pixels; {@code tone} is an extra style class such as "accent" or "danger". */

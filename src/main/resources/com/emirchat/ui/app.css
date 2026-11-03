@@ -619,3 +619,22 @@
 .button.viewer-button { -fx-background-color: rgba(255, 255, 255, 0.10); -fx-background-radius: 999; -fx-padding: 8; }
 .button.viewer-button:hover { -fx-background-color: rgba(255, 255, 255, 0.20); }
 .icon.on-dark { -fx-stroke: #fff6ea; }
+
+/* Voice messages */
+.recording-bar { -fx-background-color: -sc-surface-2; -fx-background-radius: 999; -fx-padding: 6 14; -fx-min-height: 40; }
+.rec-dot { -fx-fill: -sc-danger; }
+.voice-clock { -fx-text-fill: -sc-text; -fx-font-weight: bold; -fx-font-family: "Menlo", "SF Mono", "Consolas", monospace; }
+.voice-card { -fx-padding: 2 2 2 0; }
+.button.voice-play {
+    -fx-background-color: -sc-accent;
+    -fx-background-radius: 999;
+    -fx-min-width: 36; -fx-min-height: 36; -fx-max-width: 36; -fx-max-height: 36;
+    -fx-padding: 0;
+}
+.bubble.own .button.voice-play { -fx-background-color: rgba(255, 248, 236, 0.22); }
+.voice-wave { -fx-cursor: hand; }
+.voice-length { -fx-font-size: 11.5px; -fx-font-family: "Menlo", "SF Mono", "Consolas", monospace; }
+.bubble.own .voice-length { -fx-text-fill: -sc-own-time; }
+.bubble.peer .voice-length { -fx-text-fill: -sc-text-3; }
+.voice-play .icon { -fx-fill: -sc-on-accent; }
+.bubble.own .voice-play .icon { -fx-fill: #fff8ec; -fx-stroke: #fff8ec; }

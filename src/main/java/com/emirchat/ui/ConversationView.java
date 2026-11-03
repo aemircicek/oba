@@ -73,6 +73,9 @@ final class ConversationView {
     private java.time.LocalDate lastDay;
     private long popId;                  // message whose reaction just changed (to animate it)
     private String popEmoji;
+    private final Button micButton = new Button();
+    private com.emirchat.call.VoiceRecorder recorder;   // while recording a voice message
+    private final Map<String, byte[]> voices = new HashMap<>();  // decoded voice messages
     private final Button sendButton = new Button();
     private final Map<Long, Boolean> continuedById = new HashMap<>();
     private Map<Long, Map<String, String>> reactions = new HashMap<>();
@@ -137,7 +140,17 @@ final class ConversationView {
         emoji.setGraphic(Icons.of(Icons.SMILE, 19, "muted"));
         emoji.setTooltip(new Tooltip(I18n.t("emoji.pickerTip")));
         emoji.setOnAction(e -> togglePicker(null));
-        composer.getChildren().addAll(attach, input, emoji, send);
+        micButton.setId("mic");
+        micButton.getStyleClass().add("send");
+        micButton.setGraphic(Icons.of(Icons.MIC, 17, "on-accent"));
+        micButton.setTooltip(new Tooltip(I18n.t("voice.recordTip")));
+        micButton.setOnAction(e -> startRecording());
+        // the microphone stands where the send button is while there is nothing to send
+        micButton.visibleProperty().bind(input.textProperty().isEmpty());
+        micButton.managedProperty().bind(micButton.visibleProperty());
+        send.visibleProperty().bind(micButton.visibleProperty().not());
+        send.managedProperty().bind(send.visibleProperty());
+        composer.getChildren().addAll(attach, input, emoji, send, micButton);
         composer.getStyleClass().add("composer");
         composer.setAlignment(Pos.BOTTOM_CENTER);
 
@@ -860,6 +873,7 @@ final class ConversationView {
     // ------------------------------------------------------------------ files
 
     private Node fileCard(FileMessage file) {
+        if (com.emirchat.call.VoiceNotes.isVoice(file.mimeType(), file.name())) return voiceCard(file);
         StackPane icon = new StackPane(Icons.of(Icons.FILE, 18, "accent"));
         icon.getStyleClass().add("file-icon");
         VBox titles = new VBox(1, UiKit.label(file.name(), "file-name"), UiKit.label(humanSize(file.size()), "file-size"));
@@ -1018,6 +1032,222 @@ final class ConversationView {
         row.setPadding(new Insets(12, 0, 4, 0));
         messages.getChildren().add(row);
         lastSender = null;
+    }
+
+    // ------------------------------------------------------------------ voice messages
+
+    /** Swaps the composer for a recording bar: live level meter, timer, cancel and send. */
+    private void startRecording() {
+        if (recorder != null) return;
+        com.emirchat.call.VoiceRecorder r = new com.emirchat.call.VoiceRecorder();
+        java.util.ArrayDeque<Float> levels = new java.util.ArrayDeque<>();
+        javafx.scene.canvas.Canvas meter = new javafx.scene.canvas.Canvas(260, 30);
+        Label clock = UiKit.label("0:00", "voice-clock");
+        clock.setId("voice-clock");
+        long started = System.currentTimeMillis();
+        javafx.animation.Timeline tick = new javafx.animation.Timeline(new javafx.animation.KeyFrame(
+                javafx.util.Duration.millis(100), e -> {
+                    clock.setText(voiceTime(System.currentTimeMillis() - started));
+                    synchronized (levels) {
+                        drawLevels(meter, levels);
+                    }
+                }));
+        tick.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        Runnable[] finish = new Runnable[1];
+        try {
+            r.start(level -> {
+                synchronized (levels) {
+                    levels.addLast(level);
+                    while (levels.size() > 60) levels.removeFirst();
+                }
+            }, () -> Platform.runLater(() -> finish[0].run()));
+        } catch (IllegalStateException e) {
+            systemLine(I18n.t("voice.noMicrophone", e.getMessage()), true);
+            return;
+        }
+        recorder = r;
+        List<Node> normal = List.copyOf(composer.getChildren());
+        Button cancel = new Button();
+        cancel.setId("voice-cancel");
+        cancel.getStyleClass().add("attach");
+        cancel.setGraphic(Icons.of(Icons.TRASH, 18, "danger"));
+        cancel.setTooltip(new Tooltip(I18n.t("voice.cancel")));
+        Button done = new Button();
+        done.setId("voice-send");
+        done.getStyleClass().add("send");
+        done.setGraphic(Icons.of(Icons.SEND, 17, "on-accent"));
+        done.setTooltip(new Tooltip(I18n.t("voice.send")));
+        javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(5);
+        dot.getStyleClass().add("rec-dot");
+        javafx.animation.FadeTransition blink = new javafx.animation.FadeTransition(javafx.util.Duration.millis(600), dot);
+        blink.setFromValue(1);
+        blink.setToValue(0.25);
+        blink.setAutoReverse(true);
+        blink.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        StackPane meterBox = new StackPane(meter);
+        meterBox.setAlignment(Pos.CENTER_LEFT);
+        meterBox.setMinWidth(0);
+        HBox.setHgrow(meterBox, Priority.ALWAYS);
+        meter.widthProperty().bind(meterBox.widthProperty());
+        HBox bar = new HBox(12, dot, clock, meterBox);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.getStyleClass().add("recording-bar");
+        HBox.setHgrow(bar, Priority.ALWAYS);
+        composer.getChildren().setAll(cancel, bar, done);
+        composer.setAlignment(Pos.CENTER);
+        java.util.function.Consumer<Boolean> end = sendIt -> {
+            if (recorder != r) return;
+            tick.stop();
+            blink.stop();
+            recorder = null;
+            byte[] pcm = r.stop();
+            composer.getChildren().setAll(normal);
+            composer.setAlignment(Pos.BOTTOM_CENTER);
+            input.requestFocus();
+            if (!sendIt) return;
+            if (com.emirchat.call.VoiceNotes.millis(pcm) < 500) {
+                systemLine(I18n.t("voice.tooShort"), false);
+                return;
+            }
+            String name = "voice-" + java.time.LocalDateTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".wav";
+            sendBytes(name, () -> com.emirchat.call.VoiceNotes.wav(pcm), com.emirchat.call.VoiceNotes.MIME);
+        };
+        finish[0] = () -> end.accept(true);
+        cancel.setOnAction(e -> end.accept(false));
+        done.setOnAction(e -> end.accept(true));
+        tick.play();
+        blink.play();
+    }
+
+    private static String voiceTime(long millis) {
+        long s = millis / 1000;
+        return s / 60 + ":" + String.format("%02d", s % 60);
+    }
+
+    private static void drawLevels(javafx.scene.canvas.Canvas c, java.util.Deque<Float> levels) {
+        var g = c.getGraphicsContext2D();
+        double w = c.getWidth();
+        double h = c.getHeight();
+        g.clearRect(0, 0, w, h);
+        g.setFill(Appearance.accentColor(Theme.isDark()));
+        double barW = 3;
+        double gap = 2;
+        int i = 0;
+        // newest on the right, scrolling left
+        Float[] values = levels.toArray(new Float[0]);
+        for (int k = values.length - 1; k >= 0; k--, i++) {
+            double x = w - (i + 1) * (barW + gap);
+            if (x < 0) break;
+            double bh = Math.max(2, values[k] * h);
+            g.fillRoundRect(x, (h - bh) / 2, barW, bh, 3, 3);
+        }
+    }
+
+    /** A voice message: play/pause, a waveform that fills as it plays (click to seek) and its length. */
+    private Node voiceCard(FileMessage file) {
+        Button play = new Button();
+        play.getStyleClass().add("voice-play");
+        play.setGraphic(Icons.of(Icons.PLAY, 16, "on-accent"));
+        play.setDisable(true);
+        javafx.scene.canvas.Canvas wave = new javafx.scene.canvas.Canvas(200, 32);
+        wave.getStyleClass().add("voice-wave");
+        Label length = UiKit.label("…", "voice-length");
+        HBox card = new HBox(10, play, wave, length);
+        card.setAlignment(Pos.CENTER_LEFT);
+        card.getStyleClass().add("voice-card");
+        card.setMinWidth(Region.USE_PREF_SIZE);
+        String key = fileKey(file);
+        float[][] bars = {new float[0]};
+        com.emirchat.call.VoicePlayer[] player = {null};
+        double[] at = {0};
+        boolean[] own = {false};
+        Runnable redraw = () -> drawWave(wave, bars[0], at[0], own[0]);
+        card.parentProperty().addListener((o, a, parent) -> {
+            // the bubble decides the colours: cream on our amber bubbles, accent on theirs
+            for (Node n = parent; n != null; n = n.getParent()) {
+                if (n.getStyleClass().contains("bubble")) {
+                    own[0] = n.getStyleClass().contains("own");
+                    redraw.run();
+                    break;
+                }
+            }
+        });
+        java.util.function.Consumer<byte[]> ready = pcm -> {
+            bars[0] = com.emirchat.call.VoiceNotes.waveform(pcm, 40);
+            length.setText(voiceTime(com.emirchat.call.VoiceNotes.millis(pcm)));
+            player[0] = new com.emirchat.call.VoicePlayer(pcm);
+            play.setDisable(false);
+            redraw.run();
+        };
+        play.setOnAction(e -> {
+            com.emirchat.call.VoicePlayer p = player[0];
+            if (p == null) return;
+            if (p.playing()) {
+                p.stop();
+                play.setGraphic(Icons.of(Icons.PLAY, 16, "on-accent"));
+                return;
+            }
+            try {
+                p.play(at[0] >= 0.999 ? 0 : at[0], f -> Platform.runLater(() -> {
+                    at[0] = f;
+                    redraw.run();
+                }), () -> Platform.runLater(() -> {
+                    at[0] = 0;
+                    play.setGraphic(Icons.of(Icons.PLAY, 16, "on-accent"));
+                    redraw.run();
+                }));
+                play.setGraphic(Icons.of(Icons.PAUSE, 16, "on-accent"));
+            } catch (IllegalStateException ex) {
+                systemLine(I18n.t("voice.noSpeaker", ex.getMessage()), true);
+            }
+        });
+        wave.setOnMouseClicked(e -> {
+            at[0] = Math.max(0, Math.min(1, e.getX() / wave.getWidth()));
+            redraw.run();
+            com.emirchat.call.VoicePlayer p = player[0];
+            if (p != null && p.playing()) {
+                p.stop();
+                play.fire();
+            }
+        });
+        byte[] cached = voices.get(key);
+        if (cached != null) {
+            ready.accept(cached);
+        } else {
+            session.downloads().execute(() -> {
+                try {
+                    byte[] pcm = com.emirchat.call.VoiceNotes.decode(session.client().downloadFile(file));
+                    Platform.runLater(() -> {
+                        voices.put(key, pcm);
+                        ready.accept(pcm);
+                    });
+                } catch (Exception ex) {
+                    Platform.runLater(() -> length.setText(I18n.t("voice.unplayable")));
+                }
+            });
+        }
+        redraw.run();
+        return card;
+    }
+
+    private static void drawWave(javafx.scene.canvas.Canvas c, float[] bars, double played, boolean own) {
+        var g = c.getGraphicsContext2D();
+        double w = c.getWidth();
+        double h = c.getHeight();
+        g.clearRect(0, 0, w, h);
+        int n = bars.length == 0 ? 40 : bars.length;
+        double step = w / n;
+        double barW = Math.max(2, step * 0.6);
+        javafx.scene.paint.Color on = own ? javafx.scene.paint.Color.rgb(255, 248, 236) : Appearance.accentColor(Theme.isDark());
+        javafx.scene.paint.Color off = own ? javafx.scene.paint.Color.rgb(255, 248, 236, 0.42)
+                : Theme.isDark() ? javafx.scene.paint.Color.rgb(182, 170, 154, 0.45) : javafx.scene.paint.Color.rgb(95, 84, 70, 0.35);
+        for (int i = 0; i < n; i++) {
+            double v = bars.length == 0 ? 0.15 : Math.max(0.08, bars[i]);
+            double bh = v * h;
+            g.setFill((i + 0.5) / n <= played ? on : off);
+            g.fillRoundRect(i * step, (h - bh) / 2, barW, bh, barW, barW);
+        }
     }
 
     // ------------------------------------------------------------------ composer

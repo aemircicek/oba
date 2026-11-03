@@ -815,6 +815,12 @@ final class MainView implements AccountSession.View {
         }
     }
 
+    /** Voice messages are files named voice-….wav (see ConversationView#startRecording). */
+    static boolean isVoiceName(String text) {
+        String name = text.startsWith("📎 ") ? text.substring("📎 ".length()) : text;
+        return name.startsWith("voice-") && name.endsWith(".wav") && !name.contains(" ");
+    }
+
     private Node chatRow(String conversation, History.Summary s) {
         ChatClient client = session.client();
         boolean group = conversation.startsWith("g:");
@@ -830,7 +836,8 @@ final class MainView implements AccountSession.View {
             title = conversation.substring(3);
             avatar = UiKit.avatarWithPresence(title, client.isOnline(title));
         }
-        String last = s == null ? "" : s.lastText().equals(History.DELETED_TEXT) ? I18n.t("conv.deleted") : Markdown.plain(s.lastText());
+        String last = s == null ? "" : s.lastText().equals(History.DELETED_TEXT) ? I18n.t("conv.deleted")
+                : isVoiceName(s.lastText()) ? "🎤 " + I18n.t("voice.message") : Markdown.plain(s.lastText());
         String preview = s == null ? I18n.t("main.noMessages")
                 : (s.lastSender().equals(client.username()) ? I18n.t("conv.you") + ": " : group ? s.lastSender() + ": " : "") + last;
         Label sub = UiKit.label(preview, "row-sub");
@@ -1448,7 +1455,7 @@ final class MainView implements AccountSession.View {
                 : m.sender();
         String title = m.conversation().startsWith("g:") ? I18n.t("notify.inGroup", m.sender(), where) : where;
         String body = session.setting(AccountSession.NOTIFICATION_PREVIEW)
-                ? (m.file() != null ? "📎 " + m.text() : Markdown.plain(m.text()))
+                ? (m.file() != null ? (isVoiceName(m.text()) ? "🎤 " + I18n.t("voice.message") : "📎 " + m.text()) : Markdown.plain(m.text()))
                 : I18n.t("notify.newMessage");
         Tray.get().notify(title, body);
     }

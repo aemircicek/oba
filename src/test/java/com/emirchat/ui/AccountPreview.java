@@ -206,6 +206,12 @@ public final class AccountPreview {
         Thread.sleep(1500);
         snap("05b-files");
 
+        // A voice message from efe (synthetic "speech": tones in syllable-like bursts)
+        efe.client.sendFile("emir", "voice-20261103-140210.wav", com.emirchat.call.VoiceNotes.MIME,
+                com.emirchat.call.VoiceNotes.wav(syntheticSpeech(7)));
+        Thread.sleep(1200);
+        snap("05k-voice");
+
         // Replies, reactions, edits and read receipts, driven from efe's side
         System.setProperty("securechat.notifications", "false");
         ChatClient.Chat toEmir = ChatClient.Chat.dm("emir");
@@ -417,6 +423,25 @@ public final class AccountPreview {
         System.out.println("Account UI flow completed; screenshots in " + out.toAbsolutePath());
         Platform.exit();
         System.exit(0);
+    }
+
+    /** Seconds of speech-like sound: a few harmonics whose loudness rises and falls like syllables. */
+    private static byte[] syntheticSpeech(int seconds) {
+        int n = seconds * 8000;
+        byte[] pcm = new byte[n * 2];
+        java.util.Random random = new java.util.Random(7);
+        double envelope = 0;
+        double target = 0;
+        for (int i = 0; i < n; i++) {
+            if (i % 1400 == 0) target = random.nextDouble() < 0.25 ? 0.05 : 0.3 + random.nextDouble() * 0.7;
+            envelope += (target - envelope) * 0.002;
+            double t = i / 8000.0;
+            double v = Math.sin(2 * Math.PI * 180 * t) + 0.5 * Math.sin(2 * Math.PI * 360 * t) + 0.25 * Math.sin(2 * Math.PI * 720 * t);
+            short sample = (short) (v * envelope * 9000);
+            pcm[2 * i] = (byte) sample;
+            pcm[2 * i + 1] = (byte) (sample >> 8);
+        }
+        return pcm;
     }
 
     private static void pause() throws InterruptedException {
