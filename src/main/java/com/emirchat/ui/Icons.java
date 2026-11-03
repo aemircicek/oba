@@ -51,6 +51,8 @@ final class Icons {
 
     static final String HEADPHONES = "M3 18v-6a9 9 0 0 1 18 0v6 M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z";
 
+    static final String MAP = "M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z M8 2v16 M16 6v16";
+
     private Icons() {}
 
     /** An icon of {@code size} pixels; {@code tone} is an extra style class such as "accent" or "danger". */

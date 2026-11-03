@@ -62,6 +62,7 @@ final class MainView implements AccountSession.View {
     private Map<Long, List<String>> voiceRooms = Map.of();
     private Campfire campfire;           // the voice room's scene, while we are in a room
     private boolean campfireShown;
+    private long mapShown;               // the community whose map is on screen, or 0
     private javafx.animation.Timeline callTicker;
     private javafx.animation.PauseTransition callHide;
     /** The strip at the far left: home, one icon per community, and "+" (like a server list). */
@@ -318,7 +319,8 @@ final class MainView implements AccountSession.View {
             rail.getChildren().add(railItem(UiKit.communityIcon(name, root.id()), name, selected, unread > 0,
                     "rail-community-" + root.id(), () -> {
                         selectedCommunity = root.id();
-                        open(AccountSession.group(lastChannel.getOrDefault(root.id(), root.id())));
+                        if (!communitiesTab.isSelected()) communitiesTab.setSelected(true);
+                        showMap(root.id());
                     }));
         }
         Label plus = UiKit.label("+", "rail-plus");
@@ -497,7 +499,13 @@ final class MainView implements AccountSession.View {
         settings.setTooltip(new Tooltip(I18n.t("community.settings")));
         settings.setId("community-settings");
         settings.setOnAction(e -> openCommunityInfo(root.id()));
-        HBox top = new HBox(6, back, name, UiKit.grow(), settings);
+        Button mapButton = new Button();
+        mapButton.setGraphic(Icons.of(Icons.MAP, 15, mapShown == root.id() ? "accent" : "muted"));
+        mapButton.getStyleClass().addAll("small", "attach");
+        mapButton.setTooltip(new Tooltip(I18n.t("map.open")));
+        mapButton.setId("community-map-button");
+        mapButton.setOnAction(e -> showMap(root.id()));
+        HBox top = new HBox(6, back, name, UiKit.grow(), mapButton, settings);
         top.setAlignment(Pos.CENTER_LEFT);
         top.setPadding(new Insets(4, 10, 4, 6));
         list.getChildren().add(top);
@@ -1351,6 +1359,7 @@ final class MainView implements AccountSession.View {
     private void showEmpty() {
         if (current != null) current.dispose();
         current = null;
+        mapShown = 0;
         Label shortcut = UiKit.label(I18n.t("palette.hint", isMac() ? "⌘K" : "Ctrl+K"), "shortcut-hint");
         VBox empty = new VBox(12, Illustrations.desert(300),
                 UiKit.label(I18n.t("main.select"), "h2"),
@@ -1388,6 +1397,7 @@ final class MainView implements AccountSession.View {
                 ? ConversationView.group(session, Long.parseLong(conversation.substring(2)), actions)
                 : ConversationView.dm(session, conversation.substring(3), actions);
         content.getChildren().setAll(current.root());
+        mapShown = 0;
         if (campfireShown) {
             campfireShown = false;
             if (voiceState.joined()) showVoiceBar(voiceState);
@@ -1647,6 +1657,7 @@ final class MainView implements AccountSession.View {
             }
         }
         if (!friendsTab.isSelected()) refreshSidebar();
+        if (current == null) refreshMap();
     }
 
     @Override
@@ -1761,6 +1772,49 @@ final class MainView implements AccountSession.View {
         if (current != null && user.equals(current.peer())) current.refreshHeader();
     }
 
+    /** The community as a map of oases (see {@link CommunityMap}). */
+    private void showMap(long communityId) {
+        Packet.GroupInfo root = group(communityId);
+        if (root == null) return;
+        if (current != null) { // the map replaces the open chat (so its unread messages count again)
+            current.dispose();
+            current = null;
+        }
+        ChatClient c = session.client();
+        Map<String, History.Summary> summaries = summaries();
+        List<CommunityMap.Oasis> oases = new ArrayList<>();
+        for (Packet.GroupInfo ch : c.channels(communityId)) {
+            String conv = AccountSession.group(ch.id());
+            History.Summary s = summaries.get(conv);
+            String topic;
+            try {
+                topic = session.history().topic(conv);
+            } catch (IOException e) {
+                topic = "";
+            }
+            String line = s == null ? "" : (s.lastSender().equals(c.username()) ? I18n.t("conv.you") : s.lastSender()) + ": "
+                    + (pollQuestion(s.lastText()) != null ? "📊 " + pollQuestion(s.lastText()) : Markdown.plain(s.lastText()));
+            oases.add(new CommunityMap.Oasis(ch.id(), ConversationView.channelTitle(ch), topic, line,
+                    unread(conv, summaries), s == null ? 0 : s.lastAt(), voiceRooms.getOrDefault(ch.id(), List.of()).size()));
+        }
+        CommunityMap map = new CommunityMap(communityId, ConversationView.groupName(root), oases, new CommunityMap.Actions() {
+            @Override public void open(long channelId) { MainView.this.open(AccountSession.group(channelId)); }
+
+            @Override public void joinVoice(long channelId) {
+                session.background().execute(() -> session.client().voice().join(channelId));
+            }
+        });
+        campfireShown = false;
+        mapShown = communityId;
+        content.getChildren().setAll(map.root());
+        refreshSidebar();
+    }
+
+    /** Redraws the map if one is open (new messages, people in voice rooms). */
+    private void refreshMap() {
+        if (mapShown != 0 && !campfireShown && group(mapShown) != null) showMap(mapShown);
+    }
+
     private void showCampfire() {
         if (campfire == null) return;
         campfireShown = true;
@@ -1781,6 +1835,7 @@ final class MainView implements AccountSession.View {
     public void voiceRooms(Map<Long, List<String>> rooms) {
         voiceRooms = rooms;
         refreshSidebar();
+        refreshMap();
     }
 
     /** The bar over the conversation while we are in a voice room: who is there, mute, deafen, leave. */

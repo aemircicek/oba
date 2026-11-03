@@ -474,6 +474,11 @@ public final class AccountPreview {
         fx(() -> { ((Button) find("#campfire-back")).fire(); return null; });
         Thread.sleep(500);
         snap("15g-voice");
+        // the community as a map of oases, while people sit at the fire of # general
+        fx(() -> { click(find("#rail-community-" + joined.id())); return null; });
+        waitFor("#community-map");
+        Thread.sleep(700);
+        snap("15j-map");
         fx(() -> { ((Button) find("#voice-leave")).fire(); return null; });
         ayse.client.voice().leave();
         efeNew.client.voice().leave();

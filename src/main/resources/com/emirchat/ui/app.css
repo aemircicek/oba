@@ -834,3 +834,31 @@
 .campfire-far { -fx-text-fill: rgba(255, 238, 214, 0.6); -fx-font-size: 10px; }
 .button.campfire-button { -fx-background-color: rgba(255, 243, 223, 0.12); -fx-text-fill: #fff3df; }
 .button.campfire-button:hover { -fx-background-color: rgba(255, 243, 223, 0.22); }
+
+/* The map of oases */
+.community-map { -fx-background-color: #c49a63; }
+.map-title { -fx-text-fill: #fff6ea; -fx-font-size: 20px; -fx-font-weight: bold; -fx-effect: dropshadow(gaussian, rgba(40,20,5,0.7), 8, 0, 0, 1); }
+.map-hint { -fx-text-fill: #fff6ea; -fx-font-size: 12px; -fx-effect: dropshadow(gaussian, rgba(40,20,5,0.7), 6, 0, 0, 1); }
+.map-name {
+    -fx-text-fill: #fff6ea;
+    -fx-font-size: 12.5px;
+    -fx-font-weight: bold;
+    -fx-background-color: rgba(30, 18, 8, 0.62);
+    -fx-background-radius: 999;
+    -fx-padding: 3 10;
+}
+.map-name.quiet { -fx-text-fill: rgba(255, 246, 234, 0.6); }
+.map-voice {
+    -fx-text-fill: #1d1205;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-background-color: #f2a43a;
+    -fx-background-radius: 999;
+    -fx-padding: 2 8;
+}
+.map-legend { -fx-background-color: rgba(30, 18, 8, 0.55); -fx-background-radius: 999; -fx-padding: 6 14; }
+.map-legend-text { -fx-text-fill: #fff6ea; -fx-font-size: 11px; }
+.map-legend-unread { -fx-fill: #ffd68c; }
+.map-legend-active { -fx-fill: #ebe1d2; }
+.map-legend-voice { -fx-fill: #ff9a3c; }
+.map-legend-quiet { -fx-fill: #c9ab7c; }
