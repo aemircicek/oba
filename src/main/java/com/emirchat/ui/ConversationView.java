@@ -431,7 +431,7 @@ final class ConversationView {
         loaded.removeIf(m -> ids.contains(m.id()));
         for (long id : ids) {
             Node row = rows.remove(id);
-            if (row != null) messages.getChildren().remove(row);
+            if (row != null) SandDissolve.play(row, layer, () -> messages.getChildren().remove(row)); // turns to sand
             statusLabels.remove(id);
         }
         if (!ids.isEmpty()) lastSender = null;
@@ -631,8 +631,17 @@ final class ConversationView {
             int index = messages.getChildren().indexOf(old);
             if (m == null || index < 0) return;
             Node row = buildRow(m, continuedById.getOrDefault(localId, false));
-            messages.getChildren().set(index, row);
             rows.put(localId, row);
+            boolean justDeleted = m.deleted() && !Boolean.TRUE.equals(old.getProperties().get("deleted"));
+            if (justDeleted) {
+                // deleted for everyone: the old bubble blows away as sand, then the placeholder appears
+                SandDissolve.play(old, layer, () -> {
+                    int at = messages.getChildren().indexOf(old);
+                    if (at >= 0) messages.getChildren().set(at, row);
+                });
+            } else {
+                messages.getChildren().set(index, row);
+            }
         } catch (IOException ignored) {
             // the old rendering stays
         }
@@ -730,6 +739,7 @@ final class ConversationView {
         row.setMinWidth(0);
         row.setPadding(new Insets(continued ? 3 : 12, 0, 0, 0));
         row.setUserData(m.id());
+        row.getProperties().put("deleted", m.deleted());
         return row;
     }
 

@@ -8,6 +8,7 @@ final class Motion {
     private Motion() {}
 
     static boolean enabled() {
+        if ("force".equals(System.getProperty("securechat.motion"))) return true; // the preview tool, for one picture
         return !AppPrefs.reduceMotion() && !Boolean.getBoolean("securechat.preview");
     }
 }

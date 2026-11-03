@@ -267,6 +267,15 @@ public final class AccountPreview {
         snap("05j-viewer");
         fx(() -> { ((Button) find("#viewer-close")).fire(); return null; });
 
+        // efe deletes a message for everyone: it turns to sand (caught mid-way)
+        System.setProperty("securechat.motion", "force");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.DELETE, typo.messageId(), "");
+        Thread.sleep(650);
+        snap("05l-sand");
+        Thread.sleep(1400);
+        System.clearProperty("securechat.motion");
+        snap("05m-sand-after");
+
         fx(() -> { ((TextField) find("#search")).setText("sunum"); return null; });
         Thread.sleep(400);
         snap("05e-search");
