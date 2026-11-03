@@ -4,9 +4,9 @@ Release packages are built by `.github/workflows/release.yml` with `jpackage`:
 
 | OS | Package | Notes |
 |---|---|---|
-| Windows | `Scorpion-<version>-windows-x64.exe` installer, `…-windows-x64.zip` portable | per-user install (no admin), Start menu and desktop shortcuts, `.scbackup` association; needs WiX 3 (installed in CI) |
-| macOS | `Scorpion-<version>-macos-arm64.dmg` | icon made from `macos/scorpion.iconset` with `iconutil` |
-| Linux | `scorpion_<version>_amd64.deb` | menu entry under Network, `.scbackup` association |
+| Windows | `Oba-<version>-windows-x64.exe` installer, `…-windows-x64.zip` portable | per-user install (no admin), Start menu and desktop shortcuts, `.scbackup` association; needs WiX 3 (installed in CI) |
+| macOS | `Oba-<version>-macos-arm64.dmg` | icon made from `macos/oba.iconset` with `iconutil` |
+| Linux | `oba_<version>_amd64.deb` | menu entry under Network, `.scbackup` association |
 
 The icons are drawn by `src/test/java/com/emirchat/tools/IconMaker.java`; run it to regenerate
 every size after changing the design.

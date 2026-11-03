@@ -29,6 +29,7 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public final class VoiceCrypto {
     public static final int KEY_BYTES = 32;
+    /** Named like the call label (the app's former name); part of the protocol, never changes. */
     private static final byte[] LABEL = "scorpion voice v1".getBytes(StandardCharsets.US_ASCII);
     private static final int TAG_BYTES = 16;
     private static final int HEADER = 12;

@@ -22,7 +22,7 @@ final class WaitingScreen {
     private final VBox addresses = new VBox(8);
 
     WaitingScreen(String titleText, String bodyText, Runnable onCancel) {
-        Tail spinner = Tail.spinner(46);
+        Flame spinner = Flame.spinner(46);
 
         title.setText(titleText);
         title.getStyleClass().add("h2");

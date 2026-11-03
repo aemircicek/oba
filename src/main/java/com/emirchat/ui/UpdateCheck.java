@@ -29,7 +29,7 @@ final class UpdateCheck {
         try {
             HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build();
             HttpRequest request = HttpRequest.newBuilder(API).timeout(Duration.ofSeconds(10))
-                    .header("Accept", "application/vnd.github+json").header("User-Agent", "Scorpion/" + current).build();
+                    .header("Accept", "application/vnd.github+json").header("User-Agent", "Oba/" + current).build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) return Optional.empty();
             Matcher m = TAG.matcher(response.body());

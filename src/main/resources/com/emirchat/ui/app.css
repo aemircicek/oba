@@ -1,5 +1,5 @@
 /*
- * Scorpion desktop theme.
+ * Oba desktop theme.
  * Palettes are looked-up colours on .root; .root.dark / .root.light swap them, following the
  * operating system's appearance. Everything else references the palette, never raw colours.
  */
@@ -475,15 +475,16 @@
 /* Voice calls */
 .call-bar { -fx-padding: 10 18; -fx-background-color: -sc-accent-weak; -fx-border-color: transparent transparent -sc-border transparent; }
 
-/* ================================================================== Scorpion identity */
+/* ================================================================== Oba identity */
 
-/* The tail (Tail.java): spinner, connection light and the send button's strike */
-.tail-part { -fx-fill: -sc-accent; }
-.tail .tail-sting { -fx-fill: -sc-accent-hover; }
-.tail .tail-bulb { -fx-fill: -sc-accent-hover; }
-.tail.tail-status .tail-part { -fx-fill: -sc-success; }
-.tail.danger .tail-part { -fx-fill: -sc-danger; }
-.venom-drop { -fx-fill: -sc-accent; }
+/* The flame (Flame.java): spinner, connection light; sparks from the send button */
+.flame-outer { -fx-fill: -sc-accent; }
+.flame-inner { -fx-fill: #ffd36e; }
+.flame-core { -fx-fill: #fff6d6; }
+.flame-ember { -fx-fill: derive(-sc-accent, -35%); -fx-effect: dropshadow(gaussian, -sc-accent, 6, 0.3, 0, 0); }
+.flame.danger .flame-ember { -fx-fill: -sc-danger; -fx-effect: dropshadow(gaussian, -sc-danger, 6, 0.4, 0, 0); }
+.spark { -fx-fill: -sc-accent; }
+.spark-hot { -fx-fill: #ffd36e; }
 
 /* Text size (Settings → Appearance) */
 .root.text-small .bubble-text { -fx-font-size: 12.5px; }
@@ -775,7 +776,11 @@
 .root.dark .illus-dune-near { -fx-fill: #4b3721; }
 .illus-cactus { -fx-fill: -sc-venom; -fx-opacity: 0.85; }
 .illus-print { -fx-fill: -sc-text-3; -fx-opacity: 0.5; }
-.illus-tail .tail-part { -fx-fill: -sc-accent; }
+.illus-tent { -fx-fill: #fff1dc; }
+.illus-tent-shade { -fx-fill: #e3be8e; }
+.illus-tent-door { -fx-fill: #3b2416; }
+.illus-pennant { -fx-fill: -sc-accent; }
+.illus-fire-glow { -fx-fill: -sc-accent; -fx-opacity: 0.22; }
 
 /* ================================================================== desert world (3.5) */
 

@@ -28,6 +28,7 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public final class CallCrypto {
     public static final int CALL_ID_LENGTH = 16;
+    /** The app's former name: part of the protocol (calls with older versions), so it never changes. */
     private static final byte[] INFO = "scorpion call v1".getBytes(StandardCharsets.US_ASCII);
     private static final int TAG_BYTES = 16;
 

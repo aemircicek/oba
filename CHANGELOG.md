@@ -2,14 +2,19 @@
 
 ## 3.4.0 (unreleased)
 
+**Scorpion is now Oba**: a nomad camp of tents around a fire. New name and icon (two tents and
+a campfire under a night sky); the flame replaces the scorpion's tail in the app. On first start
+the Scorpion data folder, the password saved with "remember me" and the start-with-the-computer
+entry move over by themselves; Windows installs Oba over Scorpion. The protocol keeps its
+labels, so Oba talks to Scorpion 3.2 and 3.3 as before.
+
 A redesign and a round of features. Messages use new kinds and actions (polls, thread replies,
 pins, topics, votes, voice room keys): **update all clients together**; a 3.3 client shows those
 as messages it could not read.
 
 ### Added
-- **Scorpion look**: "desert night" (dark) and "sand" (light) themes with an amber accent, an icon
-  redrawn to match (with a simpler silhouette for the tray), and the scorpion's tail as the loading
-  spinner, the connection light and the send button's strike.
+- **New look**: "desert night" (dark) and "sand" (light) themes with an amber accent, the
+  campfire flame as the loading spinner and the connection light, sparks from the send button.
 - **Avatars drawn from keys**: a mirrored pattern over two colours from each person's key; a new
   key gives a new face. Rings for verified friends and changed keys.
 - **Formatting**: bold, italic, strikethrough, inline code, quotes, links and fenced code blocks

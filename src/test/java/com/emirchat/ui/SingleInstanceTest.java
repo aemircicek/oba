@@ -52,9 +52,9 @@ class SingleInstanceTest {
 
     @Test
     void startupEntriesStartHiddenInTheTray() {
-        Path linux = Path.of("/opt/scorpion/bin/Scorpion");
+        Path linux = Path.of("/opt/oba/bin/Oba");
         assertTrue(Autostart.desktopEntry(linux).contains("Exec=\"" + linux + "\" --background"));
-        Path mac = Path.of("/Applications/Scorpion & Co.app/Contents/MacOS/Scorpion");
+        Path mac = Path.of("/Applications/Oba & Co.app/Contents/MacOS/Oba");
         String plist = Autostart.launchAgent(mac);
         assertTrue(plist.contains("<string>" + mac.toString().replace("&", "&amp;") + "</string>"));
         assertTrue(plist.contains("<string>--background</string>"));

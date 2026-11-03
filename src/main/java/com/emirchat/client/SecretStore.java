@@ -24,7 +24,9 @@ import java.util.concurrent.TimeUnit;
  * the user accepts by ticking "remember me".
  */
 public interface SecretStore {
-    String SERVICE = "Scorpion";
+    String SERVICE = "Oba";
+    /** The service name before the app was renamed; a password found there is moved to {@link #SERVICE}. */
+    String FORMER_SERVICE = "Scorpion";
 
     boolean available();
 
@@ -111,11 +113,18 @@ public interface SecretStore {
 
         @Override public char[] load(String account) throws IOException {
             String out = run(List.of("/usr/bin/security", "find-generic-password", "-s", SERVICE, "-a", account, "-w"), "", true);
-            return out == null ? null : out.strip().toCharArray();
+            if (out != null) return out.strip().toCharArray();
+            String former = run(List.of("/usr/bin/security", "find-generic-password", "-s", FORMER_SERVICE, "-a", account, "-w"), "", true);
+            if (former == null) return null;
+            char[] password = former.strip().toCharArray();
+            save(account, password); // moved under the new name, once
+            run(List.of("/usr/bin/security", "delete-generic-password", "-s", FORMER_SERVICE, "-a", account), "", true);
+            return password;
         }
 
         @Override public void delete(String account) throws IOException {
             run(List.of("/usr/bin/security", "delete-generic-password", "-s", SERVICE, "-a", account), "", true);
+            run(List.of("/usr/bin/security", "delete-generic-password", "-s", FORMER_SERVICE, "-a", account), "", true);
         }
 
         private static String quote(String s) {
@@ -132,16 +141,23 @@ public interface SecretStore {
         }
 
         @Override public void save(String account, char[] password) throws IOException {
-            run(List.of(TOOL.toString(), "store", "--label=" + SERVICE, "service", "scorpion", "account", account),
+            run(List.of(TOOL.toString(), "store", "--label=" + SERVICE, "service", "oba", "account", account),
                     new String(password), false);
         }
 
         @Override public char[] load(String account) throws IOException {
-            String out = run(List.of(TOOL.toString(), "lookup", "service", "scorpion", "account", account), "", true);
-            return out == null || out.isEmpty() ? null : out.toCharArray();
+            String out = run(List.of(TOOL.toString(), "lookup", "service", "oba", "account", account), "", true);
+            if (out != null && !out.isEmpty()) return out.toCharArray();
+            String former = run(List.of(TOOL.toString(), "lookup", "service", "scorpion", "account", account), "", true);
+            if (former == null || former.isEmpty()) return null;
+            char[] password = former.toCharArray();
+            save(account, password); // moved under the new name, once
+            run(List.of(TOOL.toString(), "clear", "service", "scorpion", "account", account), "", true);
+            return password;
         }
 
         @Override public void delete(String account) throws IOException {
+            run(List.of(TOOL.toString(), "clear", "service", "oba", "account", account), "", true);
             run(List.of(TOOL.toString(), "clear", "service", "scorpion", "account", account), "", true);
         }
     }

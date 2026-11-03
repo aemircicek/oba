@@ -116,7 +116,7 @@
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.emirchat.Main</mainClass>
                   <manifestEntries>
-                    <Implementation-Title>Scorpion</Implementation-Title>
+                    <Implementation-Title>Oba</Implementation-Title>
                     <Implementation-Version>${project.version}</Implementation-Version>
                   </manifestEntries>
                 </transformer>

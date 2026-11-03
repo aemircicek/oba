@@ -66,6 +66,7 @@ final class FingerprintArt {
     static String pseudoFingerprint(String name) {
         try {
             byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    // the app's former name, fixed: changing it would change everyone's picture
                     .digest(("scorpion-avatar:" + name).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
         } catch (java.security.NoSuchAlgorithmException e) {

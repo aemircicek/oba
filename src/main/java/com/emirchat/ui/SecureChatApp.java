@@ -11,7 +11,7 @@ import javafx.stage.Stage;
 
 /**
  * The desktop application. One window per data folder: a second start brings the first window
- * forward. Closing the window keeps Scorpion running in the tray (unless turned off in Settings,
+ * forward. Closing the window keeps Oba running in the tray (unless turned off in Settings,
  * or the desktop has no tray), so messages and notifications keep arriving.
  */
 public final class SecureChatApp extends Application {
@@ -43,6 +43,7 @@ public final class SecureChatApp extends Application {
         this.stage = stage;
         Path dataDir = home != null ? home : com.emirchat.AppInfo.defaultHome();
         AppLog.init(dataDir);
+        Thread.ofPlatform().daemon().name("autostart-rename").start(Autostart::adoptFormer); // Scorpion → Oba, once
         boolean handedOver;
         try {
             instance = SingleInstance.acquire(dataDir, openFile != null ? "open" : "show",
@@ -52,7 +53,7 @@ public final class SecureChatApp extends Application {
             instance = null; // could not coordinate with a running copy: run anyway
             handedOver = false;
         }
-        if (handedOver) { // the running Scorpion shows itself (and opens the file, if any)
+        if (handedOver) { // the running Oba shows itself (and opens the file, if any)
             Platform.exit();
             return;
         }

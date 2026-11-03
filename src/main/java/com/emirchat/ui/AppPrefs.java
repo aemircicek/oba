@@ -12,7 +12,7 @@ final class AppPrefs {
 
     private AppPrefs() {}
 
-    /** Closing the window keeps Scorpion running in the tray (receiving messages and notifications). */
+    /** Closing the window keeps Oba running in the tray (receiving messages and notifications). */
     static boolean keepRunning() {
         return NODE.getBoolean("keep-running", true);
     }
@@ -21,7 +21,7 @@ final class AppPrefs {
         NODE.putBoolean("keep-running", on);
     }
 
-    /** True once the user has been told that closing the window keeps Scorpion running. */
+    /** True once the user has been told that closing the window keeps Oba running. */
     static boolean trayHintShown() {
         return NODE.getBoolean("tray-hint-shown", false);
     }
@@ -94,7 +94,8 @@ final class AppPrefs {
 
     /** Notification sound name (see {@link Sounds}), or "off". */
     static String sound() {
-        return NODE.get("sound", "chime");
+        String s = NODE.get("sound", "chime");
+        return s.equals("rattle") ? "crackle" : s; // renamed with the app
     }
 
     static void setSound(String name) {

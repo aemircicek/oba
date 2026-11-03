@@ -1075,8 +1075,8 @@ final class ConversationView {
     }
 
     /**
-     * The send button strikes like the tail on the icon: it pulls back, lunges and settles, and
-     * a drop of "venom" flies up towards the conversation.
+     * The send button pulls back, lunges and settles, and throws a few sparks up towards the
+     * conversation, like a log settling in the fire.
      */
     private void strike() {
         if (!Motion.enabled()) return;
@@ -1100,24 +1100,30 @@ final class ConversationView {
                         new javafx.animation.KeyValue(icon.rotateProperty(), 0, javafx.animation.Interpolator.EASE_BOTH)));
         lunge.play();
         if (!(sendButton.getParent() instanceof javafx.scene.layout.Pane composer)) return;
-        javafx.scene.shape.Circle drop = new javafx.scene.shape.Circle(4.5);
-        drop.getStyleClass().add("venom-drop");
-        drop.setManaged(false);
-        drop.setMouseTransparent(true);
         javafx.geometry.Bounds b = sendButton.getBoundsInParent();
-        drop.setCenterX(b.getCenterX());
-        drop.setCenterY(b.getMinY() + 6);
-        composer.getChildren().add(drop);
-        javafx.animation.TranslateTransition fly = new javafx.animation.TranslateTransition(javafx.util.Duration.millis(380), drop);
-        fly.setByX(-26);
-        fly.setByY(-58);
-        fly.setInterpolator(javafx.animation.Interpolator.EASE_OUT);
-        javafx.animation.FadeTransition fade = new javafx.animation.FadeTransition(javafx.util.Duration.millis(380), drop);
-        fade.setToValue(0);
-        javafx.animation.ParallelTransition all = new javafx.animation.ParallelTransition(fly, fade);
-        all.setDelay(javafx.util.Duration.millis(120));
-        all.setOnFinished(e -> composer.getChildren().remove(drop));
-        all.play();
+        java.util.Random r = new java.util.Random();
+        for (int k = 0; k < 6; k++) {
+            javafx.scene.shape.Circle spark = new javafx.scene.shape.Circle(1.6 + r.nextDouble() * 1.6);
+            spark.getStyleClass().add(k % 2 == 0 ? "spark" : "spark-hot");
+            spark.setManaged(false);
+            spark.setMouseTransparent(true);
+            spark.setCenterX(b.getCenterX());
+            spark.setCenterY(b.getMinY() + 8);
+            composer.getChildren().add(spark);
+            double angle = -Math.PI / 2 + (r.nextDouble() - 0.5) * 1.6; // upwards, spreading out
+            double distance = 30 + r.nextDouble() * 40;
+            javafx.animation.TranslateTransition fly = new javafx.animation.TranslateTransition(
+                    javafx.util.Duration.millis(380 + r.nextInt(220)), spark);
+            fly.setByX(Math.cos(angle) * distance);
+            fly.setByY(Math.sin(angle) * distance);
+            fly.setInterpolator(javafx.animation.Interpolator.EASE_OUT);
+            javafx.animation.FadeTransition fade = new javafx.animation.FadeTransition(fly.getDuration(), spark);
+            fade.setToValue(0);
+            javafx.animation.ParallelTransition all = new javafx.animation.ParallelTransition(fly, fade);
+            all.setDelay(javafx.util.Duration.millis(110));
+            all.setOnFinished(e -> composer.getChildren().remove(spark));
+            all.play();
+        }
     }
 
     // ------------------------------------------------------------------ files

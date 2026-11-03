@@ -68,7 +68,7 @@ final class MainView implements AccountSession.View {
     /** The strip at the far left: home, one icon per community, and "+" (like a server list). */
     private final VBox rail = new VBox(8);
     private final Label connectionLabel = UiKit.label(I18n.t("main.connected"), "row-sub", "success-text");
-    private final Tail connectionTail = Tail.status(16);
+    private final Flame connectionFlame = Flame.status(16);
 
     MainView(AccountSession session, Runnable onLogout) {
         this.session = session;
@@ -99,7 +99,7 @@ final class MainView implements AccountSession.View {
         me.getStyleClass().add("icon-button");
         me.setTooltip(new Tooltip(I18n.t("main.myKey")));
         me.setOnAction(e -> openMyKey());
-        HBox connection = new HBox(5, connectionTail, connectionLabel);
+        HBox connection = new HBox(5, connectionFlame, connectionLabel);
         connection.setAlignment(Pos.CENTER_LEFT);
         VBox meText = new VBox(1, UiKit.label(client.username(), "me-name"), connection);
         Button settings = new Button();
@@ -933,7 +933,7 @@ final class MainView implements AccountSession.View {
         return switch (name) {
             case "tock" -> I18n.t("sound.tock");
             case "drop" -> I18n.t("sound.drop");
-            case "rattle" -> I18n.t("sound.rattle");
+            case "crackle" -> I18n.t("sound.crackle");
             case "off" -> I18n.t("sound.off");
             default -> I18n.t("sound.chime");
         };
@@ -1727,7 +1727,7 @@ final class MainView implements AccountSession.View {
             connectionLabel.setText(I18n.t("main.reconnecting", retryInSeconds));
             connectionLabel.getStyleClass().add("danger-text");
         }
-        if (online != wasOnline) connectionTail.setOnline(online);
+        if (online != wasOnline) connectionFlame.setOnline(online);
         connectionLabel.setId(online ? "status-online" : "status-offline");
     }
 

@@ -118,7 +118,7 @@ public final class Backup {
         byte[] file = Files.readAllBytes(in);
         int headerLength = MAGIC.length + 4 + 16 + 12;
         if (file.length < headerLength + 16 || !Arrays.equals(Arrays.copyOf(file, MAGIC.length), MAGIC)) {
-            throw new IOException("That is not a Scorpion backup.");
+            throw new IOException("That is not an Oba (or Scorpion) backup.");
         }
         ByteBuffer b = ByteBuffer.wrap(file);
         b.position(MAGIC.length);
@@ -223,6 +223,6 @@ public final class Backup {
 
     /** Suggested file name for a backup. */
     public static String suggestedName(String user) {
-        return "scorpion-" + user + "-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + ".scbackup";
+        return "oba-" + user + "-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")) + ".scbackup";
     }
 }

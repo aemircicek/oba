@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * The icon in the system tray (Windows notification area, macOS menu bar, most Linux desktops):
- * open or quit Scorpion while its window is closed, and show desktop notifications. JavaFX has no
+ * open or quit Oba while its window is closed, and show desktop notifications. JavaFX has no
  * tray API, so this uses AWT on its own thread. Where no tray exists everything here does nothing.
  */
 final class Tray {

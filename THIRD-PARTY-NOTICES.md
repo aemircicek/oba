@@ -1,9 +1,9 @@
-# Third-party software in Scorpion
+# Third-party software in Oba
 
-Scorpion is released under the [MIT License](LICENSE). Its installers and jars include the
+Oba is released under the [MIT License](LICENSE). Its installers and jars include the
 following software, each under its own license:
 
-| Component | Use in Scorpion | License |
+| Component | Use in Oba | License |
 |---|---|---|
 | [OpenJFX](https://openjfx.io) (JavaFX) | Desktop user interface | GPL v2 with the Classpath Exception |
 | [SQLite JDBC](https://github.com/xerial/sqlite-jdbc) (includes SQLite, public domain) | Local message history, server database | Apache License 2.0 |

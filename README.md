@@ -1,15 +1,19 @@
-<p align="center"><img src="docs/scorpion-icon.png" width="96" alt="Scorpion icon"></p>
+<p align="center"><img src="docs/oba-icon.png" width="96" alt="Oba icon: two tents around a campfire under a night sky"></p>
 
-# Scorpion
+# Oba
 
 [![CI](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml)
 
-**Scorpion** is an end-to-end encrypted messenger for Windows, macOS and Linux (plus a terminal
+**Oba** is an end-to-end encrypted messenger for Windows, macOS and Linux (plus a terminal
 client): accounts, friends, direct messages, groups, communities with channels, threads and
 polls, voice calls, drop-in voice rooms, voice messages and files, in English and Turkish. It is
 written in Java using only the JDK's standard cryptography (no third-party crypto libraries), and
-the server relays and stores messages it cannot read. This repository was called *secure-chat*
-before the desktop app got its name.
+the server relays and stores messages it cannot read.
+
+*Oba* is a nomad camp: a few tents pitched together, everyone in their own, and everyone around
+the fire in the evening. That is the app: your direct chats are your tent, communities and their
+campfires the shared ground. Until 3.4 the app was called *Scorpion*, and this repository
+*secure-chat* before that; data, saved passwords and autostart settings move over by themselves.
 
 <p align="center">
   <img src="docs/screenshots/campfire-dark.png" width="420" alt="The campfire: a voice room you walk around in, voices by distance and side">
@@ -27,14 +31,14 @@ direct message, and Sender Keys for groups.
 ## Quick start
 
 From the [latest release](https://github.com/aemircicek/secure-chat/releases/latest), download
-Scorpion with Java included:
+Oba with Java included:
 
 | | File | |
 |---|---|---|
-| Windows | `Scorpion-<version>-windows-x64.exe` | installer: no admin rights, Start menu and desktop shortcuts |
-| Windows | `Scorpion-<version>-windows-x64-portable.zip` | unzip and run `Scorpion.exe` |
-| macOS | `Scorpion-<version>-macos-arm64.dmg` | |
-| Linux | `Scorpion-<version>-linux-x64.deb` | `sudo apt install ./Scorpion-*.deb` |
+| Windows | `Oba-<version>-windows-x64.exe` | installer: no admin rights, Start menu and desktop shortcuts |
+| Windows | `Oba-<version>-windows-x64-portable.zip` | unzip and run `Oba.exe` |
+| macOS | `Oba-<version>-macos-arm64.dmg` | |
+| Linux | `Oba-<version>-linux-x64.deb` | `sudo apt install ./Oba-*.deb` |
 
 There is also a runnable jar per platform (Java 21+ required), or build it yourself with `mvn verify`.
 
@@ -42,7 +46,7 @@ Check a download before running it, with the checksum file or GitHub's signed bu
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing                       # on Windows: Get-FileHash <file>
-gh attestation verify Scorpion-3.2.0-windows-x64.exe -R aemircicek/secure-chat
+gh attestation verify Oba-3.4.0-windows-x64.exe -R aemircicek/secure-chat
 ```
 
 The packages are not code-signed (that needs paid certificates), so Windows SmartScreen and macOS
@@ -68,7 +72,7 @@ java -jar secure-chat.jar gui --home ./bob
 - **Accounts**: register and log in with a username and password; *Remember me* keeps the password
   in the operating system's protected storage (Windows DPAPI, macOS Keychain, Linux Secret
   Service) and signs in by itself.
-- **Always there**: closing the window keeps Scorpion in the tray so messages and notifications
+- **Always there**: closing the window keeps Oba in the tray so messages and notifications
   still arrive; it can start with the computer, reconnects by itself after a network change or a
   server restart, and keeps one window (a second start brings it forward).
 - **English and Turkish**, following the system or chosen on the login screen and in Settings.
@@ -109,9 +113,9 @@ java -jar secure-chat.jar gui --home ./bob
   moves the account to another computer.
 - **Updates and help**: a banner when a new version is out (can be turned off), a short tour on
   first start, an About dialog and a local log file for troubleshooting.
-- **Scorpion look**: a warm "desert night" dark theme and a "sand" light theme with an amber
-  accent; the scorpion's tail is the loading spinner, the connection light (it droops while
-  reconnecting) and the send button's strike.
+- **The Oba look**: a warm "desert night" dark theme and a "sand" light theme with an amber
+  accent; the campfire from the icon is the loading spinner and the connection light (it dies
+  down to a red ember while reconnecting), and the send button throws sparks.
 - **Faces from keys**: every avatar is drawn from the person's key (a mirrored pattern over two
   colours), so a new key means a new face; verified friends get an accent ring, a changed key a red
   dashed one.
@@ -346,7 +350,7 @@ Users then authenticate with their password inside the channel. Low-order X25519
 | `com.emirchat.client` | `ChatClient`, `ServerConnection`, encrypted `History`, `Backup` |
 | `com.emirchat.api` | `Packet` (client–server messages), error codes |
 | `com.emirchat.trust` | `KnownPeers` (TOFU store for servers and contacts), `SafetyNumber` |
-| `com.emirchat.ui` | JavaFX desktop app: screens, theme and `Appearance`, avatars and fingerprint art, `Markdown`, `Emoji`, `SlashCommands`, `Palette` (quick switcher), `Tail` and `Illustrations`, `Sounds`, QR codes, notifications |
+| `com.emirchat.ui` | JavaFX desktop app: screens, theme and `Appearance`, avatars and fingerprint art, `Markdown`, `Emoji`, `SlashCommands`, `Palette` (quick switcher), `Flame` and `Illustrations`, `Sounds`, QR codes, notifications |
 | `com.emirchat.chat` | `ChatMessage`, `FileMessage` (file description and safe names), `Poll`, terminal sanitising |
 | `com.emirchat.net` | Direct mode: connect/host |
 | `com.emirchat` | `Main`, `SecureChat`, `AccountCli` and `BackupCli` command lines, `ClientShell` |
@@ -415,6 +419,7 @@ key      = 32 random bytes and a random 32-bit id, new each time anyone joins or
 handover = an action inside the group's Sender Keys encryption (the server cannot read it)
 packet   = u32 keyId ‖ u64 seq ‖ AES-256-GCM(key, nonce = keyId ‖ seq,
                                   aad = "scorpion voice v1" ‖ groupId ‖ sender, μ-law audio)
+(the labels keep the app's former name: they are part of the protocol)
 ```
 
 Each participant sends with their own key and receives with everyone else's, mixing the voices

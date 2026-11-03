@@ -9,7 +9,7 @@ import javafx.scene.shape.SVGPath;
 
 /**
  * Small desert scenes for empty screens, drawn from shapes so they follow the theme and accent:
- * a sun (or moon) over dunes, a cactus and the scorpion's tail peeking out of the sand.
+ * a sun (or moon) over dunes, a cactus, and a tent with a small campfire.
  */
 final class Illustrations {
     private Illustrations() {}
@@ -47,12 +47,18 @@ final class Illustrations {
                 + "M76 116 L84 116 Q90 116 90 108 L90 100 Q90 94 85 94 Q80 94 80 100 L80 106 L76 106 Z", "illus-cactus");
         scene.getChildren().addAll(far, cactus, near);
 
-        Tail tail = new Tail(66);
-        tail.setCurl(0.95);
-        tail.setLayoutX(160);
-        tail.setLayoutY(86);
-        tail.getStyleClass().add("illus-tail");
-        scene.getChildren().add(tail);
+        // a tent on the dune with a small fire in front of it
+        SVGPath tent = path("M226 150 L258 96 L290 150 Z", "illus-tent");
+        SVGPath tentShade = path("M258 96 L290 150 L258 150 Z", "illus-tent-shade");
+        SVGPath door = path("M258 122 L250 150 L268 150 Z", "illus-tent-door");
+        SVGPath pennant = path("M257 96 L257 82 L270 86 L258 90 Z", "illus-pennant");
+        scene.getChildren().addAll(tent, tentShade, door, pennant);
+        Circle fireGlow = new Circle(200, 146, 26);
+        fireGlow.getStyleClass().add("illus-fire-glow");
+        Flame fire = new Flame(30);
+        fire.setLayoutX(185);
+        fire.setLayoutY(120);
+        scene.getChildren().addAll(fireGlow, fire);
         // a few footprints in the sand
         for (int i = 0; i < 4; i++) {
             Circle print = new Circle(112 + i * 12, 162 - (i % 2) * 4, 1.8);

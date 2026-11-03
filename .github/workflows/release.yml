@@ -1,6 +1,6 @@
 name: Release
 
-# Publishing a GitHub release builds Scorpion for each OS with jpackage (Java included):
+# Publishing a GitHub release builds Oba for each OS with jpackage (Java included):
 #   Windows: installer (.exe, per-user, shortcuts, .scbackup association) and a portable .zip
 #   macOS:   .dmg
 #   Linux:   .deb
@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          iconutil -c icns packaging/macos/scorpion.iconset -o packaging/macos/scorpion.icns
+          iconutil -c icns packaging/macos/oba.iconset -o packaging/macos/oba.icns
           # Voice calls need the microphone, and macOS only asks the user if Info.plist says why.
           # Start from this JDK's own Info.plist template (its placeholders differ between versions).
           jimage extract --dir jdk-res --include 'regex:.*/Info-lite\.plist\.template' "$JAVA_HOME/lib/modules"
@@ -71,7 +71,7 @@ jobs:
             exit 0
           fi
           mkdir -p packaging/macos/resources
-          perl -pe 's#^\s*</dict>#  <key>NSMicrophoneUsageDescription</key>\n  <string>Scorpion uses the microphone only during end-to-end encrypted voice calls.</string>\n</dict>#' \
+          perl -pe 's#^\s*</dict>#  <key>NSMicrophoneUsageDescription</key>\n  <string>Oba uses the microphone only during end-to-end encrypted voice calls, voice rooms and voice messages.</string>\n</dict>#' \
             "$TEMPLATE" > packaging/macos/resources/Info.plist
           grep -q NSMicrophoneUsageDescription packaging/macos/resources/Info.plist
       - name: Package
@@ -84,8 +84,8 @@ jobs:
           VERSION="${TAG#v}"               # file names keep a suffix such as -rc.1; installers need plain numbers
           mkdir -p dist input
           cp target/secure-chat.jar input/
-          cp target/secure-chat.jar "dist/Scorpion-${VERSION}-${PLATFORM}.jar"
-          COMMON=(--name Scorpion --input input --main-jar secure-chat.jar --main-class com.emirchat.Main
+          cp target/secure-chat.jar "dist/Oba-${VERSION}-${PLATFORM}.jar"
+          COMMON=(--name Oba --input input --main-jar secure-chat.jar --main-class com.emirchat.Main
                   --app-version "${VERSION%%-*}" --vendor "Emir Cicek" --copyright "(c) 2026 Emir Cicek, MIT License"
                   --description "End-to-end encrypted messenger")
           INSTALLER=(--about-url "https://github.com/aemircicek/secure-chat")   # not valid for app-image
@@ -93,29 +93,29 @@ jobs:
           # maps it on later ones. Only where the app folder belongs to the user (Windows per-user
           # install and the portable zip); a macOS bundle must not change after signing and /opt is
           # read-only. ($APPDIR is expanded by jpackage's launcher, not by this shell.)
-          CDS=(--java-options '-XX:+AutoCreateSharedArchive' --java-options '-XX:SharedArchiveFile=$APPDIR/scorpion.jsa')
+          CDS=(--java-options '-XX:+AutoCreateSharedArchive' --java-options '-XX:SharedArchiveFile=$APPDIR/oba.jsa')
           case "$RUNNER_OS" in
             Windows)
-              jpackage "${COMMON[@]}" "${CDS[@]}" "${INSTALLER[@]}" --type exe --icon packaging/windows/scorpion.ico --dest pkg \
-                --win-per-user-install --win-menu --win-menu-group Scorpion --win-shortcut --win-shortcut-prompt \
+              jpackage "${COMMON[@]}" "${CDS[@]}" "${INSTALLER[@]}" --type exe --icon packaging/windows/oba.ico --dest pkg \
+                --win-per-user-install --win-menu --win-menu-group Oba --win-shortcut --win-shortcut-prompt \
                 --win-dir-chooser --win-upgrade-uuid "$WIN_UPGRADE_UUID" --file-associations packaging/scbackup.properties
-              cp pkg/*.exe "dist/Scorpion-${VERSION}-${PLATFORM}.exe"
-              jpackage "${COMMON[@]}" "${CDS[@]}" --type app-image --icon packaging/windows/scorpion.ico --dest portable
-              ZIP="dist/Scorpion-${VERSION}-${PLATFORM}-portable.zip"
-              if command -v 7z > /dev/null; then (cd portable && 7z a -tzip "../$ZIP" Scorpion > /dev/null)
-              else powershell -NoProfile -Command "Compress-Archive -Path portable/Scorpion -DestinationPath '$ZIP'"; fi ;;
+              cp pkg/*.exe "dist/Oba-${VERSION}-${PLATFORM}.exe"
+              jpackage "${COMMON[@]}" "${CDS[@]}" --type app-image --icon packaging/windows/oba.ico --dest portable
+              ZIP="dist/Oba-${VERSION}-${PLATFORM}-portable.zip"
+              if command -v 7z > /dev/null; then (cd portable && 7z a -tzip "../$ZIP" Oba > /dev/null)
+              else powershell -NoProfile -Command "Compress-Archive -Path portable/Oba -DestinationPath '$ZIP'"; fi ;;
             macOS)
               RES=()
               if [ -f packaging/macos/resources/Info.plist ]; then RES=(--resource-dir packaging/macos/resources); fi
-              jpackage "${COMMON[@]}" "${INSTALLER[@]}" ${RES[@]+"${RES[@]}"} --type dmg --icon packaging/macos/scorpion.icns --dest pkg \
-                --mac-package-identifier org.scorpion.app --mac-package-name Scorpion \
+              jpackage "${COMMON[@]}" "${INSTALLER[@]}" ${RES[@]+"${RES[@]}"} --type dmg --icon packaging/macos/oba.icns --dest pkg \
+                --mac-package-identifier org.oba.app --mac-package-name Oba \
                 --file-associations packaging/scbackup.properties
-              cp pkg/*.dmg "dist/Scorpion-${VERSION}-${PLATFORM}.dmg" ;;
+              cp pkg/*.dmg "dist/Oba-${VERSION}-${PLATFORM}.dmg" ;;
             Linux)
-              jpackage "${COMMON[@]}" "${INSTALLER[@]}" --type deb --icon packaging/linux/scorpion.png --dest pkg \
-                --linux-package-name scorpion --linux-shortcut --linux-menu-group Network --linux-app-category net \
+              jpackage "${COMMON[@]}" "${INSTALLER[@]}" --type deb --icon packaging/linux/oba.png --dest pkg \
+                --linux-package-name oba --linux-shortcut --linux-menu-group Network --linux-app-category net \
                 --file-associations packaging/scbackup.properties
-              cp pkg/*.deb "dist/Scorpion-${VERSION}-${PLATFORM}.deb" ;;
+              cp pkg/*.deb "dist/Oba-${VERSION}-${PLATFORM}.deb" ;;
           esac
           ls -l dist
       - name: Attest build provenance
@@ -139,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir assets && cd assets
-          gh release download "$TAG" -R "${{ github.repository }}" --pattern 'Scorpion-*'
-          sha256sum Scorpion-* > SHA256SUMS
+          gh release download "$TAG" -R "${{ github.repository }}" --pattern 'Oba-*'
+          sha256sum Oba-* > SHA256SUMS
           cat SHA256SUMS
           gh release upload "$TAG" SHA256SUMS -R "${{ github.repository }}" --clobber

@@ -161,6 +161,8 @@ final class Emoji {
         e("🌈", "rainbow", "gokkusagi");
         e("⚡", "zap", "simsek");
         e("🔥", "fire", "ates", "yangin");
+        e("⛺", "tent", "cadir", "oba");
+        e("🏕️", "camping", "kamp", "kamp_atesi");
         e("❄️", "snowflake", "kar");
         e("🌊", "wave_sea", "dalga");
 
