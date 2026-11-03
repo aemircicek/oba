@@ -5,17 +5,17 @@
 [![CI](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml)
 
 **Scorpion** is an end-to-end encrypted messenger for Windows, macOS and Linux (plus a terminal
-client): accounts, friends, direct messages, groups, communities with channels, voice calls and
-files, in English and Turkish. It is
+client): accounts, friends, direct messages, groups, communities with channels, threads and
+polls, voice calls, drop-in voice rooms, voice messages and files, in English and Turkish. It is
 written in Java using only the JDK's standard cryptography (no third-party crypto libraries), and
 the server relays and stores messages it cannot read. This repository was called *secure-chat*
 before the desktop app got its name.
 
 <p align="center">
-  <img src="docs/screenshots/account-dm-dark.png" width="420" alt="Encrypted direct messages">
-  <img src="docs/screenshots/account-group-light.png" width="420" alt="Encrypted group chat">
-  <img src="docs/screenshots/community-dark.png" width="420" alt="A community with channels">
-  <img src="docs/screenshots/call-dark.png" width="420" alt="An end-to-end encrypted voice call">
+  <img src="docs/screenshots/markdown-dark.png" width="420" alt="Formatted messages with a code block, and the hover tools">
+  <img src="docs/screenshots/poll-dark.png" width="420" alt="A community channel with a topic, a poll and a thread">
+  <img src="docs/screenshots/voice-room-dark.png" width="420" alt="A voice room: faces light up while people talk">
+  <img src="docs/screenshots/account-group-light.png" width="420" alt="A group chat in the light theme">
 </p>
 
 It started as a small socket chat that "encrypted" messages with a hard-coded AES key in ECB
@@ -84,6 +84,12 @@ java -jar secure-chat.jar gui --home ./bob
 - **Groups**: create a group from your friends, add and remove members, rename it, leave; the
   owner role passes to the longest-standing member if the owner leaves. Group names are end-to-end
   encrypted: the server stores only ciphertext.
+- **Communities**: a rail of community icons at the far left; channels with a topic, pinned
+  messages, a member list by role, and threads in a side panel. Polls with live results
+  (`/poll Question | A | B`), dice (`/roll 2d6`), `/flip`, `/remind 10m tea` (a reminder on this
+  computer), `/me`, `/shrug`, `/topic`, `/help`.
+- **Voice rooms**: every channel and group has a room to drop into without ringing; faces light up
+  while people talk, with mute, deafen and leave. End-to-end encrypted like everything else.
 - **Contact verification**: compare a 60-digit safety number on a call, or check a picture of
   your friend's QR code; both sides compute the same code from both keys.
 - **Key-change warning**: if a friend's key changes (new device, or an attack), messages to them
@@ -103,11 +109,34 @@ java -jar secure-chat.jar gui --home ./bob
   moves the account to another computer.
 - **Updates and help**: a banner when a new version is out (can be turned off), a short tour on
   first start, an About dialog and a local log file for troubleshooting.
-- Light and dark themes, following the system.
+- **Scorpion look**: a warm "desert night" dark theme and a "sand" light theme with an amber
+  accent; the scorpion's tail is the loading spinner, the connection light (it droops while
+  reconnecting) and the send button's strike.
+- **Faces from keys**: every avatar is drawn from the person's key (a mirrored pattern over two
+  colours), so a new key means a new face; verified friends get an accent ring, a changed key a red
+  dashed one.
+- **Formatting**: `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, quotes, links and fenced
+  code blocks with colours for keywords, strings, numbers and comments. Shift+Enter starts a new
+  line; ↑ in an empty box edits your last message.
+- **Emoji**: type `:` and a name (English or Turkish: `:kalp`, `:akrep`) for suggestions, or open
+  the picker; hover a message for quick reactions, reply and more.
+- **Voice messages**: the microphone button records (with a live level meter); messages play with
+  a waveform you can click to seek. They are ordinary encrypted attachments.
+- **Pictures and files**: drag files onto a chat, paste a screenshot or copied files, and browse
+  the pictures of a chat in a full-window viewer.
+- **Quick switcher**: Ctrl+K (⌘K) jumps to any chat, channel, friend or action.
+- **Appearance**: light, dark or system theme, five accent colours, text size, compact mode,
+  reduce motion, and a choice of notification sounds.
 
 <p align="center">
   <img src="docs/screenshots/account-files-dark.png" width="420" alt="An encrypted image and document in a chat">
   <img src="docs/screenshots/account-rich-light.png" width="420" alt="A reply, an edit, a reaction, read ticks and typing">
+  <img src="docs/screenshots/voice-message-light.png" width="420" alt="A voice message with its waveform">
+  <img src="docs/screenshots/thread-dark.png" width="420" alt="A thread in the side panel">
+  <img src="docs/screenshots/members-dark.png" width="420" alt="Members by role">
+  <img src="docs/screenshots/palette-dark.png" width="420" alt="The quick switcher">
+  <img src="docs/screenshots/emoji-dark.png" width="420" alt="The emoji picker">
+  <img src="docs/screenshots/empty-light.png" width="420" alt="An empty screen in the light theme">
 </p>
 
 <p align="center">
@@ -299,19 +328,19 @@ Users then authenticate with their password inside the channel. Low-order X25519
 | `com.emirchat.crypto` | `Hkdf` (RFC 5869), `Identity` (Ed25519 keys, fingerprints), `X25519` |
 | `com.emirchat.protocol` | `FrameIO` (bounded framing), `Wire` (strict encoding), `Handshake` (SIGMA-I), `SecureChannel` |
 | `com.emirchat.e2e` | `X3dh`, `DoubleRatchet`, `GroupKeys` (Sender Keys), `GroupNames`, `Attachments` (file encryption), `Messenger`, `DeviceKeys`, `PrekeyBundle` |
-| `com.emirchat.server` | `ChatServer`, accounts, friends, groups and communities, offline queue, call audio relay, `AttachmentService`, `PasswordHasher`, `RateLimiter`, SQLite |
-| `com.emirchat.call` | `Calls` (call signalling and state), `CallCrypto` (per-call keys, audio packets), `Mulaw` (G.711), `SoundDevice` (microphone and speaker) |
+| `com.emirchat.server` | `ChatServer`, accounts, friends, groups and communities, offline queue, call audio relay, `VoiceRooms`, `AttachmentService`, `PasswordHasher`, `RateLimiter`, SQLite |
+| `com.emirchat.call` | `Calls` (call signalling and state), `CallCrypto` (per-call keys, audio packets), `VoiceChannels` and `VoiceCrypto` (voice rooms), `VoiceNotes`, `VoiceRecorder`, `VoicePlayer` (voice messages), `Mulaw` (G.711), `SoundDevice` (microphone and speaker) |
 | `com.emirchat.client` | `ChatClient`, `ServerConnection`, encrypted `History`, `Backup` |
 | `com.emirchat.api` | `Packet` (client–server messages), error codes |
 | `com.emirchat.trust` | `KnownPeers` (TOFU store for servers and contacts), `SafetyNumber` |
-| `com.emirchat.ui` | JavaFX desktop app: screens, theme, fingerprint art, QR codes, notifications |
-| `com.emirchat.chat` | `ChatMessage`, `FileMessage` (file description and safe names), terminal sanitising |
+| `com.emirchat.ui` | JavaFX desktop app: screens, theme and `Appearance`, avatars and fingerprint art, `Markdown`, `Emoji`, `SlashCommands`, `Palette` (quick switcher), `Tail` and `Illustrations`, `Sounds`, QR codes, notifications |
+| `com.emirchat.chat` | `ChatMessage`, `FileMessage` (file description and safe names), `Poll`, terminal sanitising |
 | `com.emirchat.net` | Direct mode: connect/host |
 | `com.emirchat` | `Main`, `SecureChat`, `AccountCli` and `BackupCli` command lines, `ClientShell` |
 
 ### Tests
 
-`mvn verify` runs 185 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 225 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -329,6 +358,15 @@ Users then authenticate with their password inside the channel. Low-order X25519
 - **Calls**: audio both ways through the server, mute sends silence, a reflected, replayed, older or
   modified packet is dropped, another call id gives other keys, busy and declined calls, and the
   server relays audio only between friends.
+- **Voice rooms**: members hear each other through the server and outsiders cannot join; packets
+  replayed, rewound, altered, from another room or passed off as someone else's are dropped; old
+  keys expire after rotations; muting sends nothing; a removed listener who never speaks is cut off.
+- **Polls, pins, topics, threads**: delivered whole in chats and groups, one vote per person, poll
+  limits, and a text message can never pose as a poll.
+- **Desktop logic**: the Markdown parser (nesting, `snake_case`, unclosed markers, code
+  colouring), emoji names, slash commands, the quick switcher's matching, avatar patterns, voice
+  message files and waveforms, and line breaks surviving the sanitizer while control characters
+  do not.
 - **Files**: a blob swapped or modified on the server is refused, a wrong key fails, only the
   recipient or current group members can download, uploads must arrive in order and in full,
   expiry and per-user quotas, hostile file names (`../../etc/passwd`, right-to-left overrides).
@@ -348,6 +386,34 @@ CI also runs a Semgrep security scan. `src/test/java/com/emirchat/ui/AccountPrev
 the real desktop app against an in-process server and scripted users and saves a screenshot of
 every step; the images above come from it.
 
+### Voice rooms
+
+Every group and community channel has a voice room. The server keeps who is in which room in
+memory, relays each packet only to the others in the same room (rate limited) and tells the
+group's members who is there; it checks membership on joining and sweeps the rooms every two
+seconds, so someone removed from the group is taken out even if they stay silent.
+
+```
+key      = 32 random bytes and a random 32-bit id, new each time anyone joins or leaves
+handover = an action inside the group's Sender Keys encryption (the server cannot read it)
+packet   = u32 keyId ‖ u64 seq ‖ AES-256-GCM(key, nonce = keyId ‖ seq,
+                                  aad = "scorpion voice v1" ‖ groupId ‖ sender, μ-law audio)
+```
+
+Each participant sends with their own key and receives with everyone else's, mixing the voices
+locally. Because keys change whenever the room changes, a person who left cannot decrypt what is
+said after; clients also replace their key as soon as the member list shows a removal. Packets
+are bound to the room and the sender (one cannot pass off another's audio), and a receiver takes
+each sequence number once and never an older one.
+
+### Polls, pins, topics and threads
+
+These travel inside the same end-to-end encryption as messages. A poll is a message kind; a vote
+is an action naming one answer of that poll (one vote per person, the last one counts). In a
+community channel only the owner and admins may pin messages or set the topic; receivers check
+this against the member list. A thread reply is a message kind that names its first message and
+is shown in the thread instead of the channel.
+
 ## Limitations
 
 Honest notes on what this project does **not** do:
@@ -361,7 +427,13 @@ Honest notes on what this project does **not** do:
   members the server lists, so a malicious server could add a member (who would then appear in
   the member list). Check the member list of sensitive communities.
 - **Calls go through the server** (no direct peer-to-peer connection), so they add a little delay;
-  voice quality is that of a telephone (8 kHz). There are no video calls or group calls yet.
+  voice quality is that of a telephone (8 kHz). There are no video calls yet.
+- **Voice rooms**: the server sees who is in which room and when; at most 12 people per room. Room
+  keys are handed to every member of the channel (anyone who can read the channel may also
+  listen), and nobody else can join.
+- **Topics and pins are not stored on the server**, so people who join a channel later do not see
+  earlier ones. Dice and coins are thrown on the sender's computer; reminders stay on this
+  computer and are lost if the app is closed.
 - **The server can hide or delay messages**, and can claim a user has a new device. The app then
   shows a key-change warning; users must compare fingerprints to detect a fake key.
 - **TOFU trusts first contact.** Until friends compare fingerprints, a malicious server could
@@ -389,7 +461,7 @@ Honest notes on what this project does **not** do:
 - Fuzzing the decoders (Jazzer) and a written security report
 - Sealed sender and message-size padding (less metadata for the server)
 - A formal model of the handshake and X3DH (ProVerif or Tamarin)
-- Multiple devices per account; voice messages; group and video calls; a better voice codec (Opus)
+- Multiple devices per account; video calls and screen sharing; a better voice codec (Opus)
 
 ## Security
 
