@@ -18,6 +18,55 @@ final class VoiceRooms {
 
     private final Map<Long, LinkedHashMap<ClientConnection, Seat>> rooms = new HashMap<>();
     private final Map<ClientConnection, Long> roomOf = new HashMap<>();
+    private final GroupService groups;
+    private final Presence presence;
+
+    VoiceRooms(GroupService groups, Presence presence) {
+        this.groups = groups;
+        this.presence = presence;
+    }
+
+    /** Tells every online member of the group who is in its room now. */
+    com.emirchat.api.Packet.VoiceRoom announce(long groupId) {
+        com.emirchat.api.Packet.VoiceRoom room = new com.emirchat.api.Packet.VoiceRoom(groupId, participants(groupId));
+        for (long member : groups.memberIds(groupId)) presence.push(member, room);
+        return room;
+    }
+
+    /**
+     * Takes everyone who is no longer a member out of the rooms (removed, left the group, the
+     * channel was deleted) and announces the change, so the others replace their keys. Runs every
+     * few seconds; without it a silent listener who was removed would keep receiving audio.
+     *
+     * @return how many were taken out
+     */
+    int sweep() {
+        List<long[]> seats = new ArrayList<>(); // {groupId, userId}
+        List<ClientConnection> connections = new ArrayList<>();
+        synchronized (this) {
+            for (var room : rooms.entrySet()) {
+                for (Seat s : room.getValue().values()) {
+                    seats.add(new long[] {room.getKey(), s.user().id()});
+                    connections.add(s.connection());
+                }
+            }
+        }
+        java.util.Set<Long> changed = new java.util.HashSet<>();
+        int evicted = 0;
+        for (int i = 0; i < seats.size(); i++) {
+            long groupId = seats.get(i)[0];
+            if (groups.isMemberOf(groupId, seats.get(i)[1])) continue; // checked outside the lock: it reads the database
+            synchronized (this) {
+                if (roomOf.getOrDefault(connections.get(i), 0L) == groupId) {
+                    removeLocked(connections.get(i));
+                    changed.add(groupId);
+                    evicted++;
+                }
+            }
+        }
+        for (long g : changed) announce(g);
+        return evicted;
+    }
 
     /**
      * Puts the connection in the room of {@code groupId}.

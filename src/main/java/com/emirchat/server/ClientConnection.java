@@ -140,11 +140,8 @@ final class ClientConnection {
         if (left != 0) announceVoice(left);
     }
 
-    /** Tells every online member of the group who is in its room now. */
     private Packet.VoiceRoom announceVoice(long groupId) {
-        Packet.VoiceRoom room = new Packet.VoiceRoom(groupId, services.voice().participants(groupId));
-        for (long member : services.groups().memberIds(groupId)) services.presence().push(member, room);
-        return room;
+        return services.voice().announce(groupId);
     }
 
     /**

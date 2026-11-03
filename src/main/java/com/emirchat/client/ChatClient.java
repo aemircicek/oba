@@ -1001,6 +1001,7 @@ public final class ChatClient implements AutoCloseable {
     private void groupChanged(Packet.GroupInfo now) {
         Packet.GroupInfo before = groups.get(now.id());
         remember(now);
+        if (voice != null) voice.membersChanged(now.id(), now.members().stream().map(Packet.Member::username).toList());
         if (before != null) {
             try {
                 boolean someoneLeft = false;
@@ -1090,6 +1091,7 @@ public final class ChatClient implements AutoCloseable {
             case Packet.VoiceRoom v -> voice.roomChanged(v.groupId(), v.participants());
             case Packet.GroupRemoved g -> {
                 groups.remove(g.groupId());
+                if (voice != null && voice.state().groupId() == g.groupId()) voice.leave(); // out of the group: out of its room
                 try {
                     groupKeys.forgetGroup(g.groupId());
                     groupNames.forget(g.groupId());

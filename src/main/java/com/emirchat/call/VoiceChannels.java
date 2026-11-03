@@ -249,6 +249,30 @@ public final class VoiceChannels implements AutoCloseable {
         if (changed) publish();
     }
 
+    /**
+     * The group's member list changed. If someone in our room is no longer a member, we stop
+     * accepting their audio and replace our key right away (the server also takes them out).
+     */
+    public void membersChanged(long group, java.util.Collection<String> members) {
+        boolean rotate = false;
+        synchronized (this) {
+            if (group != groupId) return;
+            for (String p : participants) {
+                if (!members.contains(p)) {
+                    receiver.forget(p);
+                    queues.remove(p);
+                    loudAt.remove(p);
+                    rotate = true;
+                }
+            }
+            if (rotate) participants = participants.stream().filter(members::contains).toList();
+        }
+        if (rotate) {
+            rotateKey();
+            publish();
+        }
+    }
+
     /** Someone's sending key arrived through the group's encrypted channel. */
     public void acceptKey(String from, long group, String value) {
         if (from.equals(me)) return;

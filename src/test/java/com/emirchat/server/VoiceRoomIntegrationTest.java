@@ -183,4 +183,31 @@ class VoiceRoomIntegrationTest {
             awaitRoom(ayse, g, 0);
         }
     }
+
+    @Test
+    void aRemovedSilentListenerIsCutOff() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe"); Device ayse = new Device("ayse")) {
+            befriend(emir, efe);
+            befriend(emir, ayse);
+            long g = emir.client.createGroup("gizli", List.of("efe", "ayse")).id();
+            for (Device d : List.of(efe, ayse)) {
+                for (int i = 0; i < 100 && d.client.refreshGroups().stream().noneMatch(x -> x.id() == g); i++) Thread.sleep(50);
+            }
+            for (Device d : List.of(emir, efe, ayse)) d.client.voice().join(g);
+            awaitRoom(emir, g, 3);
+            Thread.sleep(800);
+            efe.audio.say(20);
+            assertTrue(ayse.audio.heardSpeech(3000), "ayse hears while she is a member");
+
+            // ayse never speaks again: only the server's sweep and the others' key change can cut her off
+            emir.client.removeGroupMember(g, "ayse");
+            awaitRoom(emir, g, 2);
+            awaitRoom(efe, g, 2);
+            Thread.sleep(600);
+            ayse.audio.heard.clear();
+            efe.audio.say(25);
+            assertTrue(emir.audio.heardSpeech(3000), "the members still hear each other");
+            assertTrue(!ayse.audio.heardSpeech(1500), "the removed listener hears nothing");
+        }
+    }
 }
