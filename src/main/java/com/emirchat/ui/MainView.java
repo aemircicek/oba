@@ -58,12 +58,25 @@ final class MainView implements AccountSession.View {
     private final HBox callBar = new HBox(10);
     private javafx.animation.Timeline callTicker;
     private javafx.animation.PauseTransition callHide;
-    private final Label connectionLabel = UiKit.label("● " + I18n.t("main.connected"), "row-sub", "accent-text");
+    private final Label connectionLabel = UiKit.label(I18n.t("main.connected"), "row-sub", "success-text");
+    private final Tail connectionTail = Tail.status(16);
 
     MainView(AccountSession session, Runnable onLogout) {
         this.session = session;
         this.onLogout = onLogout;
         ChatClient client = session.client();
+        String myFingerprint = Identity.fingerprint(client.deviceKey());
+        UiKit.useKeys(new UiKit.Keys() {
+            @Override public String fingerprint(String user) {
+                return user.equals(client.username()) ? myFingerprint : client.currentFingerprint(user);
+            }
+
+            @Override public UiKit.Trust trust(String user) {
+                if (user.equals(client.username())) return UiKit.Trust.KNOWN;
+                if (client.keyChanged(user)) return UiKit.Trust.CHANGED;
+                return client.isVerified(user) ? UiKit.Trust.VERIFIED : UiKit.Trust.KNOWN;
+            }
+        });
 
         // Sidebar header
         Button logout = new Button();
@@ -77,7 +90,9 @@ final class MainView implements AccountSession.View {
         me.getStyleClass().add("icon-button");
         me.setTooltip(new Tooltip(I18n.t("main.myKey")));
         me.setOnAction(e -> openMyKey());
-        VBox meText = new VBox(0, UiKit.label(client.username(), "me-name"), connectionLabel);
+        HBox connection = new HBox(5, connectionTail, connectionLabel);
+        connection.setAlignment(Pos.CENTER_LEFT);
+        VBox meText = new VBox(1, UiKit.label(client.username(), "me-name"), connection);
         Button settings = new Button();
         settings.setGraphic(Icons.of(Icons.SETTINGS, 16, null));
         settings.getStyleClass().add("icon-button");
@@ -1270,14 +1285,16 @@ final class MainView implements AccountSession.View {
 
     @Override
     public void connection(boolean online, int retryInSeconds) {
-        connectionLabel.getStyleClass().removeAll("accent-text", "danger-text");
+        connectionLabel.getStyleClass().removeAll("success-text", "danger-text");
+        boolean wasOnline = "status-online".equals(connectionLabel.getId()) || connectionLabel.getId() == null;
         if (online) {
-            connectionLabel.setText("● " + I18n.t("main.connected"));
-            connectionLabel.getStyleClass().add("accent-text");
+            connectionLabel.setText(I18n.t("main.connected"));
+            connectionLabel.getStyleClass().add("success-text");
         } else {
-            connectionLabel.setText("● " + I18n.t("main.reconnecting", retryInSeconds));
+            connectionLabel.setText(I18n.t("main.reconnecting", retryInSeconds));
             connectionLabel.getStyleClass().add("danger-text");
         }
+        if (online != wasOnline) connectionTail.setOnline(online);
         connectionLabel.setId(online ? "status-online" : "status-offline");
     }
 
@@ -1446,6 +1463,7 @@ final class MainView implements AccountSession.View {
     }
 
     void dispose() {
+        UiKit.useKeys(null);
         Tray.get().setUnread(0);
         if (stack.getScene() != null && stack.getScene().getWindow() instanceof javafx.stage.Stage s) {
             s.setTitle(com.emirchat.AppInfo.NAME);

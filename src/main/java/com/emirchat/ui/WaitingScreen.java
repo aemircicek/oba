@@ -5,7 +5,6 @@ import javafx.geometry.Pos;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
-import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
@@ -23,8 +22,7 @@ final class WaitingScreen {
     private final VBox addresses = new VBox(8);
 
     WaitingScreen(String titleText, String bodyText, Runnable onCancel) {
-        ProgressIndicator spinner = new ProgressIndicator();
-        spinner.setPrefSize(44, 44);
+        Tail spinner = Tail.spinner(46);
 
         title.setText(titleText);
         title.getStyleClass().add("h2");

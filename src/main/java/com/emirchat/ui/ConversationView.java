@@ -62,6 +62,7 @@ final class ConversationView {
     private final Map<Long, Label> statusLabels = new HashMap<>();
     private final Map<Long, Node> rows = new HashMap<>();
     private final TextField input = new TextField();
+    private final Button sendButton = new Button();
     private final Map<Long, Boolean> continuedById = new HashMap<>();
     private Map<Long, Map<String, String>> reactions = new HashMap<>();
     private final HBox contextBar = new HBox(8);
@@ -101,7 +102,7 @@ final class ConversationView {
 
         input.setId("composer");
         HBox.setHgrow(input, Priority.ALWAYS);
-        Button send = new Button();
+        Button send = sendButton;
         send.setId("send");
         send.getStyleClass().add("send");
         send.setGraphic(Icons.of(Icons.SEND, 17, "on-accent"));
@@ -464,7 +465,7 @@ final class ConversationView {
         column.setAlignment(own ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
         if (groupId != 0 && !own && !continued) {
             Label name = UiKit.label(m.sender(), "sender-name");
-            name.setStyle("-fx-text-fill: " + UiKit.css(UiKit.colorFor(m.sender())) + ";");
+            name.setStyle("-fx-text-fill: " + UiKit.css(UiKit.nameColor(m.sender(), Theme.isDark())) + ";");
             column.getChildren().add(0, name);
         }
         Map<String, String> theirs = reactions.get(m.id());
@@ -702,6 +703,7 @@ final class ConversationView {
             return;
         }
         input.clear();
+        strike();
         byte[] answering = replyTo;
         clearContext();
         byte[] uid = ChatClient.newMessageId();
@@ -748,6 +750,52 @@ final class ConversationView {
                 if (finalProblem != null) systemLine(finalProblem, true);
             });
         });
+    }
+
+    /**
+     * The send button strikes like the tail on the icon: it pulls back, lunges and settles, and
+     * a drop of "venom" flies up towards the conversation.
+     */
+    private void strike() {
+        if (!Motion.enabled()) return;
+        Node icon = sendButton.getGraphic();
+        javafx.animation.Timeline lunge = new javafx.animation.Timeline(
+                new javafx.animation.KeyFrame(javafx.util.Duration.ZERO,
+                        new javafx.animation.KeyValue(sendButton.scaleXProperty(), 1),
+                        new javafx.animation.KeyValue(sendButton.scaleYProperty(), 1),
+                        new javafx.animation.KeyValue(icon.rotateProperty(), 0)),
+                new javafx.animation.KeyFrame(javafx.util.Duration.millis(70),
+                        new javafx.animation.KeyValue(sendButton.scaleXProperty(), 0.84),
+                        new javafx.animation.KeyValue(sendButton.scaleYProperty(), 0.84),
+                        new javafx.animation.KeyValue(icon.rotateProperty(), 28)),
+                new javafx.animation.KeyFrame(javafx.util.Duration.millis(170),
+                        new javafx.animation.KeyValue(sendButton.scaleXProperty(), 1.12, javafx.animation.Interpolator.EASE_OUT),
+                        new javafx.animation.KeyValue(sendButton.scaleYProperty(), 1.12, javafx.animation.Interpolator.EASE_OUT),
+                        new javafx.animation.KeyValue(icon.rotateProperty(), -14, javafx.animation.Interpolator.EASE_OUT)),
+                new javafx.animation.KeyFrame(javafx.util.Duration.millis(320),
+                        new javafx.animation.KeyValue(sendButton.scaleXProperty(), 1, javafx.animation.Interpolator.EASE_BOTH),
+                        new javafx.animation.KeyValue(sendButton.scaleYProperty(), 1, javafx.animation.Interpolator.EASE_BOTH),
+                        new javafx.animation.KeyValue(icon.rotateProperty(), 0, javafx.animation.Interpolator.EASE_BOTH)));
+        lunge.play();
+        if (!(sendButton.getParent() instanceof javafx.scene.layout.Pane composer)) return;
+        javafx.scene.shape.Circle drop = new javafx.scene.shape.Circle(4.5);
+        drop.getStyleClass().add("venom-drop");
+        drop.setManaged(false);
+        drop.setMouseTransparent(true);
+        javafx.geometry.Bounds b = sendButton.getBoundsInParent();
+        drop.setCenterX(b.getCenterX());
+        drop.setCenterY(b.getMinY() + 6);
+        composer.getChildren().add(drop);
+        javafx.animation.TranslateTransition fly = new javafx.animation.TranslateTransition(javafx.util.Duration.millis(380), drop);
+        fly.setByX(-26);
+        fly.setByY(-58);
+        fly.setInterpolator(javafx.animation.Interpolator.EASE_OUT);
+        javafx.animation.FadeTransition fade = new javafx.animation.FadeTransition(javafx.util.Duration.millis(380), drop);
+        fade.setToValue(0);
+        javafx.animation.ParallelTransition all = new javafx.animation.ParallelTransition(fly, fade);
+        all.setDelay(javafx.util.Duration.millis(120));
+        all.setOnFinished(e -> composer.getChildren().remove(drop));
+        all.play();
     }
 
     // ------------------------------------------------------------------ files

@@ -26,13 +26,24 @@ import javax.imageio.ImageIO;
  * <pre>java -cp ... com.emirchat.tools.IconMaker &lt;repository root&gt;</pre>
  */
 public final class IconMaker {
-    static final Color DARK = new Color(0x0B5E39);
-    static final Color LIGHT = new Color(0x1FA866);
+    /** Desert-night amber, the app's accent (see app.css). */
+    static final Color DARK = new Color(0x8A450C);
+    static final Color LIGHT = new Color(0xF5AE45);
+    static final Color MID = new Color(0xC7731C);
+    static final Color CREAM = new Color(0xFFF7EC);
 
     private IconMaker() {}
 
-    /** The icon drawn on a 1024-unit canvas, scaled to {@code size} pixels. */
+    /**
+     * The icon drawn on a 1024-unit canvas, scaled to {@code size} pixels. Below 48 pixels the
+     * tail's segment cuts and the keyhole's shading disappear and the tail gets thicker, so the
+     * silhouette stays readable in a taskbar or the tray.
+     */
     static BufferedImage draw(int size) {
+        return draw(size, size >= 48);
+    }
+
+    static BufferedImage draw(int size, boolean detailed) {
         BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -44,8 +55,8 @@ public final class IconMaker {
         g.setPaint(new GradientPaint(0, 0, LIGHT, 1024, 1024, DARK));
         g.fill(new RoundRectangle2D.Double(32, 32, 960, 960, 220, 220));
 
-        Color white = new Color(0xF7FBF8);
-        Color gap = new Color(0x178A54);
+        Color white = CREAM;
+        Color gap = MID;
         g.setColor(white);
         // lock body (the keyhole is cut out below)
         g.fill(new RoundRectangle2D.Double(262, 560, 500, 380, 90, 90));
@@ -66,7 +77,7 @@ public final class IconMaker {
             double len = Math.hypot(d[0], d[1]);
             double nx = -d[1] / len;
             double ny = d[0] / len;
-            double w = (128 - 62 * t) / 2; // thick at the base, thin at the tip
+            double w = (detailed ? 128 - 62 * t : 150 - 50 * t) / 2; // thick at the base, thin at the tip
             centre[i] = p;
             left[i] = new double[] {p[0] + nx * w, p[1] + ny * w};
             right[i] = new double[] {p[0] - nx * w, p[1] - ny * w};
@@ -80,7 +91,7 @@ public final class IconMaker {
         // segment joints: thin cuts across the tail
         g.setColor(gap);
         g.setStroke(new BasicStroke(16, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND));
-        for (double t : new double[] {0.22, 0.42, 0.61, 0.79}) {
+        for (double t : detailed ? new double[] {0.22, 0.42, 0.61, 0.79} : new double[0]) {
             int i = (int) Math.round(t * n);
             g.draw(new java.awt.geom.Line2D.Double(left[i][0], left[i][1], right[i][0], right[i][1]));
         }
@@ -98,7 +109,8 @@ public final class IconMaker {
         sting.curveTo(bx + 112, by + 98, bx + 78, by + 70, bx + 56, by + 22);
         sting.closePath();
         g.fill(sting);
-        g.setPaint(new GradientPaint(0, 560, new Color(0x168E55), 0, 940, DARK));
+        if (detailed) g.setPaint(new GradientPaint(0, 560, MID, 0, 940, DARK));
+        else g.setColor(DARK);
         g.fill(new Ellipse2D.Double(512 - 56, 650, 112, 112));
         GeneralPath slot = new GeneralPath();
         slot.moveTo(512 - 32, 730);
@@ -160,7 +172,7 @@ public final class IconMaker {
             Files.write(iconset.resolve("icon_" + s + "x" + s + ".png"), png(draw(s)));
             Files.write(iconset.resolve("icon_" + s + "x" + s + "@2x.png"), png(draw(s * 2)));
         }
-        Files.write(root.resolve("docs/branding-icon.png"), png(draw(1024)));
+        Files.write(root.resolve("docs/scorpion-icon.png"), png(draw(1024)));
         System.out.println("icons written under " + root.toAbsolutePath());
     }
 }
