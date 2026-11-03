@@ -776,3 +776,21 @@
 .illus-cactus { -fx-fill: -sc-venom; -fx-opacity: 0.85; }
 .illus-print { -fx-fill: -sc-text-3; -fx-opacity: 0.5; }
 .illus-tail .tail-part { -fx-fill: -sc-accent; }
+
+/* ================================================================== desert world (3.5) */
+
+/* A friend's sky behind the chat header */
+.sky-header { -fx-background-color: -sc-surface; -fx-border-color: transparent transparent -sc-border transparent; }
+.chat-header.on-sky { -fx-background-color: transparent; -fx-border-color: transparent; }
+.sky-chip {
+    -fx-background-color: rgba(10, 8, 20, 0.42);
+    -fx-text-fill: #fff6ea;
+    -fx-background-radius: 999;
+    -fx-padding: 4 10;
+    -fx-font-size: 11.5px;
+    -fx-font-weight: bold;
+}
+.sky-header .timer-button > .label, .sky-header .button.timer-button { -fx-text-fill: #fff6ea; }
+.sky-header .timer-button .icon.muted, .sky-header .timer-button .icon.accent { -fx-stroke: #fff6ea; }
+.sky-header .timer-button { -fx-background-color: rgba(10, 8, 20, 0.30); }
+.chat-header.on-sky { -fx-padding: 16 16; }

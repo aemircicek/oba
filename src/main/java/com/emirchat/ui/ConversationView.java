@@ -229,6 +229,19 @@ final class ConversationView {
             if (picker != null && !isInside(e.getTarget(), picker) && !isInside(e.getTarget(), composer)) closePicker();
         });
         refreshHeader();
+        if (peer != null) {
+            session.shareClock(peer);
+            // the sky and the clock on it move on: redraw the header once a minute
+            javafx.animation.Timeline minute = new javafx.animation.Timeline(new javafx.animation.KeyFrame(
+                    javafx.util.Duration.seconds(60), e -> {
+                        if (session.clock(peer) != null) refreshHeader();
+                    }));
+            minute.setCycleCount(javafx.animation.Animation.INDEFINITE);
+            minute.play();
+            layer.sceneProperty().addListener((o, a, scene) -> {
+                if (scene == null) minute.stop();
+            });
+        }
         load();
         Platform.runLater(input::requestFocus);
     }
@@ -323,6 +336,14 @@ final class ConversationView {
             people.setOnAction(e -> toggleSide("members", this::showMembers));
             header.getChildren().add(people);
         }
+        java.time.ZoneId theirZone = peer != null ? session.clock(peer) : null;
+        Sky sky = theirZone != null ? new Sky(theirZone, Theme.isDark()) : null;
+        if (sky != null) {
+            Label chip = UiKit.label(sky.label(), "sky-chip");
+            chip.setId("sky-chip");
+            Tooltip.install(chip, new Tooltip(I18n.t("sky.theirTime", peer, Sky.city(theirZone))));
+            header.getChildren().add(chip);
+        }
         header.getChildren().add(timerButton());
         if (peer != null) {
             Button call = new Button();
@@ -340,7 +361,15 @@ final class ConversationView {
             info.setOnAction(e -> actions.openGroupInfo(groupId));
             header.getChildren().add(info);
         }
-        top.getChildren().setAll(header);
+        if (sky != null) {
+            // their sky behind the header (it fades out under the name on the left)
+            header.getStyleClass().add("on-sky");
+            StackPane withSky = new StackPane(sky, header);
+            withSky.getStyleClass().add("sky-header");
+            top.getChildren().setAll(withSky);
+        } else {
+            top.getChildren().setAll(header);
+        }
         if (peer != null && client.keyChanged(peer)) {
             Button verify = new Button(I18n.t("conv.verify"));
             verify.getStyleClass().addAll("small", "danger-ghost");

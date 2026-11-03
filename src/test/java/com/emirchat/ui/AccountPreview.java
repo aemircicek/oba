@@ -186,6 +186,10 @@ public final class AccountPreview {
         waitFor("#friend-ayse");
         Thread.sleep(400);
 
+        // efe is in New York: he shares his time zone, so his sky shows in the chat header
+        efe.client.sendAction(ChatClient.Chat.dm("emir"), ChatClient.ActionKind.CLOCK, null, "America/New_York");
+        Thread.sleep(300);
+
         // A DM conversation
         efe.client.sendText("emir", "Selam Emir! Paftaları bitirdim 🎉");
         efe.client.sendText("emir", "Akşam MobilCAD için müsait misin?");

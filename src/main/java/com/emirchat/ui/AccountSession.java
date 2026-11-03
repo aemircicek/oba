@@ -72,6 +72,9 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
         /** Who is in the voice rooms of our groups. */
         default void voiceRooms(java.util.Map<Long, List<String>> rooms) {}
+
+        /** A friend told us their time zone. */
+        default void clockChanged(String user) {}
     }
 
     @Override
@@ -128,6 +131,8 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     /** Setting keys (stored per account in the history database). */
     static final String SEND_READ_RECEIPTS = "send-read-receipts";
     static final String SEND_TYPING = "send-typing";
+    /** Tell friends in a direct chat which time zone we are in (for the sky in their chat header). */
+    static final String SHARE_CLOCK = "share-clock";
     static final String NOTIFICATIONS = "notifications";
     static final String NOTIFICATION_PREVIEW = "notification-preview";
 
@@ -348,6 +353,14 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                     fx(v -> v.topicChanged(conversation, a.from(), topic));
                 }
                 case VOICE_KEY -> { } // handled inside ChatClient; never reaches the app
+                case CLOCK -> {
+                    java.time.ZoneId zone = parseZone(a.value());
+                    if (zone == null || a.groupId() != 0) return;
+                    clocks.put(a.from(), zone);
+                    history.setSetting("clock:" + a.from(), zone.getId());
+                    fx(v -> v.clockChanged(a.from()));
+                    shareClock(a.from()); // answer once, so both skies appear
+                }
                 case VOTE -> {
                     int choice = parseChoice(a.value());
                     History.Message poll = history.find(conversation, a.target());
@@ -360,6 +373,45 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         } catch (IOException e) {
             fx(v -> v.problem(I18n.t("session.actionFailed", a.from(), e.getMessage())));
         }
+    }
+
+    private final java.util.Map<String, java.time.ZoneId> clocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<String> clockSent = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** A region time zone (Europe/Istanbul), not an offset or anything made up; null otherwise. */
+    static java.time.ZoneId parseZone(String value) {
+        if (value == null || value.length() > 64 || !java.time.ZoneId.getAvailableZoneIds().contains(value)) return null;
+        try {
+            return java.time.ZoneId.of(value);
+        } catch (java.time.DateTimeException e) {
+            return null;
+        }
+    }
+
+    /** A friend's time zone, if they shared it (remembered across restarts). */
+    java.time.ZoneId clock(String user) {
+        java.time.ZoneId z = clocks.get(user);
+        if (z != null) return z;
+        z = parseZone(history.setting("clock:" + user, ""));
+        if (z != null) clocks.put(user, z);
+        return z;
+    }
+
+    /**
+     * Sends our time zone to a friend once per session, only if we share it and they are online
+     * (like typing notices it is never queued on the server).
+     */
+    void shareClock(String friend) {
+        ChatClient c = client;
+        if (c == null || !setting(SHARE_CLOCK) || !c.isOnline(friend)) return;
+        if (parseZone(java.time.ZoneId.systemDefault().getId()) == null || !clockSent.add(friend)) return; // an offset says little: skip
+        background.execute(() -> {
+            try {
+                c.sendAction(ChatClient.Chat.dm(friend), ChatClient.ActionKind.CLOCK, null, java.time.ZoneId.systemDefault().getId());
+            } catch (Exception e) {
+                clockSent.remove(friend); // try again next time
+            }
+        });
     }
 
     /** Longest topic accepted. */

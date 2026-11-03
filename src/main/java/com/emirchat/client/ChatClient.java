@@ -86,7 +86,9 @@ public final class ChatClient implements AutoCloseable {
         /** value: the chosen answer's index in the target poll, or empty to take the vote back */
         VOTE(8),
         /** groups only: the sender's current voice room key (see VoiceCrypto); no target, never shown */
-        VOICE_KEY(9);
+        VOICE_KEY(9),
+        /** direct messages only: the sender's time zone (an IANA id such as Europe/Istanbul); no target */
+        CLOCK(10);
 
         final int code;
 
@@ -1188,7 +1190,9 @@ public final class ChatClient implements AutoCloseable {
             byte[] target = r.bytes(MESSAGE_ID_BYTES);
             String value = r.string(MAX_ACTION_VALUE_BYTES);
             r.expectEnd();
-            boolean needsTarget = kind != ActionKind.TYPING && kind != ActionKind.TOPIC && kind != ActionKind.VOICE_KEY;
+            boolean needsTarget = kind != ActionKind.TYPING && kind != ActionKind.TOPIC && kind != ActionKind.VOICE_KEY
+                    && kind != ActionKind.CLOCK;
+            if (kind == ActionKind.CLOCK && groupId != 0) throw new ProtocolException("Clocks are for direct messages");
             if (needsTarget != (target.length == MESSAGE_ID_BYTES) || (target.length != 0 && target.length != MESSAGE_ID_BYTES)) {
                 throw new ProtocolException("Bad action target");
             }

@@ -758,6 +758,8 @@ final class MainView implements AccountSession.View {
                         AccountSession.SEND_READ_RECEIPTS),
                 toggle(I18n.t("settings.typing"), I18n.t("settings.typingHint"),
                         AccountSession.SEND_TYPING),
+                toggle(I18n.t("settings.clock"), I18n.t("settings.clockHint"),
+                        AccountSession.SHARE_CLOCK),
                 toggle(I18n.t("settings.notifications"), I18n.t("settings.notificationsHint"),
                         AccountSession.NOTIFICATIONS),
                 toggle(I18n.t("settings.preview"), I18n.t("settings.previewHint"),
@@ -1728,6 +1730,11 @@ final class MainView implements AccountSession.View {
         }
         if (current != null && (wasJoined != state.joined() || before != state.groupId())) current.refreshHeader();
         refreshSidebar();
+    }
+
+    @Override
+    public void clockChanged(String user) {
+        if (current != null && user.equals(current.peer())) current.refreshHeader();
     }
 
     @Override
