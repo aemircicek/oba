@@ -30,6 +30,16 @@ as messages it could not read.
 - **Appearance settings**: theme, five accents, text size, compact mode, reduce motion and
   synthesised notification sounds.
 - Empty screens with a small desert scene.
+- **The campfire**: voice rooms as a desert at night with three fires; sit anywhere, voices by
+  distance and from their side (stereo), drag yourself or click the sand. Places travel inside
+  the room's encryption and are never stored.
+- **The map of oases**: a community as a desert map, each channel an oasis that shows unread
+  messages, recent talk, a week of quiet or people in voice; pan, zoom, click to go in.
+- **Your friend's sky** in the chat header, from the time zone they share (optional).
+- **Welcome back** after a while away: your own sky, how long you were gone, mentions of you,
+  polls without your vote, replies in your threads and the busiest chats; **@mentions** with
+  suggestions.
+- **Messages turn to sand** when deleted or when they disappear.
 
 ### Changed
 - Conversations load 80 messages at a time (older ones when scrolling up) and decrypt pictures only

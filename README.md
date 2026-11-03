@@ -12,10 +12,10 @@ the server relays and stores messages it cannot read. This repository was called
 before the desktop app got its name.
 
 <p align="center">
-  <img src="docs/screenshots/markdown-dark.png" width="420" alt="Formatted messages with a code block, and the hover tools">
-  <img src="docs/screenshots/poll-dark.png" width="420" alt="A community channel with a topic, a poll and a thread">
-  <img src="docs/screenshots/voice-room-dark.png" width="420" alt="A voice room: faces light up while people talk">
-  <img src="docs/screenshots/account-group-light.png" width="420" alt="A group chat in the light theme">
+  <img src="docs/screenshots/campfire-dark.png" width="420" alt="The campfire: a voice room you walk around in, voices by distance and side">
+  <img src="docs/screenshots/map-dark.png" width="420" alt="A community as a map of oases">
+  <img src="docs/screenshots/sky-dark.png" width="420" alt="A friend's night sky in the chat header (it is 4 a.m. in New York)">
+  <img src="docs/screenshots/catchup-dark.png" width="420" alt="Welcome back: what happened while you were away">
 </p>
 
 It started as a small socket chat that "encrypted" messages with a hard-coded AES key in ECB
@@ -124,6 +124,19 @@ java -jar secure-chat.jar gui --home ./bob
   a waveform you can click to seek. They are ordinary encrypted attachments.
 - **Pictures and files**: drag files onto a chat, paste a screenshot or copied files, and browse
   the pictures of a chat in a full-window viewer.
+- **The campfire**: a voice room is a desert at night with three fires, seen from above. Sit
+  anywhere: voices are as loud as people are near and come from their side (stereo), so a room
+  can split into little circles. Drag yourself or click the sand; the rings around you show how
+  far you hear.
+- **The map of oases**: a community is shown as a desert where every channel is an oasis. Rings
+  on the water mean unread messages, smoke means people talked in the last hour, sand covers a
+  channel quiet for a week, and a campfire burns where people are in voice.
+- **Your friend's sky**: the chat header shows the sky where your friend is right now (dawn,
+  noon, sunset, stars and the moon) with their local time, if they share their time zone.
+- **Welcome back**: after a while away, a screen with your own sky, how long you were gone, and
+  what is waiting: mentions of you, polls without your vote, replies in your threads, the busiest
+  chats. **@mentions** are highlighted and suggested while typing.
+- **Messages turn to sand**: deleted and disappearing messages blow away as grains of sand.
 - **Quick switcher**: Ctrl+K (⌘K) jumps to any chat, channel, friend or action.
 - **Appearance**: light, dark or system theme, five accent colours, text size, compact mode,
   reduce motion, and a choice of notification sounds.
@@ -340,7 +353,7 @@ Users then authenticate with their password inside the channel. Low-order X25519
 
 ### Tests
 
-`mvn verify` runs 225 tests, including RFC 5869 test vectors and attack scenarios:
+`mvn verify` runs 234 tests, including RFC 5869 test vectors and attack scenarios:
 
 - **Transport**: tampered, replayed, reordered and reflected records; an impersonated client or
   server presenting a different key; tampered handshake messages.
@@ -363,7 +376,11 @@ Users then authenticate with their password inside the channel. Low-order X25519
   keys expire after rotations; muting sends nothing; a removed listener who never speaks is cut off.
 - **Polls, pins, topics, threads**: delivered whole in chats and groups, one vote per person, poll
   limits, and a text message can never pose as a poll.
-- **Desktop logic**: the Markdown parser (nesting, `snake_case`, unclosed markers, code
+- **The campfire**: places reach the others and distance decides who is heard (far away is
+  silent, close again is heard); seats never overlap; volume and left-right panning by distance.
+- **Desktop logic**: the welcome-back digest (mentions but not e-mail addresses, polls without
+  your vote, replies in your threads), the sky's colours, sun and moon through the day, time zone
+  validation, the Markdown parser (nesting, `snake_case`, unclosed markers, code
   colouring), emoji names, slash commands, the quick switcher's matching, avatar patterns, voice
   message files and waveforms, and line breaks surviving the sanitizer while control characters
   do not.
@@ -401,10 +418,18 @@ packet   = u32 keyId ‖ u64 seq ‖ AES-256-GCM(key, nonce = keyId ‖ seq,
 ```
 
 Each participant sends with their own key and receives with everyone else's, mixing the voices
-locally. Because keys change whenever the room changes, a person who left cannot decrypt what is
+locally. The campfire's places travel in the same encrypted packets (the first byte of the
+plaintext tells audio from a place), so the server neither stores where people sit nor can tell
+movement from speech; each client sets every voice's volume by distance and pans it left or right. Because keys change whenever the room changes, a person who left cannot decrypt what is
 said after; clients also replace their key as soon as the member list shows a removal. Packets
 are bound to the room and the sender (one cannot pass off another's audio), and a receiver takes
 each sequence number once and never an older one.
+
+### Time zones
+
+A friend's sky needs their time zone, which is sent as an end-to-end encrypted action in a
+direct chat, only while they are online (never queued on the server), and only as a region id
+such as `Europe/Istanbul`; anything else is refused. Sharing can be turned off in Settings.
 
 ### Polls, pins, topics and threads
 
@@ -431,6 +456,10 @@ Honest notes on what this project does **not** do:
 - **Voice rooms**: the server sees who is in which room and when; at most 12 people per room. Room
   keys are handed to every member of the channel (anyone who can read the channel may also
   listen), and nobody else can join.
+- **A time zone says roughly where you are.** Friends you chat with see it unless you turn
+  sharing off. In a voice room, everyone in it sees where you sit at the fire.
+- **The welcome-back summary and the map** are computed from the history on this computer, so
+  they only know what this computer has received.
 - **Topics and pins are not stored on the server**, so people who join a channel later do not see
   earlier ones. Dice and coins are thrown on the sender's computer; reminders stay on this
   computer and are lost if the app is closed.
