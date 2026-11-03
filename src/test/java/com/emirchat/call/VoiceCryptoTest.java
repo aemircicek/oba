@@ -76,9 +76,15 @@ class VoiceCryptoTest {
         assertEquals(-1, VoiceChannels.pan(me, new double[] {0.1, 0.5}), 1e-9);
         assertEquals(1, VoiceChannels.pan(me, new double[] {0.9, 0.5}), 1e-9);
         assertEquals(0, VoiceChannels.pan(me, new double[] {0.5, 0.9}), 1e-9, "straight ahead or behind: both sides");
-        double[] seat = VoiceChannels.seat("efe");
-        assertArrayEquals(seat, VoiceChannels.seat("efe"), "everyone agrees on a newcomer's seat");
+        double[] seat = VoiceChannels.seat(1);
+        assertArrayEquals(seat, VoiceChannels.seat(1), "everyone agrees on a newcomer's seat");
         org.junit.jupiter.api.Assertions.assertTrue(VoiceChannels.distance(seat, VoiceChannels.FIRES[0]) < 0.12);
+        for (int a = 0; a < 12; a++) {
+            for (int b = a + 1; b < 12; b++) {
+                org.junit.jupiter.api.Assertions.assertTrue(VoiceChannels.distance(VoiceChannels.seat(a), VoiceChannels.seat(b)) > 0.06,
+                        "seats " + a + " and " + b + " do not overlap");
+            }
+        }
         byte[] lr = VoiceChannels.interleave(new int[] {100, 40000}, new int[] {-100, -40000});
         assertEquals(8, lr.length);
         assertEquals(Short.MAX_VALUE, (short) ((lr[4] & 0xff) | (lr[5] << 8)), "clipped");

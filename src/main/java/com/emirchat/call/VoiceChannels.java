@@ -62,15 +62,27 @@ public final class VoiceChannels implements AutoCloseable {
     public static final double HEAR_FULL = 0.16;
     /** ... and beyond this one not at all. */
     public static final double HEAR_NONE = 0.55;
-    /** The scene is wider than tall; distances count the height in the same units as the width. */
-    public static final double ASPECT = 1.6;
+    /** The scene is a square (the app crops it to the window), so distances are plain. */
+    public static final double ASPECT = 1.0;
     /** Where the fires burn (x, y as fractions of the scene). */
     public static final double[][] FIRES = {{0.50, 0.56}, {0.20, 0.32}, {0.80, 0.72}};
 
-    /** Someone's first place: a seat around the big fire, decided by their name so everyone agrees. */
-    public static double[] seat(String user) {
-        double angle = Math.floorMod(user.hashCode() * 2654435761L, 360) * Math.PI / 180;
-        return new double[] {FIRES[0][0] + Math.cos(angle) * 0.11, FIRES[0][1] + Math.sin(angle) * 0.11 * ASPECT};
+    /**
+     * Someone's first place: the n-th seat around the big fire, n being their place in the room's
+     * list (the server sends everyone the same order, so everyone agrees and nobody overlaps).
+     */
+    public static double[] seat(int n) {
+        // eight seats evenly around the fire, then a wider ring (half a step turned) for the next eight
+        int ring = n / 8;
+        double angle = Math.PI / 2 + (n % 8 + ring * 0.5) * Math.PI / 4;
+        double r = 0.10 + 0.07 * ring;
+        return new double[] {FIRES[0][0] + Math.cos(angle) * r, FIRES[0][1] + Math.sin(angle) * r * ASPECT};
+    }
+
+    /** {@link #seat(int)} of a participant (the first seat if they are not in the room). */
+    private double[] seatOf(String user) {
+        int n = participants.indexOf(user);
+        return seat(Math.max(0, n));
     }
 
     public static double distance(double[] a, double[] b) {
@@ -99,7 +111,7 @@ public final class VoiceChannels implements AutoCloseable {
     /** Where everyone in the room is (fractions of the scene), us included. */
     public synchronized Map<String, double[]> places() {
         Map<String, double[]> out = new HashMap<>();
-        for (String p : participants) out.put(p, places.getOrDefault(p, seat(p)).clone());
+        for (String p : participants) out.put(p, places.getOrDefault(p, seatOf(p)).clone());
         return out;
     }
 
@@ -120,7 +132,7 @@ public final class VoiceChannels implements AutoCloseable {
             if (groupId == 0 || sender == null) return;
             s = sender;
             group = groupId;
-            p = places.getOrDefault(me, seat(me));
+            p = places.getOrDefault(me, seatOf(me));
         }
         byte[] body = java.nio.ByteBuffer.allocate(5).put(PLACE)
                 .putShort((short) Math.round(p[0] * 65535)).putShort((short) Math.round(p[1] * 65535)).array();
@@ -421,11 +433,11 @@ public final class VoiceChannels implements AutoCloseable {
         synchronized (this) {
             d = device;
             if (d == null || deafened) return;
-            double[] here = places.getOrDefault(me, seat(me));
+            double[] here = places.getOrDefault(me, seatOf(me));
             for (var e : queues.entrySet()) {
                 byte[] frame = e.getValue().pollFirst();
                 if (frame == null) continue;
-                double[] there = places.getOrDefault(e.getKey(), seat(e.getKey()));
+                double[] there = places.getOrDefault(e.getKey(), seatOf(e.getKey()));
                 double g = gain(here, there);
                 if (g <= 0) continue;
                 double angle = (pan(here, there) + 1) * Math.PI / 4;

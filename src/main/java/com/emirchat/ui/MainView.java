@@ -60,6 +60,8 @@ final class MainView implements AccountSession.View {
     private final HBox voiceBar = new HBox(10);
     private com.emirchat.call.VoiceChannels.State voiceState = com.emirchat.call.VoiceChannels.State.IDLE;
     private Map<Long, List<String>> voiceRooms = Map.of();
+    private Campfire campfire;           // the voice room's scene, while we are in a room
+    private boolean campfireShown;
     private javafx.animation.Timeline callTicker;
     private javafx.animation.PauseTransition callHide;
     /** The strip at the far left: home, one icon per community, and "+" (like a server list). */
@@ -1386,6 +1388,10 @@ final class MainView implements AccountSession.View {
                 ? ConversationView.group(session, Long.parseLong(conversation.substring(2)), actions)
                 : ConversationView.dm(session, conversation.substring(3), actions);
         content.getChildren().setAll(current.root());
+        if (campfireShown) {
+            campfireShown = false;
+            if (voiceState.joined()) showVoiceBar(voiceState);
+        }
         Packet.GroupInfo opened = conversation.startsWith("g:") ? group(Long.parseLong(conversation.substring(2))) : null;
         if (opened != null && opened.community() != 0) {
             selectedCommunity = opened.community();
@@ -1730,7 +1736,20 @@ final class MainView implements AccountSession.View {
         }
         if (!state.joined()) {
             voiceBar.setVisible(false);
+            if (campfire != null) {
+                campfire.stop();
+                if (campfireShown) backFromCampfire();
+                campfire = null;
+            }
         } else {
+            if (campfire == null || campfire.groupId() != state.groupId()) {
+                if (campfire != null) campfire.stop();
+                Packet.GroupInfo g = group(state.groupId());
+                String title = g == null ? "" : g.community() != 0 ? ConversationView.channelTitle(g) : ConversationView.groupName(g);
+                campfire = new Campfire(session, state.groupId(), title, this::backFromCampfire);
+                showCampfire(); // joining a room takes you to its fire
+            }
+            campfire.update(state);
             showVoiceBar(state);
         }
         if (current != null && (wasJoined != state.joined() || before != state.groupId())) current.refreshHeader();
@@ -1740,6 +1759,22 @@ final class MainView implements AccountSession.View {
     @Override
     public void clockChanged(String user) {
         if (current != null && user.equals(current.peer())) current.refreshHeader();
+    }
+
+    private void showCampfire() {
+        if (campfire == null) return;
+        campfireShown = true;
+        content.getChildren().setAll(campfire.root());
+        if (voiceState.joined()) showVoiceBar(voiceState);
+    }
+
+    /** Back from the fire to the chat that was open (or the room's own chat). */
+    private void backFromCampfire() {
+        campfireShown = false;
+        if (current != null) content.getChildren().setAll(current.root());
+        else if (voiceState.joined()) open(AccountSession.group(voiceState.groupId()));
+        else showEmpty();
+        if (voiceState.joined()) showVoiceBar(voiceState);
     }
 
     @Override
@@ -1765,13 +1800,15 @@ final class MainView implements AccountSession.View {
             Tooltip.install(face, new Tooltip(u));
             faces.getChildren().add(face);
         }
-        Button mute = new Button(state.muted() ? I18n.t("call.unmute") : I18n.t("call.mute"));
-        mute.setGraphic(Icons.of(state.muted() ? Icons.MIC_OFF : Icons.MIC, 14, state.muted() ? "danger" : "muted"));
+        Button mute = new Button();
+        mute.setTooltip(new Tooltip(state.muted() ? I18n.t("call.unmute") : I18n.t("call.mute")));
+        mute.setGraphic(Icons.of(state.muted() ? Icons.MIC_OFF : Icons.MIC, 15, state.muted() ? "danger" : "muted"));
         mute.getStyleClass().add("small");
         mute.setId("voice-mute");
         mute.setOnAction(e -> session.background().execute(() -> voice.setMuted(!state.muted())));
-        Button deaf = new Button(state.deafened() ? I18n.t("voice.undeafen") : I18n.t("voice.deafen"));
-        deaf.setGraphic(Icons.of(Icons.HEADPHONES, 14, state.deafened() ? "danger" : "muted"));
+        Button deaf = new Button();
+        deaf.setTooltip(new Tooltip(state.deafened() ? I18n.t("voice.undeafen") : I18n.t("voice.deafen")));
+        deaf.setGraphic(Icons.of(Icons.HEADPHONES, 15, state.deafened() ? "danger" : "muted"));
         deaf.getStyleClass().add("small");
         deaf.setId("voice-deafen");
         deaf.setOnAction(e -> session.background().execute(() -> voice.setDeafened(!state.deafened())));
@@ -1782,7 +1819,15 @@ final class MainView implements AccountSession.View {
         leave.setOnAction(e -> session.background().execute(voice::leave));
         StackPane badge = new StackPane(Icons.of(Icons.HEADPHONES, 18, "accent"));
         badge.getStyleClass().add("voice-badge-icon");
-        voiceBar.getChildren().setAll(badge, text, faces, UiKit.grow(), mute, deaf, leave);
+        Button fire = new Button(campfireShown ? I18n.t("campfire.chat") : I18n.t("campfire.open"));
+        fire.setMinWidth(Region.USE_PREF_SIZE);
+        fire.getStyleClass().add("small");
+        fire.setId("voice-campfire");
+        fire.setOnAction(e -> {
+            if (campfireShown) backFromCampfire();
+            else showCampfire();
+        });
+        voiceBar.getChildren().setAll(badge, text, faces, UiKit.grow(), fire, mute, deaf, leave);
         voiceBar.getStyleClass().setAll("call-bar", "voice-bar");
         voiceBar.setAlignment(Pos.CENTER_LEFT);
         voiceBar.setId("voice-bar");

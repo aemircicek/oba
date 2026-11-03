@@ -459,13 +459,24 @@ public final class AccountPreview {
 
         // A voice room: emir drops in, ayse joins and talks (a tone), her face lights up
         ayse.client.useAudioDevices(ToneDevice::new);
+        efeNew.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
         fx(() -> { ((Button) find("#voice-join")).fire(); return null; });
-        waitFor("#voice-bar");
+        waitFor("#campfire");
         ayse.client.voice().join(joined.id());
-        Thread.sleep(2500);
+        efeNew.client.voice().join(joined.id());
+        Thread.sleep(1500);
+        snap("15h-campfire");
+        // ayse wanders to the small fire on the left and keeps talking: quieter, from the left
+        ayse.client.voice().moveTo(0.25, 0.30);
+        efeNew.client.voice().moveTo(0.86, 0.74);
+        Thread.sleep(2200);
+        snap("15i-campfire-apart");
+        fx(() -> { ((Button) find("#campfire-back")).fire(); return null; });
+        Thread.sleep(500);
         snap("15g-voice");
         fx(() -> { ((Button) find("#voice-leave")).fire(); return null; });
         ayse.client.voice().leave();
+        efeNew.client.voice().leave();
         Thread.sleep(600);
 
         // Welcome back: as if emir had been away for 3 h 12 min, with new messages waiting
