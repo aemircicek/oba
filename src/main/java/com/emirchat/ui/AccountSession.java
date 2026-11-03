@@ -347,6 +347,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                     history.setTopic(conversation, topic);
                     fx(v -> v.topicChanged(conversation, a.from(), topic));
                 }
+                case VOICE_KEY -> { } // handled inside ChatClient; never reaches the app
                 case VOTE -> {
                     int choice = parseChoice(a.value());
                     History.Message poll = history.find(conversation, a.target());

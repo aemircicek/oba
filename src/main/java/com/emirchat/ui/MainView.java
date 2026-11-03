@@ -167,6 +167,11 @@ final class MainView implements AccountSession.View {
         voiceBar.setVisible(false);
         frame.setCenter(new VBox(callBar, voiceBar, content));
         stack.getChildren().add(frame);
+        stack.sceneProperty().addListener((o, a, scene) -> {
+            if (scene != null) scene.getAccelerators().put(
+                    new javafx.scene.input.KeyCodeCombination(javafx.scene.input.KeyCode.K,
+                            javafx.scene.input.KeyCombination.SHORTCUT_DOWN), this::openPalette);
+        });
         refreshSidebar();
         session.setView(this);
         if (AppPrefs.checkUpdates()) {
@@ -446,8 +451,10 @@ final class MainView implements AccountSession.View {
             if (roots.isEmpty()) {
                 Label empty = UiKit.label(I18n.t("community.none"), "caption");
                 empty.setWrapText(true);
-                empty.setPadding(new Insets(10, 14, 0, 14));
-                list.getChildren().add(empty);
+                VBox box = new VBox(10, Illustrations.desert(220), empty);
+                box.setAlignment(Pos.CENTER);
+                box.setPadding(new Insets(14, 14, 0, 14));
+                list.getChildren().add(box);
             }
             for (Packet.GroupInfo root : roots) {
                 int unread = c.channels(root.id()).stream().mapToInt(ch -> unread(AccountSession.group(ch.id()), summaries)).sum();
@@ -801,9 +808,262 @@ final class MainView implements AccountSession.View {
         Button backup = new Button(I18n.t("backup.button"));
         backup.setId("backup");
         backup.setOnAction(e -> openBackup());
-        VBox box = Overlay.dialog(I18n.t("main.settings"), toggles, new HBox(10, backup, UiKit.grow(), done));
+        Button looks = new Button(I18n.t("appearance.title"));
+        looks.setId("appearance");
+        looks.setOnAction(e -> openAppearance());
+        VBox box = Overlay.dialog(I18n.t("main.settings"), toggles, new HBox(10, backup, looks, UiKit.grow(), done));
         box.setId("settings-dialog");
         overlay.show(box);
+    }
+
+    /** Theme, accent colour, text size, density, motion and the notification sound; applied at once. */
+    private void openAppearance() {
+        ComboBox<String> theme = new ComboBox<>();
+        theme.setId("appearance-theme");
+        String[] themes = {"system", "light", "dark"};
+        theme.getItems().addAll(I18n.t("appearance.system"), I18n.t("appearance.light"), I18n.t("appearance.dark"));
+        theme.getSelectionModel().select(java.util.Arrays.asList(themes).indexOf(AppPrefs.theme()));
+        theme.setOnAction(e -> {
+            AppPrefs.setTheme(themes[theme.getSelectionModel().getSelectedIndex()]);
+            Theme.refreshAll();
+            refreshSidebar();
+        });
+        HBox swatches = new HBox(10);
+        swatches.setAlignment(Pos.CENTER_LEFT);
+        Runnable[] drawSwatches = new Runnable[1];
+        drawSwatches[0] = () -> {
+            swatches.getChildren().clear();
+            for (String name : Appearance.ACCENTS.keySet()) {
+                String[][] palette = Appearance.ACCENTS.get(name);
+                String hex = palette == null ? (Theme.isDark() ? "#f2a43a" : "#c0650c") : palette[Theme.isDark() ? 1 : 0][0];
+                javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(13, javafx.scene.paint.Color.web(hex));
+                StackPane swatch = new StackPane(dot);
+                swatch.getStyleClass().add("swatch");
+                if (name.equals(AppPrefs.accent())) swatch.getStyleClass().add("selected");
+                swatch.setId("accent-" + name);
+                Tooltip.install(swatch, new Tooltip(accentName(name)));
+                swatch.setOnMouseClicked(e -> {
+                    AppPrefs.setAccent(name);
+                    Theme.refreshAll();
+                    drawSwatches[0].run();
+                    refreshSidebar();
+                    if (current != null) current.refreshHeader();
+                });
+                swatches.getChildren().add(swatch);
+            }
+        };
+        drawSwatches[0].run();
+        ComboBox<String> size = new ComboBox<>();
+        size.setId("appearance-size");
+        String[] sizes = {"small", "normal", "large"};
+        size.getItems().addAll(I18n.t("appearance.small"), I18n.t("appearance.normal"), I18n.t("appearance.large"));
+        size.getSelectionModel().select(java.util.Arrays.asList(sizes).indexOf(AppPrefs.textSize()));
+        size.setOnAction(e -> {
+            AppPrefs.setTextSize(sizes[size.getSelectionModel().getSelectedIndex()]);
+            Theme.refreshAll();
+        });
+        ComboBox<String> sound = new ComboBox<>();
+        sound.setId("appearance-sound");
+        for (String n : Sounds.NAMES) sound.getItems().add(soundName(n));
+        sound.getSelectionModel().select(Math.max(0, Sounds.NAMES.indexOf(AppPrefs.sound())));
+        sound.setOnAction(e -> {
+            String chosen = Sounds.NAMES.get(sound.getSelectionModel().getSelectedIndex());
+            AppPrefs.setSound(chosen);
+            Sounds.play(chosen);
+        });
+        Button listen = new Button("▶");
+        listen.getStyleClass().add("small");
+        listen.setTooltip(new Tooltip(I18n.t("appearance.listen")));
+        listen.setOnAction(e -> Sounds.play(AppPrefs.sound()));
+        VBox rows = new VBox(14,
+                field(I18n.t("appearance.theme"), theme),
+                field(I18n.t("appearance.accent"), swatches),
+                field(I18n.t("appearance.textSize"), size),
+                appToggle(I18n.t("appearance.compact"), I18n.t("appearance.compactHint"), "appearance-compact",
+                        AppPrefs.compact(), on -> {
+                            AppPrefs.setCompact(on);
+                            Theme.refreshAll();
+                        }),
+                appToggle(I18n.t("appearance.motion"), I18n.t("appearance.motionHint"), "appearance-motion",
+                        AppPrefs.reduceMotion(), AppPrefs::setReduceMotion),
+                field(I18n.t("appearance.sound"), new HBox(8, sound, listen)));
+        Button done = new Button(I18n.t("common.done"));
+        done.getStyleClass().add("primary");
+        done.setId("appearance-done");
+        done.setOnAction(e -> overlay.close());
+        VBox box = Overlay.dialog(I18n.t("appearance.title"), rows, new HBox(UiKit.grow(), done));
+        box.setId("appearance-dialog");
+        overlay.show(box);
+    }
+
+    private static Node field(String label, Node control) {
+        Label l = UiKit.label(label, "field-label");
+        l.setMinWidth(120);
+        HBox row = new HBox(12, l, control);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private static String accentName(String name) {
+        return switch (name) {
+            case "venom" -> I18n.t("appearance.venom");
+            case "sky" -> I18n.t("appearance.sky");
+            case "rose" -> I18n.t("appearance.rose");
+            case "violet" -> I18n.t("appearance.violet");
+            default -> I18n.t("appearance.amber");
+        };
+    }
+
+    private static String soundName(String name) {
+        return switch (name) {
+            case "tock" -> I18n.t("sound.tock");
+            case "drop" -> I18n.t("sound.drop");
+            case "rattle" -> I18n.t("sound.rattle");
+            case "off" -> I18n.t("sound.off");
+            default -> I18n.t("sound.chime");
+        };
+    }
+
+    // ------------------------------------------------------------------ quick switcher
+
+    static boolean isMac() {
+        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac");
+    }
+
+    /** Everything the quick switcher can jump to: recent chats first, then channels, friends and actions. */
+    private List<Palette.Entry> paletteEntries() {
+        ChatClient c = session.client();
+        List<Palette.Entry> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        try {
+            for (History.Summary s : session.history().summaries()) {
+                String conv = s.conversation();
+                if (conv.startsWith("dm:")) {
+                    out.add(new Palette.Entry(Palette.Kind.CHAT, conv.substring(3), I18n.t("palette.dm"), conv, () -> open(conv)));
+                } else {
+                    Packet.GroupInfo g = group(Long.parseLong(conv.substring(2)));
+                    if (g == null) continue;
+                    String title = g.community() != 0 ? ConversationView.channelTitle(g) : ConversationView.groupName(g);
+                    String sub = g.community() != 0 ? communityName(g.community()) : I18n.t("palette.group");
+                    out.add(new Palette.Entry(g.community() != 0 ? Palette.Kind.CHANNEL : Palette.Kind.CHAT, title, sub, conv, () -> open(conv)));
+                }
+                seen.add(conv);
+            }
+        } catch (IOException ignored) {
+            // the rest still works
+        }
+        for (Packet.GroupInfo g : c.groups()) {
+            String conv = AccountSession.group(g.id());
+            if (seen.contains(conv)) continue;
+            if (g.isCommunity()) {
+                out.add(new Palette.Entry(Palette.Kind.COMMUNITY, ConversationView.groupName(g), I18n.t("palette.community"), conv, () -> {
+                    selectedCommunity = g.id();
+                    open(conv);
+                }));
+            } else {
+                String title = g.community() != 0 ? ConversationView.channelTitle(g) : ConversationView.groupName(g);
+                String sub = g.community() != 0 ? communityName(g.community()) : I18n.t("palette.group");
+                out.add(new Palette.Entry(g.community() != 0 ? Palette.Kind.CHANNEL : Palette.Kind.CHAT, title, sub, conv, () -> open(conv)));
+            }
+        }
+        for (Packet.Friend f : c.friends().friends()) {
+            String conv = AccountSession.dm(f.username());
+            if (!seen.contains(conv)) {
+                out.add(new Palette.Entry(Palette.Kind.FRIEND, f.username(), I18n.t("palette.friend"), conv, () -> open(conv)));
+            }
+        }
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("main.settings"), I18n.t("palette.action"), "settings", this::openSettings));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("appearance.title"), I18n.t("palette.action"), "appearance", this::openAppearance));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("conv.newGroup"), I18n.t("palette.action"), "new-group", this::openNewGroup));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("community.new"), I18n.t("palette.action"), "new-community", this::openNewCommunity));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("community.join"), I18n.t("palette.action"), "join-community", this::openJoinCommunity));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("main.myKey"), I18n.t("palette.action"), "my-key", this::openMyKey));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, Theme.isDark() ? I18n.t("palette.light") : I18n.t("palette.dark"),
+                I18n.t("palette.action"), "theme", () -> {
+                    AppPrefs.setTheme(Theme.isDark() ? "light" : "dark");
+                    Theme.refreshAll();
+                    refreshSidebar();
+                    if (current != null) current.refreshHeader();
+                }));
+        return out;
+    }
+
+    private void openPalette() {
+        List<Palette.Entry> entries = paletteEntries();
+        TextField query = new TextField();
+        query.setId("palette-query");
+        query.setPromptText(I18n.t("palette.prompt"));
+        query.getStyleClass().add("palette-query");
+        VBox results = new VBox(2);
+        results.setId("palette-results");
+        List<Palette.Entry> shown = new ArrayList<>();
+        int[] selected = {0};
+        Runnable[] render = new Runnable[1];
+        java.util.function.Consumer<Palette.Entry> go = entry -> {
+            overlay.close();
+            entry.action().run();
+        };
+        render[0] = () -> {
+            shown.clear();
+            shown.addAll(Palette.rank(query.getText(), entries, 9));
+            selected[0] = Math.min(selected[0], Math.max(0, shown.size() - 1));
+            results.getChildren().clear();
+            if (shown.isEmpty()) results.getChildren().add(UiKit.label(I18n.t("palette.nothing"), "caption"));
+            for (int i = 0; i < shown.size(); i++) {
+                Palette.Entry entry = shown.get(i);
+                Node icon = switch (entry.kind()) {
+                    case CHAT -> entry.id().startsWith("g:") ? UiKit.avatar(entry.title(), "avatar-xs", true)
+                            : UiKit.avatar(entry.title(), "avatar-xs", false);
+                    case FRIEND -> UiKit.avatar(entry.title(), "avatar-xs", false);
+                    case CHANNEL -> Icons.of(Icons.MESSAGE, 16, "muted");
+                    case COMMUNITY -> Icons.of(Icons.USERS, 16, "muted");
+                    case ACTION -> Icons.of(Icons.SETTINGS, 16, "muted");
+                };
+                StackPane iconBox = new StackPane(icon);
+                iconBox.setMinWidth(30);
+                HBox row = new HBox(10, iconBox, UiKit.label(entry.title(), "row-title"), UiKit.grow(),
+                        UiKit.label(entry.subtitle() == null ? "" : entry.subtitle(), "row-time"));
+                row.getStyleClass().add("palette-row");
+                if (i == selected[0]) row.getStyleClass().add("selected");
+                row.setAlignment(Pos.CENTER_LEFT);
+                row.setId("palette-" + entry.id().replace(':', '-'));
+                row.setOnMouseClicked(e -> go.accept(entry));
+                results.getChildren().add(row);
+            }
+        };
+        query.textProperty().addListener((o, a, b) -> {
+            selected[0] = 0;
+            render[0].run();
+        });
+        query.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, e -> {
+            switch (e.getCode()) {
+                case DOWN -> {
+                    selected[0] = Math.min(shown.size() - 1, selected[0] + 1);
+                    render[0].run();
+                    e.consume();
+                }
+                case UP -> {
+                    selected[0] = Math.max(0, selected[0] - 1);
+                    render[0].run();
+                    e.consume();
+                }
+                case ENTER -> {
+                    if (!shown.isEmpty()) go.accept(shown.get(selected[0]));
+                    e.consume();
+                }
+                default -> { }
+            }
+        });
+        render[0].run();
+        HBox head = new HBox(10, Icons.of(Icons.SEARCH, 18, "muted"), query);
+        HBox.setHgrow(query, Priority.ALWAYS);
+        head.setAlignment(Pos.CENTER_LEFT);
+        Label keys = UiKit.label(I18n.t("palette.keys"), "caption");
+        VBox box = new VBox(10, head, results, keys);
+        box.getStyleClass().addAll("dialog", "palette");
+        box.setId("palette");
+        overlay.show(box);
+        Platform.runLater(query::requestFocus);
     }
 
     /** An encrypted backup of keys, sessions and history, protected by its own passphrase. */
@@ -1041,8 +1301,11 @@ final class MainView implements AccountSession.View {
         list.getChildren().add(heading(I18n.t("main.friendsHeading", friends.friends().size())));
         if (friends.friends().isEmpty()) {
             Label none = UiKit.label(I18n.t("main.noFriends"), "caption");
-            none.setPadding(new Insets(4, 14, 0, 14));
-            list.getChildren().add(none);
+            none.setWrapText(true);
+            VBox box = new VBox(10, Illustrations.desert(220), none);
+            box.setAlignment(Pos.CENTER);
+            box.setPadding(new Insets(14, 14, 0, 14));
+            list.getChildren().add(box);
         }
         for (Packet.Friend f : friends.friends()) {
             ChatClient c = session.client();
@@ -1079,9 +1342,10 @@ final class MainView implements AccountSession.View {
     private void showEmpty() {
         if (current != null) current.dispose();
         current = null;
-        VBox empty = new VBox(12, Icons.of(Icons.LOCK, 40, "muted"),
+        Label shortcut = UiKit.label(I18n.t("palette.hint", isMac() ? "⌘K" : "Ctrl+K"), "shortcut-hint");
+        VBox empty = new VBox(12, Illustrations.desert(300),
                 UiKit.label(I18n.t("main.select"), "h2"),
-                UiKit.label(I18n.t("main.selectHint"), "caption"));
+                UiKit.label(I18n.t("main.selectHint"), "caption"), shortcut);
         empty.setAlignment(Pos.CENTER);
         empty.getStyleClass().add("content-empty");
         content.getChildren().setAll(empty);

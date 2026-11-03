@@ -1,14 +1,11 @@
 package com.emirchat.server;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.emirchat.client.ChatClient;
-import com.emirchat.client.ChatClient.ActionKind;
-import com.emirchat.client.ChatClient.Chat;
 import com.emirchat.client.ServerConnection;
 import com.emirchat.crypto.Identity;
 import com.emirchat.trust.KnownPeers;

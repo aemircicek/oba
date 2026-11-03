@@ -41,6 +41,8 @@ import javafx.stage.FileChooser;
 /** One conversation (a DM or a group) in the main window. */
 final class ConversationView {
     private static final long GROUP_WINDOW_MS = 2 * 60_000;
+    /** Messages read from history at a time; older pages load when scrolling to the top. */
+    static final int PAGE = 80;
 
     interface Actions {
         void openContact(String user);
@@ -91,6 +93,13 @@ final class ConversationView {
     private Map<Long, Map<String, Integer>> votes = new HashMap<>();
     private String topic = "";
     private String sideMode;              // "members", "pins", "thread" or null
+    /** Everything read from history so far (oldest first), threads included. */
+    private final List<History.Message> loaded = new java.util.ArrayList<>();
+    private boolean hasOlder;
+    private boolean loadingOlder;
+    private boolean atBottom = true;
+    /** Pictures waiting to be fetched until they scroll into view. */
+    private final Map<Node, Runnable> whenVisible = new java.util.LinkedHashMap<>();
     private History.Message threadRoot;   // the thread shown in the side panel
     private final Button sendButton = new Button();
     private final Map<Long, Boolean> continuedById = new HashMap<>();
@@ -128,7 +137,23 @@ final class ConversationView {
         messages.getStyleClass().add("messages");
         scroller.setFitToWidth(true);
         scroller.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        messages.heightProperty().addListener((o, a, b) -> scroller.setVvalue(1.0));
+        // Follow new messages only while already at the bottom: reading older ones must not jump.
+        // The view sticks to the bottom (new messages stay in sight) until the user scrolls up
+        // themselves; scrolling back down to the end sticks it again.
+        messages.heightProperty().addListener((o, a, b) -> {
+            if (atBottom && !loadingOlder) scroller.setVvalue(1.0);
+            Platform.runLater(this::checkVisible);
+        });
+        scroller.addEventFilter(javafx.scene.input.ScrollEvent.SCROLL, e -> {
+            if (e.getDeltaY() > 0) atBottom = false;
+        });
+        scroller.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_DRAGGED, e -> atBottom = false); // the scroll bar
+        scroller.vvalueProperty().addListener((o, a, b) -> {
+            if (b.doubleValue() >= 0.995) atBottom = true;
+            if (b.doubleValue() <= 0.001 && hasOlder && !loadingOlder && !atBottom) loadOlder();
+            checkVisible();
+        });
+        scroller.viewportBoundsProperty().addListener((o, a, b) -> checkVisible());
 
         input.setId("composer");
         input.setWrapText(true);
@@ -403,6 +428,7 @@ final class ConversationView {
 
     /** Removes messages that disappeared. */
     void remove(List<Long> ids) {
+        loaded.removeIf(m -> ids.contains(m.id()));
         for (long id : ids) {
             Node row = rows.remove(id);
             if (row != null) messages.getChildren().remove(row);
@@ -468,15 +494,17 @@ final class ConversationView {
 
     private void load() {
         try {
-            List<History.Message> list = session.history().load(conversation, 300);
+            List<History.Message> list = session.history().load(conversation, PAGE);
+            loaded.addAll(list);
+            hasOlder = list.size() == PAGE;
             if (list.isEmpty()) {
                 Label hint = UiKit.label(peer != null
                         ? I18n.t("conv.hintDm", peer)
                         : I18n.t("conv.hintGroup"), "system-line");
                 hint.setWrapText(true);
-                HBox row = new HBox(hint);
+                VBox row = new VBox(12, Illustrations.desert(240), hint);
                 row.setAlignment(Pos.CENTER);
-                row.setPadding(new Insets(14, 0, 4, 0));
+                row.setPadding(new Insets(30, 0, 4, 0));
                 messages.getChildren().add(row);
             }
             reactions = session.history().reactions(conversation);
@@ -487,13 +515,92 @@ final class ConversationView {
                 if (inThreads.contains(m.id())) threads.computeIfAbsent(hex(m.replyTo()), k -> new java.util.ArrayList<>()).add(m);
             }
             for (History.Message m : list) if (!inThreads.contains(m.id())) append(m);
+            if (hasOlder) messages.getChildren().add(0, olderHint());
             session.history().markRead(conversation);
         } catch (IOException e) {
             messages.getChildren().add(UiKit.label(I18n.t("conv.loadFailed", e.getMessage()), "system-line", "danger"));
         }
     }
 
+    /** "Scroll up for older messages" at the top while there are more. */
+    private Node olderHint() {
+        Label hint = UiKit.label("↑ " + I18n.t("conv.older"), "system-line");
+        HBox row = new HBox(hint);
+        row.setAlignment(Pos.CENTER);
+        row.setPadding(new Insets(10, 0, 0, 0));
+        row.setId("older-hint");
+        hint.setOnMouseClicked(e -> loadOlder());
+        hint.setStyle("-fx-cursor: hand;");
+        return row;
+    }
+
+    /**
+     * Reads the page before the oldest shown message and draws everything again, keeping the
+     * message that was at the top where it was.
+     */
+    private void loadOlder() {
+        if (loaded.isEmpty() || loadingOlder) return;
+        loadingOlder = true;
+        try {
+            List<History.Message> older = session.history().loadBefore(conversation, loaded.get(0).id(), PAGE);
+            hasOlder = older.size() == PAGE;
+            if (older.isEmpty()) {
+                messages.getChildren().removeIf(n -> "older-hint".equals(n.getId()));
+                loadingOlder = false;
+                return;
+            }
+            Node anchor = messages.getChildren().stream().filter(n -> n.getUserData() instanceof Long).findFirst().orElse(null);
+            Object anchorId = anchor == null ? null : anchor.getUserData();
+            loaded.addAll(0, older);
+            java.util.Set<Long> inThreads = session.history().threadReplies(conversation);
+            threads.clear();
+            for (History.Message m : loaded) {
+                if (inThreads.contains(m.id())) threads.computeIfAbsent(hex(m.replyTo()), k -> new java.util.ArrayList<>()).add(m);
+            }
+            reactions = session.history().reactions(conversation);
+            votes = session.history().votes(conversation);
+            messages.getChildren().clear();
+            rows.clear();
+            statusLabels.clear();
+            continuedById.clear();
+            whenVisible.clear();
+            lastDay = null;
+            lastSender = null;
+            if (hasOlder) messages.getChildren().add(olderHint());
+            for (History.Message m : loaded) if (!inThreads.contains(m.id())) append(m);
+            Node again = anchorId == null ? null : rows.get((Long) anchorId);
+            Platform.runLater(() -> {
+                messages.applyCss();
+                messages.layout();
+                double content = messages.getHeight() - scroller.getViewportBounds().getHeight();
+                if (again != null && content > 0) scroller.setVvalue(Math.min(1, again.getBoundsInParent().getMinY() / content));
+                loadingOlder = false;
+            });
+        } catch (IOException e) {
+            loadingOlder = false;
+        }
+    }
+
+    /** Starts the downloads of pictures that are now on screen (or close to it). */
+    private void checkVisible() {
+        if (whenVisible.isEmpty() || scroller.getScene() == null) return;
+        javafx.geometry.Bounds view = scroller.localToScene(scroller.getBoundsInLocal());
+        double margin = view.getHeight(); // one screen ahead, so pictures are ready when they arrive
+        var it = whenVisible.entrySet().iterator();
+        while (it.hasNext()) {
+            var e = it.next();
+            if (e.getKey().getScene() == null) continue;
+            javafx.geometry.Bounds b = e.getKey().localToScene(e.getKey().getBoundsInLocal());
+            if (b.getMaxY() >= view.getMinY() - margin && b.getMinY() <= view.getMaxY() + margin) {
+                it.remove();
+                e.getValue().run();
+            }
+        }
+    }
+
     void append(History.Message m) {
+        if (!loaded.contains(m)) loaded.add(m);
+        if (m.outgoing()) atBottom = true; // our own new message: show it
         java.time.LocalDate day = java.time.Instant.ofEpochMilli(m.sentAt()).atZone(java.time.ZoneId.systemDefault()).toLocalDate();
         if (!day.equals(lastDay)) {
             messages.getChildren().add(dateSeparator(day));
@@ -990,9 +1097,10 @@ final class ConversationView {
         if (!file.isPreviewableImage()) return card;
         if (gallery.stream().noneMatch(f -> fileKey(f).equals(fileKey(file)))) gallery.add(file);
         VBox withPreview = new VBox(6, card);
-        session.downloads().execute(() -> {
+        Image known = images.get(fileKey(file));
+        Runnable fetch = () -> session.downloads().execute(() -> {
             try {
-                Image image = new Image(new ByteArrayInputStream(session.client().downloadFile(file)));
+                Image image = known != null ? known : new Image(new ByteArrayInputStream(session.client().downloadFile(file)));
                 if (image.isError()) return;
                 Platform.runLater(() -> images.put(fileKey(file), image));
                 Platform.runLater(() -> {
@@ -1009,6 +1117,9 @@ final class ConversationView {
                 // no preview; the file can still be saved, which reports any problem
             }
         });
+        // decrypt pictures only when they come into view: long chats open fast and use less memory
+        whenVisible.put(withPreview, fetch);
+        Platform.runLater(this::checkVisible);
         return withPreview;
     }
 
@@ -1768,7 +1879,14 @@ final class ConversationView {
         for (Markdown.Block block : Markdown.parse(text)) {
             javafx.scene.text.TextFlow flow = new javafx.scene.text.TextFlow();
             flow.getStyleClass().add("md-flow");
-            for (Markdown.Span span : block.spans()) flow.getChildren().add(spanNode(span));
+            for (Markdown.Span span : block.spans()) {
+                Node n = spanNode(span);
+                // code blocks are always dark, in both themes: plain code is light text on them
+                if (block.kind() == Markdown.Kind.CODE && n instanceof javafx.scene.text.Text t && span.styles().size() == 1) {
+                    t.setStyle("-fx-fill: #eee3d3;");
+                }
+                flow.getChildren().add(n);
+            }
             switch (block.kind()) {
                 case CODE -> {
                     flow.getStyleClass().add("md-code-flow");

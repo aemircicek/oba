@@ -89,13 +89,18 @@ jobs:
                   --app-version "${VERSION%%-*}" --vendor "Emir Cicek" --copyright "(c) 2026 Emir Cicek, MIT License"
                   --description "End-to-end encrypted messenger")
           INSTALLER=(--about-url "https://github.com/aemircicek/secure-chat")   # not valid for app-image
+          # Faster starts (AppCDS): the JVM writes a class archive next to the app on the first run and
+          # maps it on later ones. Only where the app folder belongs to the user (Windows per-user
+          # install and the portable zip); a macOS bundle must not change after signing and /opt is
+          # read-only. ($APPDIR is expanded by jpackage's launcher, not by this shell.)
+          CDS=(--java-options '-XX:+AutoCreateSharedArchive' --java-options '-XX:SharedArchiveFile=$APPDIR/scorpion.jsa')
           case "$RUNNER_OS" in
             Windows)
-              jpackage "${COMMON[@]}" "${INSTALLER[@]}" --type exe --icon packaging/windows/scorpion.ico --dest pkg \
+              jpackage "${COMMON[@]}" "${CDS[@]}" "${INSTALLER[@]}" --type exe --icon packaging/windows/scorpion.ico --dest pkg \
                 --win-per-user-install --win-menu --win-menu-group Scorpion --win-shortcut --win-shortcut-prompt \
                 --win-dir-chooser --win-upgrade-uuid "$WIN_UPGRADE_UUID" --file-associations packaging/scbackup.properties
               cp pkg/*.exe "dist/Scorpion-${VERSION}-${PLATFORM}.exe"
-              jpackage "${COMMON[@]}" --type app-image --icon packaging/windows/scorpion.ico --dest portable
+              jpackage "${COMMON[@]}" "${CDS[@]}" --type app-image --icon packaging/windows/scorpion.ico --dest portable
               ZIP="dist/Scorpion-${VERSION}-${PLATFORM}-portable.zip"
               if command -v 7z > /dev/null; then (cd portable && 7z a -tzip "../$ZIP" Scorpion > /dev/null)
               else powershell -NoProfile -Command "Compress-Archive -Path portable/Scorpion -DestinationPath '$ZIP'"; fi ;;

@@ -454,6 +454,32 @@ public final class AccountPreview {
         ayse.client.voice().leave();
         Thread.sleep(600);
 
+        // The quick switcher (Ctrl+K) and the appearance settings
+        fx(() -> {
+            scene.getAccelerators().entrySet().stream()
+                    .filter(e -> e.getKey().getName().contains("K")).findFirst().orElseThrow().getValue().run();
+            return null;
+        });
+        waitFor("#palette-query");
+        fx(() -> { ((TextField) find("#palette-query")).setText("tas"); return null; });
+        Thread.sleep(400);
+        snap("19-palette");
+        fx(() -> {
+            scene.getRoot().fireEvent(new javafx.scene.input.KeyEvent(javafx.scene.input.KeyEvent.KEY_PRESSED, "", "",
+                    javafx.scene.input.KeyCode.ESCAPE, false, false, false, false));
+            Node layer = scene.lookup(".overlay");
+            if (layer != null) ((StackPane) layer.getParent()).getChildren().remove(layer);
+            return null;
+        });
+        fx(() -> { ((Button) find("#settings")).fire(); return null; });
+        waitFor("#appearance");
+        fx(() -> { ((Button) find("#appearance")).fire(); return null; });
+        waitFor("#appearance-dialog");
+        Thread.sleep(400);
+        snap("20-appearance");
+        fx(() -> { ((Button) find("#appearance-done")).fire(); return null; });
+        Thread.sleep(300);
+
         // A voice call from ayse: ringing, answered, talking (silent devices: no real microphone)
         ayse.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
         ayse.client.calls().call("emir");

@@ -729,6 +729,23 @@ public final class History implements AutoCloseable {
         return result;
     }
 
+    /** The {@code limit} messages just before {@code beforeId} (older pages, for scrolling back), oldest first. */
+    public synchronized List<Message> loadBefore(String conversation, long beforeId, int limit) throws IOException {
+        List<Message> result = new ArrayList<>();
+        try (PreparedStatement ps = db.prepareStatement(
+                "SELECT " + COLUMNS + " FROM messages WHERE conversation = ? AND id < ? ORDER BY id DESC LIMIT ?")) {
+            ps.setString(1, conversation);
+            ps.setLong(2, beforeId);
+            ps.setInt(3, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) result.add(0, row(rs));
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        return result;
+    }
+
     /** One row per conversation: its latest message and unread count, newest conversation first. */
     public synchronized List<Summary> summaries() throws IOException {
         List<Summary> result = new ArrayList<>();

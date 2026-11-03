@@ -266,4 +266,19 @@ class HistoryTest {
             org.junit.jupiter.api.Assertions.assertEquals("", h.topic("g:1"));
         }
     }
+
+    @Test
+    void pagesBackwards(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp) throws Exception {
+        try (History h = History.open(tmp.resolve("h.db"), "pw", 1000)) {
+            for (int i = 0; i < 25; i++) h.add("dm:efe", "efe", "m" + i, i, false, History.RECEIVED, 0);
+            List<History.Message> last = h.load("dm:efe", 10);
+            assertEquals("m15", last.get(0).text());
+            List<History.Message> before = h.loadBefore("dm:efe", last.get(0).id(), 10);
+            assertEquals(List.of("m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14"),
+                    before.stream().map(History.Message::text).toList());
+            List<History.Message> first = h.loadBefore("dm:efe", before.get(0).id(), 10);
+            assertEquals(5, first.size(), "the oldest page is short");
+            assertEquals(0, h.loadBefore("dm:efe", first.get(0).id(), 10).size());
+        }
+    }
 }
