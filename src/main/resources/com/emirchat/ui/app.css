@@ -726,3 +726,14 @@
 
 /* /command suggestions */
 .suggest-command { -fx-text-fill: -sc-accent-text; -fx-font-weight: bold; -fx-font-family: "Menlo", "SF Mono", "Consolas", monospace; -fx-font-size: 12.5px; }
+
+/* Voice rooms */
+.voice-people { -fx-padding: 0 14 6 34; -fx-spacing: 2; }
+.voice-name { -fx-text-fill: -sc-text-2; -fx-font-size: 12px; }
+.voice-ring { -fx-fill: transparent; -fx-stroke: -sc-success; -fx-stroke-width: 2.5; -fx-effect: dropshadow(gaussian, -sc-success, 8, 0.3, 0, 0); }
+.voice-badge { -fx-text-fill: -sc-success; -fx-font-size: 11px; -fx-font-weight: bold; }
+.voice-bar { -fx-background-color: derive(-sc-surface, 6%); }
+.root.light .voice-bar { -fx-background-color: -sc-accent-weak; }
+.voice-badge-icon { -fx-background-color: -sc-accent-weak; -fx-background-radius: 999; -fx-min-width: 36; -fx-min-height: 36; -fx-max-width: 36; -fx-max-height: 36; }
+.button.voice-join > .text { -fx-fill: -sc-accent-text; }
+.voice-join .label, .button.voice-join { -fx-text-fill: -sc-accent-text; }

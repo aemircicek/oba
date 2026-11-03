@@ -55,7 +55,7 @@ public final class ChatServer implements AutoCloseable {
         this.services = new ClientConnection.Services(identity,
                 new AccountService(db, config.pbkdf2Iterations(), clock),
                 new FriendService(db, presence, clock), messages,
-                new GroupService(db, presence), attachments, presence);
+                new GroupService(db, presence), attachments, presence, new VoiceRooms());
         attachments.cleanUp();
         maintenance.scheduleAtFixedRate(attachments::cleanUp, 1, 1, TimeUnit.HOURS);
         // Plain TCP by design: ClientConnection runs the authenticated handshake on every socket.

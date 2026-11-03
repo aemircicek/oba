@@ -48,6 +48,12 @@ final class ConversationView {
         void openGroupInfo(long groupId);
 
         default void call(String friend) {}
+
+        default void joinVoice(long groupId) {}
+
+        default boolean inVoice(long groupId) { return false; }
+
+        default int voiceCount(long groupId) { return 0; }
     }
 
     private final AccountSession session;
@@ -271,6 +277,16 @@ final class ConversationView {
             pins.setId("pins-button");
             pins.setOnAction(e -> toggleSide("pins", this::showPins));
             header.getChildren().add(pins);
+        }
+        if (groupId != 0 && !actions.inVoice(groupId)) {
+            int inRoom = actions.voiceCount(groupId);
+            Button voice = new Button(inRoom > 0 ? I18n.t("voice.joinCount", inRoom) : I18n.t("voice.join"));
+            voice.setGraphic(Icons.of(Icons.HEADPHONES, 15, "accent"));
+            voice.getStyleClass().addAll("small", "timer-button", "voice-join");
+            voice.setTooltip(new Tooltip(I18n.t("voice.joinTip")));
+            voice.setId("voice-join");
+            voice.setOnAction(e -> actions.joinVoice(groupId));
+            header.getChildren().add(voice);
         }
         if (groupId != 0) {
             Button people = new Button();

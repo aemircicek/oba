@@ -57,6 +57,9 @@ final class MainView implements AccountSession.View {
     private boolean focusHooked;
     private final HBox updateBanner = new HBox(8);
     private final HBox callBar = new HBox(10);
+    private final HBox voiceBar = new HBox(10);
+    private com.emirchat.call.VoiceChannels.State voiceState = com.emirchat.call.VoiceChannels.State.IDLE;
+    private Map<Long, List<String>> voiceRooms = Map.of();
     private javafx.animation.Timeline callTicker;
     private javafx.animation.PauseTransition callHide;
     /** The strip at the far left: home, one icon per community, and "+" (like a server list). */
@@ -160,7 +163,9 @@ final class MainView implements AccountSession.View {
         callBar.managedProperty().bind(callBar.visibleProperty());
         callBar.setVisible(false);
         VBox.setVgrow(content, Priority.ALWAYS);
-        frame.setCenter(new VBox(callBar, content));
+        voiceBar.managedProperty().bind(voiceBar.visibleProperty());
+        voiceBar.setVisible(false);
+        frame.setCenter(new VBox(callBar, voiceBar, content));
         stack.getChildren().add(frame);
         refreshSidebar();
         session.setView(this);
@@ -514,7 +519,28 @@ final class MainView implements AccountSession.View {
             row.setId("channel-" + ch.id());
             row.setOnMouseClicked(e -> open(conversation));
             list.getChildren().add(row);
+            addVoiceParticipants(ch.id());
         }
+    }
+
+    /** Who is in a channel's (or group's) voice room, under its row: faces light up while they talk. */
+    private void addVoiceParticipants(long groupId) {
+        List<String> people = voiceRooms.getOrDefault(groupId, List.of());
+        if (people.isEmpty()) return;
+        VBox box = new VBox(2);
+        box.getStyleClass().add("voice-people");
+        for (String u : people) {
+            boolean talking = voiceState.groupId() == groupId && voiceState.speaking().contains(u);
+            Label name = UiKit.label(u.equals(session.client().username()) ? I18n.t("group.you", u) : u, "voice-name");
+            HBox row = new HBox(8, UiKit.voiceFace(u, talking, 22), name);
+            if (voiceState.groupId() == groupId && u.equals(session.client().username()) && voiceState.muted()) {
+                row.getChildren().add(Icons.of(Icons.MIC_OFF, 12, "danger"));
+            }
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.setId("voice-person-" + groupId + "-" + u);
+            box.getChildren().add(row);
+        }
+        list.getChildren().add(box);
     }
 
     private void openNewCommunity() {
@@ -939,6 +965,10 @@ final class MainView implements AccountSession.View {
         right.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         if (s != null) right.getChildren().add(UiKit.label(UiKit.time(s.lastAt()), "row-time"));
         boolean open = current != null && current.conversation().equals(conversation);
+        if (group) {
+            int inVoice = voiceRooms.getOrDefault(Long.parseLong(conversation.substring(2)), List.of()).size();
+            if (inVoice > 0) right.getChildren().add(UiKit.label("🔊 " + inVoice, "voice-badge"));
+        }
         if (s != null && s.unread() > 0 && !open) right.getChildren().add(UiKit.label(String.valueOf(s.unread()), "unread-badge"));
         if (avatar instanceof javafx.scene.layout.Region r) r.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         HBox row = new HBox(avatar, text, UiKit.grow(), right);
@@ -1064,7 +1094,21 @@ final class MainView implements AccountSession.View {
 
             @Override public void openGroupInfo(long groupId) { MainView.this.openGroupInfo(groupId); }
 
-            @Override public void call(String friend) { session.client().calls().call(friend); }
+            @Override public void call(String friend) {
+                if (voiceState.joined()) {
+                    notice(I18n.t("voice.leaveFirst"), true);
+                    return;
+                }
+                session.client().calls().call(friend);
+            }
+
+            @Override public void joinVoice(long groupId) {
+                session.background().execute(() -> session.client().voice().join(groupId));
+            }
+
+            @Override public boolean inVoice(long groupId) { return voiceState.groupId() == groupId; }
+
+            @Override public int voiceCount(long groupId) { return voiceRooms.getOrDefault(groupId, List.of()).size(); }
         };
         if (current != null) current.dispose();
         current = conversation.startsWith("g:")
@@ -1406,6 +1450,70 @@ final class MainView implements AccountSession.View {
     }
 
     @Override
+    public void voice(com.emirchat.call.VoiceChannels.State state) {
+        boolean wasJoined = voiceState.joined();
+        long before = voiceState.groupId();
+        voiceState = state;
+        if (state.error() != null) {
+            notice("busy".equals(state.error()) ? I18n.t("voice.busy") : I18n.t("voice.failed", state.error()), true);
+        }
+        if (!state.joined()) {
+            voiceBar.setVisible(false);
+        } else {
+            showVoiceBar(state);
+        }
+        if (current != null && (wasJoined != state.joined() || before != state.groupId())) current.refreshHeader();
+        refreshSidebar();
+    }
+
+    @Override
+    public void voiceRooms(Map<Long, List<String>> rooms) {
+        voiceRooms = rooms;
+        refreshSidebar();
+    }
+
+    /** The bar over the conversation while we are in a voice room: who is there, mute, deafen, leave. */
+    private void showVoiceBar(com.emirchat.call.VoiceChannels.State state) {
+        com.emirchat.call.VoiceChannels voice = session.client().voice();
+        Packet.GroupInfo g = group(state.groupId());
+        String where = g == null ? "" : g.community() != 0
+                ? ConversationView.channelTitle(g) + " · " + communityName(g.community()) : ConversationView.groupName(g);
+        Label title = UiKit.label(I18n.t("voice.inRoom", where), "row-title");
+        Label sub = UiKit.label("🔒 " + I18n.t("voice.encrypted"), "row-sub");
+        VBox text = new VBox(2, title, sub);
+        text.setMinWidth(0);
+        HBox faces = new HBox(6);
+        faces.setAlignment(Pos.CENTER_LEFT);
+        for (String u : state.participants()) {
+            Node face = UiKit.voiceFace(u, state.speaking().contains(u), 30);
+            Tooltip.install(face, new Tooltip(u));
+            faces.getChildren().add(face);
+        }
+        Button mute = new Button(state.muted() ? I18n.t("call.unmute") : I18n.t("call.mute"));
+        mute.setGraphic(Icons.of(state.muted() ? Icons.MIC_OFF : Icons.MIC, 14, state.muted() ? "danger" : "muted"));
+        mute.getStyleClass().add("small");
+        mute.setId("voice-mute");
+        mute.setOnAction(e -> session.background().execute(() -> voice.setMuted(!state.muted())));
+        Button deaf = new Button(state.deafened() ? I18n.t("voice.undeafen") : I18n.t("voice.deafen"));
+        deaf.setGraphic(Icons.of(Icons.HEADPHONES, 14, state.deafened() ? "danger" : "muted"));
+        deaf.getStyleClass().add("small");
+        deaf.setId("voice-deafen");
+        deaf.setOnAction(e -> session.background().execute(() -> voice.setDeafened(!state.deafened())));
+        Button leave = new Button(I18n.t("voice.leave"));
+        leave.setGraphic(Icons.of(Icons.PHONE, 14, "danger"));
+        leave.getStyleClass().addAll("small", "danger-ghost");
+        leave.setId("voice-leave");
+        leave.setOnAction(e -> session.background().execute(voice::leave));
+        StackPane badge = new StackPane(Icons.of(Icons.HEADPHONES, 18, "accent"));
+        badge.getStyleClass().add("voice-badge-icon");
+        voiceBar.getChildren().setAll(badge, text, faces, UiKit.grow(), mute, deaf, leave);
+        voiceBar.getStyleClass().setAll("call-bar", "voice-bar");
+        voiceBar.setAlignment(Pos.CENTER_LEFT);
+        voiceBar.setId("voice-bar");
+        voiceBar.setVisible(true);
+    }
+
+    @Override
     public void threadReply(History.Message reply, long rootId) {
         if (current != null && current.conversation().equals(reply.conversation())) current.threadReply(reply, rootId);
         if (!friendsTab.isSelected()) refreshSidebar();
@@ -1469,7 +1577,16 @@ final class MainView implements AccountSession.View {
                 accept.setGraphic(Icons.of(Icons.PHONE, 14, "on-accent"));
                 accept.getStyleClass().addAll("small", "primary");
                 accept.setId("call-accept");
-                accept.setOnAction(e -> calls.accept());
+                accept.setOnAction(e -> {
+                    if (!voiceState.joined()) {
+                        calls.accept();
+                        return;
+                    }
+                    session.background().execute(() -> { // the call takes the microphone: leave the room first
+                        session.client().voice().leave();
+                        calls.accept();
+                    });
+                });
                 buttons.getChildren().addAll(hangUpButton(I18n.t("call.reject"), calls::reject), accept);
                 notifyCall(c.peer(), I18n.t("call.incomingFrom", c.peer()));
                 ring();

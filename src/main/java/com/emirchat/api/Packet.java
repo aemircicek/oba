@@ -131,6 +131,40 @@ public sealed interface Packet {
         @Override public String toString() { return "CallAudio[" + peer + ", " + data.length + " bytes]"; }
     }
 
+    /**
+     * Joins the voice room of a group or channel (one room per connection; joining another leaves
+     * the first). Answered with the room as it is now.
+     */
+    record VoiceJoin(long groupId) implements Packet {}
+
+    record VoiceLeave(long groupId) implements Packet {}
+
+    /** One end-to-end encrypted audio packet for everyone else in the room; request id 0, never answered. */
+    record VoiceAudio(long groupId, byte[] data) implements Packet {
+        @Override public String toString() { return "VoiceAudio[" + groupId + ", " + data.length + " bytes]"; }
+    }
+
+    /** Who is in the voice rooms of the groups we are in (rooms with nobody are left out). */
+    record ListVoiceRooms() implements Packet {}
+
+    /** A voice room and who is in it, in the order they joined; also pushed whenever it changes. */
+    record VoiceRoom(long groupId, List<String> participants) implements Packet {
+        public VoiceRoom {
+            participants = List.copyOf(participants);
+        }
+    }
+
+    record VoiceRoomList(List<VoiceRoom> rooms) implements Packet {
+        public VoiceRoomList {
+            rooms = List.copyOf(rooms);
+        }
+    }
+
+    /** Someone's audio packet in a voice room, relayed by the server. */
+    record VoiceAudioIn(long groupId, String from, byte[] data) implements Packet {
+        @Override public String toString() { return "VoiceAudioIn[" + groupId + ", " + from + ", " + data.length + " bytes]"; }
+    }
+
     /** A friend's audio packet, relayed by the server. */
     record CallAudioIn(String from, byte[] data) implements Packet {
         @Override public String toString() { return "CallAudioIn[" + from + ", " + data.length + " bytes]"; }
@@ -435,6 +469,22 @@ public sealed interface Packet {
             case RevokeInvites r -> w.u8(47).i64(requestId).i64(r.communityId());
             case CallAudio a -> w.u8(48).i64(requestId).string(a.peer()).bytes(a.data());
             case CallAudioIn a -> w.u8(130).i64(requestId).string(a.from()).bytes(a.data());
+            case VoiceJoin j -> w.u8(49).i64(requestId).i64(j.groupId());
+            case VoiceLeave l -> w.u8(50).i64(requestId).i64(l.groupId());
+            case VoiceAudio a -> w.u8(51).i64(requestId).i64(a.groupId()).bytes(a.data());
+            case ListVoiceRooms l -> w.u8(52).i64(requestId);
+            case VoiceRoom v -> {
+                w.u8(131).i64(requestId).i64(v.groupId());
+                writeNames(w, v.participants());
+            }
+            case VoiceRoomList l -> {
+                w.u8(133).i64(requestId).u16(l.rooms().size());
+                for (VoiceRoom v : l.rooms()) {
+                    w.i64(v.groupId());
+                    writeNames(w, v.participants());
+                }
+            }
+            case VoiceAudioIn a -> w.u8(132).i64(requestId).i64(a.groupId()).string(a.from()).bytes(a.data());
             case InviteCreated i -> w.u8(129).i64(requestId).string(i.code());
             case RemoveGroupMember r -> w.u8(32).i64(requestId).i64(r.groupId()).string(r.username());
             case LeaveGroup l -> w.u8(33).i64(requestId).i64(l.groupId());
@@ -525,6 +575,18 @@ public sealed interface Packet {
             case 47 -> new RevokeInvites(r.i64());
             case 48 -> new CallAudio(r.string(MAX_USERNAME_BYTES), r.bytes(MAX_CALL_AUDIO_BYTES));
             case 130 -> new CallAudioIn(r.string(MAX_USERNAME_BYTES), r.bytes(MAX_CALL_AUDIO_BYTES));
+            case 49 -> new VoiceJoin(r.i64());
+            case 50 -> new VoiceLeave(r.i64());
+            case 51 -> new VoiceAudio(r.i64(), r.bytes(MAX_CALL_AUDIO_BYTES));
+            case 52 -> new ListVoiceRooms();
+            case 131 -> new VoiceRoom(r.i64(), readNames(r));
+            case 133 -> {
+                int n = r.count(MAX_LIST);
+                List<VoiceRoom> rooms = new java.util.ArrayList<>();
+                for (int i = 0; i < n; i++) rooms.add(new VoiceRoom(r.i64(), readNames(r)));
+                yield new VoiceRoomList(rooms);
+            }
+            case 132 -> new VoiceAudioIn(r.i64(), r.string(MAX_USERNAME_BYTES), r.bytes(MAX_CALL_AUDIO_BYTES));
             case 129 -> new InviteCreated(r.string(MAX_INVITE_CODE_BYTES));
             case 32 -> new RemoveGroupMember(r.i64(), r.string(MAX_USERNAME_BYTES));
             case 33 -> new LeaveGroup(r.i64());

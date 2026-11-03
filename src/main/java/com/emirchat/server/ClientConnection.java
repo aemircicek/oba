@@ -9,6 +9,7 @@ import com.emirchat.protocol.Handshake;
 import com.emirchat.protocol.Session;
 import com.emirchat.trust.PeerRejectedException;
 import java.io.IOException;
+import java.util.List;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -28,7 +29,7 @@ final class ClientConnection {
 
     /** Everything a connection needs from the server. */
     record Services(Identity identity, AccountService accounts, FriendService friends, MessageService messages,
-                    GroupService groups, AttachmentService attachments, Presence presence) {}
+                    GroupService groups, AttachmentService attachments, Presence presence, VoiceRooms voice) {}
 
     private final Socket socket;
     private final Services services;
@@ -58,6 +59,10 @@ final class ClientConnection {
                     relayAudio(audio); // never answered: live audio has no time for round trips
                     continue;
                 }
+                if (frame.packet() instanceof Packet.VoiceAudio audio) {
+                    relayVoice(audio);
+                    continue;
+                }
                 Packet response;
                 try {
                     response = handle(frame.packet());
@@ -75,6 +80,7 @@ final class ClientConnection {
             outbound.offer(CLOSE);
             if (writer != null) writer.interrupt();
             Database.User u = user;
+            if (u != null) leaveVoice();
             if (u != null && services.presence().remove(u.id(), this)) {
                 services.friends().onlineChanged(u, false);
             }
@@ -112,6 +118,57 @@ final class ClientConnection {
             return;
         }
         services.presence().pushDroppable(audioPeerId, new Packet.CallAudioIn(u.username(), audio.data()));
+    }
+
+    // ------------------------------------------------------------------ voice rooms
+
+    private long voiceWindowStart;
+    private int voiceInWindow;
+    private long voiceCheckedAt;
+
+    private Packet.VoiceRoom joinVoice(long groupId) throws ApiException {
+        Database.User u = me();
+        if (!services.groups().isMemberOf(groupId, u.id())) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
+        long left = services.voice().join(groupId, u, this);
+        if (left != 0 && left != groupId) announceVoice(left);
+        voiceCheckedAt = System.currentTimeMillis();
+        return announceVoice(groupId);
+    }
+
+    private void leaveVoice() {
+        long left = services.voice().leave(this);
+        if (left != 0) announceVoice(left);
+    }
+
+    /** Tells every online member of the group who is in its room now. */
+    private Packet.VoiceRoom announceVoice(long groupId) {
+        Packet.VoiceRoom room = new Packet.VoiceRoom(groupId, services.voice().participants(groupId));
+        for (long member : services.groups().memberIds(groupId)) services.presence().push(member, room);
+        return room;
+    }
+
+    /**
+     * Relays an audio packet to the others in our room (only the room we are in, rate limited,
+     * re-checking now and then that we are still a member). The server cannot read it.
+     */
+    private void relayVoice(Packet.VoiceAudio audio) {
+        Database.User u = user;
+        if (u == null || services.voice().roomOf(this) != audio.groupId()) return;
+        long now = System.currentTimeMillis();
+        if (now - voiceWindowStart >= 1000) {
+            voiceWindowStart = now;
+            voiceInWindow = 0;
+        }
+        if (++voiceInWindow > AUDIO_PER_SECOND) return;
+        if (now - voiceCheckedAt > FRIEND_CHECK_MS) {
+            voiceCheckedAt = now;
+            if (!services.groups().isMemberOf(audio.groupId(), u.id())) {
+                leaveVoice(); // removed from the group: out of its room too
+                return;
+            }
+        }
+        Packet.VoiceAudioIn out = new Packet.VoiceAudioIn(audio.groupId(), u.username(), audio.data());
+        for (ClientConnection other : services.voice().others(audio.groupId(), this)) other.pushDroppable(out);
     }
 
     /** Queues live audio unless this device is already behind; a lost packet is a moment of silence. */
@@ -155,6 +212,20 @@ final class ClientConnection {
     private Packet handle(Packet packet) throws ApiException, IOException {
         return switch (packet) {
             case Packet.Ping p -> new Packet.Pong();
+            case Packet.VoiceJoin j -> joinVoice(j.groupId());
+            case Packet.VoiceLeave l -> {
+                me();
+                if (services.voice().roomOf(this) == l.groupId()) leaveVoice();
+                yield new Packet.Ok();
+            }
+            case Packet.ListVoiceRooms l -> {
+                List<Packet.VoiceRoom> rooms = new java.util.ArrayList<>();
+                for (long g : services.groups().groupIdsOf(me())) {
+                    List<String> people = services.voice().participants(g);
+                    if (!people.isEmpty()) rooms.add(new Packet.VoiceRoom(g, people));
+                }
+                yield new Packet.VoiceRoomList(rooms);
+            }
             case Packet.Register r -> {
                 requireLoggedOut();
                 Database.User created = services.accounts().register(r.username(), r.password(), session.peerIdentityKey());

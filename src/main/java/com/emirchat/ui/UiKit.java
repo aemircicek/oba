@@ -133,6 +133,22 @@ final class UiKit {
         }
     }
 
+    /** An avatar for voice rooms: a ring lights up while the person is talking. */
+    static Node voiceFace(String user, boolean speaking, double size) {
+        StackPane a = avatar(user, "avatar-xs", false);
+        double scale = size / 30.0;
+        a.setScaleX(scale);
+        a.setScaleY(scale);
+        javafx.scene.shape.Circle ring = new javafx.scene.shape.Circle(size / 2 + 2.5);
+        ring.getStyleClass().add("voice-ring");
+        ring.setVisible(speaking);
+        StackPane face = new StackPane(ring, new javafx.scene.Group(a));
+        face.setMinSize(size + 6, size + 6);
+        face.setMaxSize(size + 6, size + 6);
+        if (speaking) face.getStyleClass().add("speaking");
+        return face;
+    }
+
     /** A community's icon on the rail: its initials on a rounded square in its own colours. */
     static Node communityIcon(String name, long id) {
         double size = 42;

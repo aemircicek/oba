@@ -84,7 +84,9 @@ public final class ChatClient implements AutoCloseable {
         /** value: the chat's new topic (empty clears it); no target */
         TOPIC(7),
         /** value: the chosen answer's index in the target poll, or empty to take the vote back */
-        VOTE(8);
+        VOTE(8),
+        /** groups only: the sender's current voice room key (see VoiceCrypto); no target, never shown */
+        VOICE_KEY(9);
 
         final int code;
 
@@ -209,6 +211,12 @@ public final class ChatClient implements AutoCloseable {
 
         /** A voice call started, rang, connected, changed or ended (runs on the calls thread). */
         default void call(com.emirchat.call.Calls.Call call) {}
+
+        /** Our voice room changed: joined, left, people, speakers, muting. */
+        default void voice(com.emirchat.call.VoiceChannels.State state) {}
+
+        /** Who is in the voice rooms of our groups. */
+        default void voiceRooms(Map<Long, List<String>> rooms) {}
     }
 
     // ------------------------------------------------------------------ rich messages
@@ -388,8 +396,30 @@ public final class ChatClient implements AutoCloseable {
                 connection.sendAudio(peer, data);
             }
         }, () -> client.audioDevices.get(), call -> client.listener.call(call));
+        client.voice = new com.emirchat.call.VoiceChannels(loggedIn.username(), new com.emirchat.call.VoiceChannels.Transport() {
+            @Override public List<String> join(long groupId) throws Exception {
+                return ((Packet.VoiceRoom) connection.call(new Packet.VoiceJoin(groupId))).participants();
+            }
+
+            @Override public void leave(long groupId) throws Exception {
+                connection.call(new Packet.VoiceLeave(groupId));
+            }
+
+            @Override public void audio(long groupId, byte[] packet) {
+                connection.sendVoice(groupId, packet);
+            }
+
+            @Override public void sendKey(long groupId, String encodedKey) throws Exception {
+                client.sendAction(Chat.group(groupId), ActionKind.VOICE_KEY, null, encodedKey);
+            }
+        }, () -> client.audioDevices.get(), () -> client.calls.current() != null, new com.emirchat.call.VoiceChannels.Listener() {
+            @Override public void state(com.emirchat.call.VoiceChannels.State state) { client.listener.voice(state); }
+
+            @Override public void rooms(Map<Long, List<String>> rooms) { client.listener.voiceRooms(rooms); }
+        });
         connection.onPush(p -> {
             if (p instanceof Packet.CallAudioIn a) client.calls.audio(a.from(), a.data()); // live: skip the inbox queue
+            else if (p instanceof Packet.VoiceAudioIn v) client.voice.audio(v.groupId(), v.from(), v.data());
             else {
                 try {
                     client.inbox.execute(() -> client.onPush(p));
@@ -1057,6 +1087,7 @@ public final class ChatClient implements AutoCloseable {
                 listener.push(packet);
             }
             case Packet.GroupUpdated g -> groupChanged(g.group());
+            case Packet.VoiceRoom v -> voice.roomChanged(v.groupId(), v.participants());
             case Packet.GroupRemoved g -> {
                 groups.remove(g.groupId());
                 try {
@@ -1155,9 +1186,14 @@ public final class ChatClient implements AutoCloseable {
             byte[] target = r.bytes(MESSAGE_ID_BYTES);
             String value = r.string(MAX_ACTION_VALUE_BYTES);
             r.expectEnd();
-            boolean needsTarget = kind != ActionKind.TYPING && kind != ActionKind.TOPIC;
+            boolean needsTarget = kind != ActionKind.TYPING && kind != ActionKind.TOPIC && kind != ActionKind.VOICE_KEY;
             if (needsTarget != (target.length == MESSAGE_ID_BYTES) || (target.length != 0 && target.length != MESSAGE_ID_BYTES)) {
                 throw new ProtocolException("Bad action target");
+            }
+            if (kind == ActionKind.VOICE_KEY) {
+                if (groupId == 0) throw new ProtocolException("Voice keys belong to groups");
+                voice.acceptKey(from, groupId, value); // a malformed key throws SecurityException: reported as undecryptable
+                return;
             }
             listener.action(new Action(from, groupId, kind, target, value));
             return;
@@ -1266,6 +1302,22 @@ public final class ChatClient implements AutoCloseable {
             "none".equals(System.getProperty("securechat.audio"))
                     ? com.emirchat.call.SilentDevice::new : com.emirchat.call.SoundDevice::new;
 
+    private com.emirchat.call.VoiceChannels voice;
+
+    /** The voice rooms of our groups and channels. */
+    public com.emirchat.call.VoiceChannels voice() {
+        return voice;
+    }
+
+    /** Asks the server who is in which voice room (after logging in or reconnecting). */
+    public void refreshVoiceRooms() throws IOException, ApiException {
+        Map<Long, List<String>> rooms = new java.util.HashMap<>();
+        for (Packet.VoiceRoom r : ((Packet.VoiceRoomList) connection.call(new Packet.ListVoiceRooms())).rooms()) {
+            rooms.put(r.groupId(), r.participants());
+        }
+        voice.roomsLoaded(rooms);
+    }
+
     /** Voice calls with friends. */
     public com.emirchat.call.Calls calls() {
         return calls;
@@ -1278,6 +1330,7 @@ public final class ChatClient implements AutoCloseable {
 
     @Override
     public void close() {
+        if (voice != null) voice.close();
         closing = true; // a deliberate logout is not reported as a lost connection
         if (calls != null) calls.close(); // hangs up a call going on
         inbox.shutdown();

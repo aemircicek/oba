@@ -66,6 +66,36 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
         /** Someone voted in a poll. */
         default void votesChanged(String conversation, long pollId) {}
+
+        /** Our voice room changed (people, speakers, muting), or we joined or left one. */
+        default void voice(com.emirchat.call.VoiceChannels.State state) {}
+
+        /** Who is in the voice rooms of our groups. */
+        default void voiceRooms(java.util.Map<Long, List<String>> rooms) {}
+    }
+
+    @Override
+    public void voice(com.emirchat.call.VoiceChannels.State state) {
+        fx(v -> v.voice(state));
+    }
+
+    @Override
+    public void voiceRooms(java.util.Map<Long, List<String>> rooms) {
+        fx(v -> v.voiceRooms(rooms));
+    }
+
+    /** Re-reads who is in which voice room (after signing in or reconnecting). */
+    void refreshVoiceLater() {
+        background.execute(() -> {
+            ChatClient c = client;
+            if (c == null) return;
+            try {
+                c.refreshVoiceRooms();
+            } catch (Exception ignored) {
+                // the rooms show up with the next change
+            }
+            fx(v -> v.voice(c.voice().state()));
+        });
     }
 
     private volatile Runnable onConnectionLost;
@@ -92,6 +122,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         if (v != null) v.connection(true, 0);
         refreshFriendsLater();
         fx(View::groupsChanged);
+        refreshVoiceLater(); // the old connection left its room; show the rooms as they are now
     }
 
     /** Setting keys (stored per account in the history database). */
@@ -208,6 +239,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
     void setView(View view) {
         this.view = view;
+        if (view != null) refreshVoiceLater();
     }
 
     ChatClient client() {

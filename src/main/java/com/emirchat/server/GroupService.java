@@ -384,6 +384,29 @@ final class GroupService {
                 .orElseThrow(() -> new ApiException(ErrorCode.INVALID_REQUEST, username + " is not in the group."));
     }
 
+    /** For voice rooms: whether the user is in the group or channel right now. */
+    boolean isMemberOf(long groupId, long userId) {
+        return isMember(groupId, userId);
+    }
+
+    /** User ids of a group's members (for voice room pushes); empty if it does not exist. */
+    List<Long> memberIds(long groupId) {
+        try {
+            return db.members(groupId).stream().map(Database.User::id).toList();
+        } catch (SQLException e) {
+            return List.of();
+        }
+    }
+
+    /** Ids of the groups and channels the user is in. */
+    List<Long> groupIdsOf(Database.User me) {
+        try {
+            return list(me).groups().stream().map(Packet.GroupInfo::id).toList();
+        } catch (ApiException e) {
+            return List.of();
+        }
+    }
+
     private boolean isMember(long groupId, long userId) {
         try {
             return db.isMember(groupId, userId);

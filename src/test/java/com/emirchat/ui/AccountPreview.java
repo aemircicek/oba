@@ -121,6 +121,7 @@ public final class AccountPreview {
         System.setProperty("securechat.theme", theme);
         I18n.use(System.getProperty("preview.language", "en"));
         System.setProperty("securechat.preview", "true");
+        System.setProperty("securechat.audio", "none"); // never open the real microphone or speaker
         java.util.prefs.Preferences.userNodeForPackage(AppPrefs.class).node("preview-app").clear();
         Files.createDirectories(out);
         work = Files.createTempDirectory("securechat-account-preview");
@@ -442,6 +443,17 @@ public final class AccountPreview {
         snap("15f-commands");
         fx(() -> { ((javafx.scene.control.TextInputControl) find("#composer")).setText(""); return null; });
 
+        // A voice room: emir drops in, ayse joins and talks (a tone), her face lights up
+        ayse.client.useAudioDevices(ToneDevice::new);
+        fx(() -> { ((Button) find("#voice-join")).fire(); return null; });
+        waitFor("#voice-bar");
+        ayse.client.voice().join(joined.id());
+        Thread.sleep(2500);
+        snap("15g-voice");
+        fx(() -> { ((Button) find("#voice-leave")).fire(); return null; });
+        ayse.client.voice().leave();
+        Thread.sleep(600);
+
         // A voice call from ayse: ringing, answered, talking (silent devices: no real microphone)
         ayse.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
         ayse.client.calls().call("emir");
@@ -474,6 +486,39 @@ public final class AccountPreview {
         System.out.println("Account UI flow completed; screenshots in " + out.toAbsolutePath());
         Platform.exit();
         System.exit(0);
+    }
+
+    /** A "microphone" that hums a tone while started (for the voice room picture). */
+    private static final class ToneDevice implements com.emirchat.call.AudioDevice {
+        private volatile boolean on;
+
+        @Override public void start(java.util.function.Consumer<byte[]> captured) {
+            on = true;
+            Thread.ofPlatform().daemon().start(() -> {
+                int f = 0;
+                while (on) {
+                    byte[] frame = new byte[FRAME_BYTES];
+                    for (int i = 0; i < FRAME_BYTES / 2; i++) {
+                        short v = (short) (Math.sin(2 * Math.PI * 220 * (f * 160 + i) / 8000.0) * 16000);
+                        frame[2 * i] = (byte) v;
+                        frame[2 * i + 1] = (byte) (v >> 8);
+                    }
+                    captured.accept(frame);
+                    f++;
+                    try {
+                        Thread.sleep(20);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            });
+        }
+
+        @Override public void play(byte[] frame) {}
+
+        @Override public void stop() {
+            on = false;
+        }
     }
 
     /** Seconds of speech-like sound: a few harmonics whose loudness rises and falls like syllables. */
