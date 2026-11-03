@@ -956,6 +956,7 @@ final class MainView implements AccountSession.View {
     // ------------------------------------------------------------------ content
 
     private void showEmpty() {
+        if (current != null) current.dispose();
         current = null;
         VBox empty = new VBox(12, Icons.of(Icons.LOCK, 40, "muted"),
                 UiKit.label(I18n.t("main.select"), "h2"),
@@ -974,6 +975,7 @@ final class MainView implements AccountSession.View {
 
             @Override public void call(String friend) { session.client().calls().call(friend); }
         };
+        if (current != null) current.dispose();
         current = conversation.startsWith("g:")
                 ? ConversationView.group(session, Long.parseLong(conversation.substring(2)), actions)
                 : ConversationView.dm(session, conversation.substring(3), actions);
@@ -1470,6 +1472,7 @@ final class MainView implements AccountSession.View {
     }
 
     void dispose() {
+        if (current != null) current.dispose();
         UiKit.useKeys(null);
         Tray.get().setUnread(0);
         if (stack.getScene() != null && stack.getScene().getWindow() instanceof javafx.stage.Stage s) {

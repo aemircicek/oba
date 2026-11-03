@@ -63,6 +63,15 @@ public final class VoicePlayer {
         });
     }
 
+    /** Stops whatever voice message is playing. */
+    public static void stopAll() {
+        VoicePlayer p;
+        synchronized (VoicePlayer.class) {
+            p = current;
+        }
+        if (p != null) p.stop();
+    }
+
     public boolean playing() {
         return running;
     }

@@ -75,7 +75,11 @@ final class ConversationView {
     private String popEmoji;
     private final Button micButton = new Button();
     private com.emirchat.call.VoiceRecorder recorder;   // while recording a voice message
-    private final Map<String, byte[]> voices = new HashMap<>();  // decoded voice messages
+    /** Decoded voice messages, the most recently used few only (each can be a few MB). */
+    private final Map<String, byte[]> voices = new java.util.LinkedHashMap<>(16, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) { return size() > 12; }
+    };
+    private Runnable cancelRecording;    // discards the recording in progress, if any
     private final Button sendButton = new Button();
     private final Map<Long, Boolean> continuedById = new HashMap<>();
     private Map<Long, Map<String, String>> reactions = new HashMap<>();
@@ -1100,6 +1104,7 @@ final class ConversationView {
             tick.stop();
             blink.stop();
             recorder = null;
+            cancelRecording = null;
             byte[] pcm = r.stop();
             composer.getChildren().setAll(normal);
             composer.setAlignment(Pos.BOTTOM_CENTER);
@@ -1113,7 +1118,16 @@ final class ConversationView {
                     java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".wav";
             sendBytes(name, () -> com.emirchat.call.VoiceNotes.wav(pcm), com.emirchat.call.VoiceNotes.MIME);
         };
-        finish[0] = () -> end.accept(true);
+        // At the length limit the microphone stops, and the recording waits for Send or Discard:
+        // nothing is ever sent without the user asking.
+        finish[0] = () -> {
+            if (recorder != r) return;
+            tick.stop();
+            blink.stop();
+            r.stop();
+            clock.setText(voiceTime(com.emirchat.call.VoiceNotes.MAX_SECONDS * 1000L) + " · " + I18n.t("voice.limit"));
+        };
+        cancelRecording = () -> end.accept(false);
         cancel.setOnAction(e -> end.accept(false));
         done.setOnAction(e -> end.accept(true));
         tick.play();
@@ -1212,12 +1226,18 @@ final class ConversationView {
             }
         });
         byte[] cached = voices.get(key);
+        long limit = 64 + 2L * (long) com.emirchat.call.AudioDevice.SAMPLE_RATE * com.emirchat.call.VoiceNotes.MAX_SECONDS;
         if (cached != null) {
             ready.accept(cached);
+        } else if (file.size() > limit) {
+            length.setText(I18n.t("voice.unplayable")); // longer than any recording: still saveable as a file
         } else {
             session.downloads().execute(() -> {
                 try {
                     byte[] pcm = com.emirchat.call.VoiceNotes.decode(session.client().downloadFile(file));
+                    if (com.emirchat.call.VoiceNotes.millis(pcm) > com.emirchat.call.VoiceNotes.MAX_SECONDS * 1000L + 1000) {
+                        throw new IOException("too long");
+                    }
                     Platform.runLater(() -> {
                         voices.put(key, pcm);
                         ready.accept(pcm);
@@ -1787,6 +1807,12 @@ final class ConversationView {
         b.getStyleClass().add("viewer-button");
         b.setTooltip(new Tooltip(tip));
         return b;
+    }
+
+    /** The view is going away (another chat opened, or logging out): stop the microphone and any playback. */
+    void dispose() {
+        if (cancelRecording != null) cancelRecording.run();
+        com.emirchat.call.VoicePlayer.stopAll();
     }
 
     Node focusTarget() {
