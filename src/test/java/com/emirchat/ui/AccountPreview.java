@@ -336,6 +336,7 @@ public final class AccountPreview {
         ayse.client.sendGroupText(groupId, "Ben de DWG dosya formatını araştırırım.");
         Thread.sleep(300);
         ayse.client.sendGroupText(groupId, "LibreDWG lisansı GPL, dikkat etmeliyiz.");
+        ayse.client.sendGroupText(groupId, "@emir lisans tablosuna bakabilir misin?");
         Thread.sleep(900);
         snap("08-group");
 
@@ -466,6 +467,21 @@ public final class AccountPreview {
         fx(() -> { ((Button) find("#voice-leave")).fire(); return null; });
         ayse.client.voice().leave();
         Thread.sleep(600);
+
+        // Welcome back: as if emir had been away for 3 h 12 min, with new messages waiting
+        fx(() -> { click(find("#rail-home")); return null; });
+        ayse.client.sendGroupText(groupId, "@emir toplantı notlarını paylaştım 📎");
+        ayse.client.sendText("emir", "Akşam görüşelim mi?");
+        Thread.sleep(900);
+        fx(() -> {
+            ((MainView) find(".main-view").getUserData()).showCatchUp((3 * 60 + 12) * 60_000L, true);
+            return null;
+        });
+        waitFor("#catchup");
+        Thread.sleep(600);
+        snap("19a-catchup");
+        fx(() -> { ((Button) find("#catchup-continue")).fire(); return null; });
+        Thread.sleep(300);
 
         // The quick switcher (Ctrl+K) and the appearance settings
         fx(() -> {

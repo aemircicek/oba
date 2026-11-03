@@ -36,6 +36,8 @@ final class Sky extends Region {
     private final ZoneId zone;
     private final boolean dark;
     private AnimationTimer twinkle;
+    /** Fade into the header on the left (off for the welcome-back banner, which is all sky). */
+    boolean fade = true;
 
     Sky(ZoneId zone, boolean dark) {
         this.zone = zone;
@@ -156,6 +158,7 @@ final class Sky extends Region {
         dunes(g, w, h, h * 0.80, h * 0.10, 0.011, 1.3, duneFar);
         dunes(g, w, h, h * 0.90, h * 0.08, 0.017, 4.1, duneNear);
 
+        if (!fade) return;
         // fade into the header on the left, where the name and status are
         Color surface = Color.web(dark ? "#171411" : "#fffcf7");
         g.setFill(new LinearGradient(0, 0, 1, 0, true, CycleMethod.NO_CYCLE,

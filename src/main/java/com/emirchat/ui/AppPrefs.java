@@ -101,6 +101,15 @@ final class AppPrefs {
         NODE.put("sound", name);
     }
 
+    /** When the window was last in use (for the welcome-back screen after a long absence). */
+    static long lastSeen() {
+        return NODE.getLong("last-seen", 0);
+    }
+
+    static void setLastSeen(long millis) {
+        NODE.putLong("last-seen", millis);
+    }
+
     static void saveWindow(Stage stage) {
         if (stage.isIconified()) return;
         NODE.putBoolean("window.maximized", stage.isMaximized());

@@ -730,6 +730,9 @@ final class ConversationView {
         bubble.setMinWidth(body instanceof Label || body instanceof HBox || body.getStyleClass().contains("poll-card")
                 ? Region.USE_PREF_SIZE : 0);
         bubble.setMinHeight(Region.USE_PREF_SIZE);
+        if (!own && !m.deleted() && m.file() == null && Markdown.mentions(m.text(), session.client().username())) {
+            bubble.getStyleClass().add("mentions-me"); // someone named us: the bubble says so
+        }
         if (m.hasUid() && !m.deleted()) {
             bubble.setOnContextMenuRequested(e -> menu(m).show(bubble, e.getScreenX(), e.getScreenY()));
         }
@@ -1580,13 +1583,16 @@ final class ConversationView {
         final VBox box = new VBox(2);
         private List<Emoji.Entry> items = List.of();
         private List<String> commands = List.of();
+        private boolean mentionMode;    // "commands" holds usernames after "@"
         private int selected;
 
         private void renderCommands() {
             box.getChildren().clear();
             for (int i = 0; i < commands.size(); i++) {
                 String name = commands.get(i);
-                HBox row = new HBox(10, UiKit.label("/" + name, "suggest-command"), UiKit.label(commandHint(name), "suggest-name"));
+                HBox row = mentionMode
+                        ? new HBox(10, UiKit.avatar(name, "avatar-xs", false), UiKit.label("@" + name, "suggest-command"))
+                        : new HBox(10, UiKit.label("/" + name, "suggest-command"), UiKit.label(commandHint(name), "suggest-name"));
                 row.getStyleClass().add("suggest-row");
                 if (i == selected) row.getStyleClass().add("selected");
                 row.setAlignment(Pos.CENTER_LEFT);
@@ -1618,6 +1624,20 @@ final class ConversationView {
         void update() {
             String text = input.getText();
             commands = text.startsWith("/") && !text.contains(" ") && !text.contains("\n") ? SlashCommands.complete(text) : List.of();
+            String typedName = commands.isEmpty() ? typedMention(text, input.getCaretPosition()) : null;
+            if (typedName != null) {
+                commands = mentionCandidates(typedName);
+                mentionMode = !commands.isEmpty();
+                if (mentionMode) {
+                    selected = 0;
+                    renderCommands();
+                    StackPane.setMargin(box, new Insets(0, 0, composer.getHeight() + 4, 56));
+                    box.setVisible(true);
+                    box.setManaged(true);
+                    return;
+                }
+            }
+            mentionMode = false;
             String code = commands.isEmpty() ? Emoji.typedShortcode(text, input.getCaretPosition()) : null;
             items = code == null ? List.of() : Emoji.suggest(code, 6);
             selected = 0;
@@ -1683,6 +1703,19 @@ final class ConversationView {
         }
 
         private void insert() {
+            if (mentionMode) {
+                int caret = input.getCaretPosition();
+                String typed = typedMention(input.getText(), caret);
+                if (typed == null) return;
+                int start = caret - typed.length() - 1;
+                String name = commands.get(selected);
+                input.replaceText(start, caret, "@" + name + " ");
+                input.positionCaret(start + name.length() + 2);
+                mentionMode = false;
+                hide();
+                input.requestFocus();
+                return;
+            }
             if (!commands.isEmpty()) {
                 input.setText("/" + commands.get(selected) + " ");
                 input.positionCaret(input.getText().length());
@@ -1699,6 +1732,29 @@ final class ConversationView {
             hide();
             input.requestFocus();
         }
+    }
+
+    /** The name being typed after "@" just before the caret (possibly empty), or null. */
+    static String typedMention(String text, int caret) {
+        if (caret > text.length()) return null;
+        int i = caret - 1;
+        while (i >= 0 && (Character.isLetterOrDigit(text.charAt(i)) || text.charAt(i) == '_' || text.charAt(i) == '.')) i--;
+        if (i < 0 || text.charAt(i) != '@') return null;
+        if (i > 0 && !Character.isWhitespace(text.charAt(i - 1)) && text.charAt(i - 1) != '(') return null;
+        return text.substring(i + 1, caret).toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** People in this chat whose name starts with what is typed (not ourselves). */
+    private List<String> mentionCandidates(String prefix) {
+        String me = session.client().username();
+        List<String> people = new java.util.ArrayList<>();
+        if (peer != null) {
+            people.add(peer);
+        } else {
+            Packet.GroupInfo g = group();
+            if (g != null) g.members().forEach(m -> people.add(m.username()));
+        }
+        return people.stream().filter(u -> !u.equals(me) && u.startsWith(prefix)).sorted().limit(6).toList();
     }
 
     private static String commandHint(String name) {
@@ -1950,6 +2006,9 @@ final class ConversationView {
         t.getStyleClass().add("md");
         for (Markdown.Style style : span.styles()) t.getStyleClass().add("md-" + style.name().toLowerCase(java.util.Locale.ROOT));
         if (span.has(Markdown.Style.STRIKE)) t.setStrikethrough(true);
+        if (span.has(Markdown.Style.MENTION) && span.text().substring(1).equalsIgnoreCase(session.client().username())) {
+            t.getStyleClass().add("md-mention-me");
+        }
         if (span.has(Markdown.Style.LINK)) {
             t.setUnderline(true);
             t.setCursor(javafx.scene.Cursor.HAND);

@@ -729,6 +729,38 @@ public final class History implements AutoCloseable {
         return result;
     }
 
+    /** Unread messages across all conversations, newest first (for "while you were away"). */
+    public synchronized List<Message> unreadMessages(int limit) throws IOException {
+        return query("SELECT " + COLUMNS + " FROM messages WHERE unread = 1 ORDER BY id DESC LIMIT ?", ps -> ps.setInt(1, limit));
+    }
+
+    /** Messages of every conversation sent since a time, oldest first. */
+    public synchronized List<Message> since(long millis, int limit) throws IOException {
+        List<Message> newestFirst = query("SELECT " + COLUMNS + " FROM messages WHERE sent_at >= ? ORDER BY id DESC LIMIT ?", ps -> {
+            ps.setLong(1, millis);
+            ps.setInt(2, limit);
+        });
+        java.util.Collections.reverse(newestFirst);
+        return newestFirst;
+    }
+
+    private interface Binder {
+        void bind(PreparedStatement ps) throws SQLException;
+    }
+
+    private List<Message> query(String sql, Binder binder) throws IOException {
+        List<Message> result = new ArrayList<>();
+        try (PreparedStatement ps = db.prepareStatement(sql)) {
+            binder.bind(ps);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) result.add(row(rs));
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        return result;
+    }
+
     /** The {@code limit} messages just before {@code beforeId} (older pages, for scrolling back), oldest first. */
     public synchronized List<Message> loadBefore(String conversation, long beforeId, int limit) throws IOException {
         List<Message> result = new ArrayList<>();

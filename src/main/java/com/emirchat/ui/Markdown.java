@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
  * <p>Nothing here ever runs or loads anything: links are only shown, and opened by the user.
  */
 final class Markdown {
-    enum Style { BOLD, ITALIC, STRIKE, CODE, LINK, KEYWORD, STRING, COMMENT, NUMBER }
+    enum Style { BOLD, ITALIC, STRIKE, CODE, LINK, MENTION, KEYWORD, STRING, COMMENT, NUMBER }
 
     enum Kind { PARAGRAPH, QUOTE, CODE }
 
@@ -30,14 +30,27 @@ final class Markdown {
     record Block(Kind kind, String language, List<Span> spans) {}
 
     private static final Pattern FENCE = Pattern.compile("^```\\s*([A-Za-z0-9+#._-]*)\\s*$");
+    /** "@efe" as a username (3-20 of a-z 0-9 _ .), not inside an e-mail address; a final "." is punctuation. */
+    private static final Pattern MENTION = Pattern.compile("@([a-z0-9_.]{3,20})(?![a-z0-9_])", Pattern.CASE_INSENSITIVE);
     private static final Pattern URL = Pattern.compile("https?://[^\\s<>\"`]+[^\\s<>\"`.,;:!?)\\]}'*_~]");
 
     private Markdown() {}
 
     /** True if the text uses any formatting at all (plain messages keep the simple label). */
     static boolean hasFormatting(String text) {
-        return text.contains("*") || text.contains("_") || text.contains("`") || text.contains("~~")
+        return text.contains("*") || text.contains("_") || text.contains("@") || text.contains("`") || text.contains("~~")
                 || text.contains("http://") || text.contains("https://") || text.startsWith(">") || text.contains("\n>");
+    }
+
+    /** True if the text mentions {@code user} as @user (any case). */
+    static boolean mentions(String text, String user) {
+        if (text == null || !text.contains("@")) return false;
+        for (Block b : parse(text)) {
+            for (Span s : b.spans()) {
+                if (s.has(Style.MENTION) && s.text().substring(1).equalsIgnoreCase(user)) return true;
+            }
+        }
+        return false;
     }
 
     /** The text without formatting marks, on one line (chat list previews, quotes, notifications). */
@@ -124,6 +137,19 @@ final class Markdown {
                     continue;
                 }
             }
+            if (c == '@' && (i == 0 || !Character.isLetterOrDigit(text.charAt(i - 1)))) {
+                Matcher m = MENTION.matcher(text);
+                if (m.find(i) && m.start() == i) {
+                    String name = m.group(1);
+                    while (name.endsWith(".")) name = name.substring(0, name.length() - 1);
+                    if (name.length() >= 3) {
+                        emit(plain, outer, out);
+                        out.add(new Span("@" + name, with(outer, Style.MENTION)));
+                        i += 1 + name.length();
+                        continue;
+                    }
+                }
+            }
             String marker = text.startsWith("**", i) ? "**" : text.startsWith("~~", i) ? "~~"
                     : c == '*' || c == '_' ? String.valueOf(c) : null;
             if (marker != null && opensAt(text, i, marker)) {
@@ -187,7 +213,7 @@ final class Markdown {
         List<Span> out = new ArrayList<>();
         for (Span s : spans) {
             if (!out.isEmpty() && out.get(out.size() - 1).styles().equals(s.styles()) && !s.has(Style.LINK)
-                    && !out.get(out.size() - 1).has(Style.LINK)) {
+                    && !out.get(out.size() - 1).has(Style.LINK) && !s.has(Style.MENTION)) {
                 Span last = out.remove(out.size() - 1);
                 out.add(new Span(last.text() + s.text(), last.styles()));
             } else {

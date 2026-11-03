@@ -111,4 +111,17 @@ class MarkdownTest {
         assertEquals("a b c", Markdown.plain("a\nb\nc"));
         assertEquals("Selam!", Markdown.plain("Selam!"));
     }
+
+    @Test
+    void mentions() {
+        List<Span> s = Markdown.inline("@efe ve @ayse., bakar mısınız? mail: a@efe.com");
+        assertTrue(spanWith(s, "@efe").has(Style.MENTION));
+        assertTrue(spanWith(s, "@ayse").has(Style.MENTION), "a final dot is punctuation");
+        assertEquals("@efe ve @ayse., bakar mısınız? mail: a@efe.com", text(s));
+        assertEquals(2, s.stream().filter(x -> x.has(Style.MENTION)).count(), "not inside an e-mail address");
+        assertTrue(Markdown.mentions("Selam @Emir!", "emir"));
+        assertFalse(Markdown.mentions("emir@example.org", "emir"));
+        assertFalse(Markdown.mentions("@emirhan", "emir"), "a longer name is someone else");
+        assertFalse(Markdown.mentions("`@emir`", "emir"), "not inside code");
+    }
 }

@@ -167,6 +167,8 @@ final class MainView implements AccountSession.View {
         voiceBar.setVisible(false);
         frame.setCenter(new VBox(callBar, voiceBar, content));
         stack.getChildren().add(frame);
+        stack.getStyleClass().add("main-view");
+        stack.setUserData(this); // lets the preview tool open the welcome-back screen
         stack.sceneProperty().addListener((o, a, scene) -> {
             if (scene != null) scene.getAccelerators().put(
                     new javafx.scene.input.KeyCodeCombination(javafx.scene.input.KeyCode.K,
@@ -178,6 +180,7 @@ final class MainView implements AccountSession.View {
             session.downloads().execute(() -> UpdateCheck.newerVersion().ifPresent(v -> Platform.runLater(() -> showUpdate(v))));
         }
         if (!AppPrefs.welcomeShown()) Platform.runLater(() -> openWelcome(0));
+        else Platform.runLater(this::maybeCatchUp);
     }
 
     private void showUpdate(String version) {
@@ -980,6 +983,8 @@ final class MainView implements AccountSession.View {
         out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("community.new"), I18n.t("palette.action"), "new-community", this::openNewCommunity));
         out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("community.join"), I18n.t("palette.action"), "join-community", this::openJoinCommunity));
         out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("main.myKey"), I18n.t("palette.action"), "my-key", this::openMyKey));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("catchup.title"), I18n.t("palette.action"), "catch-up",
+                () -> showCatchUp(0, true)));
         out.add(new Palette.Entry(Palette.Kind.ACTION, Theme.isDark() ? I18n.t("palette.light") : I18n.t("palette.dark"),
                 I18n.t("palette.action"), "theme", () -> {
                     AppPrefs.setTheme(Theme.isDark() ? "light" : "dark");
@@ -1972,10 +1977,201 @@ final class MainView implements AccountSession.View {
         focusHooked = true;
         stack.getScene().getWindow().focusedProperty().addListener((o, a, focused) -> {
             if (focused && current != null) current.windowFocused();
+            if (!focused) AppPrefs.setLastSeen(System.currentTimeMillis());
+            else maybeCatchUp();
         });
     }
 
+    /** After a long enough absence (and with something to show), the welcome-back screen. */
+    static final long AWAY_MS = 20 * 60_000;
+
+    private void maybeCatchUp() {
+        long last = AppPrefs.lastSeen();
+        long now = System.currentTimeMillis();
+        if (last <= 0 || now - last < AWAY_MS || overlayOpen()) return;
+        AppPrefs.setLastSeen(now);
+        showCatchUp(now - last, false);
+    }
+
+    private boolean overlayOpen() {
+        return stack.lookup(".overlay") != null;
+    }
+
+    /**
+     * "Welcome back": your own sky, how long you were away, and what is waiting (mentions, polls
+     * without your vote, replies in your threads, the busiest chats), worked out from the local
+     * history. {@code always}: also when there is nothing new (from the quick switcher).
+     */
+    void showCatchUp(long awayMillis, boolean always) {
+        String me = session.client().username();
+        session.background().execute(() -> {
+            CatchUp.Digest d;
+            try {
+                d = CatchUp.compute(CatchUp.of(session.history()), me, System.currentTimeMillis());
+            } catch (RuntimeException e) {
+                return;
+            }
+            if (!always && !d.worthShowing()) return;
+            CatchUp.Digest digest = d;
+            Platform.runLater(() -> openCatchUp(digest, awayMillis));
+        });
+    }
+
+    private void openCatchUp(CatchUp.Digest d, long awayMillis) {
+        String me = session.client().username();
+        // the banner: our own sky right now, with the greeting on it
+        Sky sky = new Sky(java.time.ZoneId.systemDefault(), Theme.isDark());
+        sky.fade = false;
+        Label hello = UiKit.label(CatchUp.greeting(java.time.LocalTime.now().getHour()) + ", " + me, "catchup-hello");
+        Label away = UiKit.label(awayMillis > 0 ? I18n.t("catchup.away", CatchUp.away(awayMillis)) : I18n.t("catchup.title"), "catchup-away");
+        VBox words = new VBox(4, hello, away);
+        words.setPadding(new Insets(22, 24, 22, 24));
+        words.setAlignment(Pos.BOTTOM_LEFT);
+        StackPane banner = new StackPane(sky, words);
+        banner.getStyleClass().add("catchup-banner");
+        banner.setMinHeight(130);
+        banner.setPrefHeight(130);
+        javafx.scene.shape.Rectangle round = new javafx.scene.shape.Rectangle();
+        round.setArcWidth(28);
+        round.setArcHeight(28);
+        round.widthProperty().bind(banner.widthProperty());
+        round.heightProperty().bind(banner.heightProperty());
+        banner.setClip(round);
+
+        HBox stats = new HBox(10, statTile(d.unread(), I18n.t("catchup.messages"), "stat-messages"),
+                statTile(d.conversations(), I18n.t("catchup.chats"), "stat-chats"),
+                statTile(d.mentions().size(), I18n.t("catchup.mentions"), "stat-mentions"));
+        VBox body = new VBox(14, stats);
+        if (!d.mentions().isEmpty()) {
+            body.getChildren().add(catchUpSection(I18n.t("catchup.mentionedYou"), d.mentions().stream().map(m ->
+                    catchUpRow(m.sender(), where(m.conversation()), Markdown.plain(m.text()), () -> jumpTo(m))).toList()));
+        }
+        if (!d.openPolls().isEmpty()) {
+            body.getChildren().add(catchUpSection(I18n.t("catchup.polls"), d.openPolls().stream().map(m -> {
+                com.emirchat.chat.Poll p = com.emirchat.chat.Poll.fromStored(m.text());
+                return catchUpRow(m.sender(), where(m.conversation()), "📊 " + (p == null ? "" : p.question()), () -> jumpTo(m));
+            }).toList()));
+        }
+        if (!d.threadReplies().isEmpty()) {
+            body.getChildren().add(catchUpSection(I18n.t("catchup.threads"), d.threadReplies().stream().map(m ->
+                    catchUpRow(m.sender(), where(m.conversation()), Markdown.plain(m.text()), () -> jumpToThread(m))).toList()));
+        }
+        if (!d.busiest().isEmpty()) {
+            int top = d.busiest().get(0).unread();
+            body.getChildren().add(catchUpSection(I18n.t("catchup.busiest"), d.busiest().stream().map(b -> {
+                Region bar = new Region();
+                bar.getStyleClass().add("busy-bar");
+                bar.setPrefWidth(Math.max(10, 140.0 * b.unread() / Math.max(1, top)));
+                bar.setMaxHeight(8);
+                HBox right = new HBox(8, bar, UiKit.label(String.valueOf(b.unread()), "unread-badge"));
+                right.setAlignment(Pos.CENTER_RIGHT);
+                HBox row = catchUpRow(null, where(b.conversation()), Markdown.plain(b.latest().text()), () -> open(b.conversation()));
+                row.getChildren().add(right);
+                return row;
+            }).toList()));
+        }
+        if (d.unread() == 0 && d.openPolls().isEmpty()) body.getChildren().add(UiKit.label(I18n.t("catchup.nothing"), "caption"));
+        ScrollPane scroll = new ScrollPane(body);
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.setPrefViewportHeight(Math.min(360, 90 + 66.0 * (d.mentions().size() + d.openPolls().size() + d.threadReplies().size() + d.busiest().size())));
+        Button allRead = new Button(I18n.t("catchup.allRead"));
+        allRead.setId("catchup-all-read");
+        allRead.setOnAction(e -> {
+            try {
+                for (History.Summary s : session.history().summaries()) session.history().markRead(s.conversation());
+            } catch (IOException ignored) {
+                // the counts stay
+            }
+            overlay.close();
+            refreshSidebar();
+        });
+        allRead.setDisable(d.unread() == 0);
+        Button go = new Button(I18n.t("catchup.continue"));
+        go.getStyleClass().add("primary");
+        go.setId("catchup-continue");
+        go.setDefaultButton(true);
+        go.setOnAction(e -> overlay.close());
+        VBox box = new VBox(16, banner, scroll, new HBox(10, allRead, UiKit.grow(), go));
+        box.getStyleClass().addAll("dialog", "catchup");
+        box.setId("catchup");
+        overlay.show(box);
+    }
+
+    private Node statTile(int value, String label, String id) {
+        Label number = UiKit.label("0", "stat-number");
+        number.setId(id);
+        VBox tile = new VBox(2, number, UiKit.label(label, "stat-label"));
+        tile.getStyleClass().add("stat-tile");
+        HBox.setHgrow(tile, Priority.ALWAYS);
+        tile.setMaxWidth(Double.MAX_VALUE);
+        if (Motion.enabled() && value > 0) {
+            // count up, quickly at first and slowing down at the end
+            javafx.animation.Transition count = new javafx.animation.Transition() {
+                {
+                    setCycleDuration(javafx.util.Duration.millis(Math.min(1200, 400 + value * 40L)));
+                    setInterpolator(javafx.animation.Interpolator.EASE_OUT);
+                }
+
+                @Override protected void interpolate(double f) {
+                    number.setText(String.valueOf(Math.round(value * f)));
+                }
+            };
+            count.play();
+        } else {
+            number.setText(String.valueOf(value));
+        }
+        return tile;
+    }
+
+    private static Node catchUpSection(String title, List<HBox> rows) {
+        VBox box = new VBox(4, UiKit.label(title.toUpperCase(I18n.locale()), "overline"));
+        box.getChildren().addAll(rows);
+        return box;
+    }
+
+    private HBox catchUpRow(String who, String where, String text, Runnable action) {
+        Node face = who == null ? Icons.of(Icons.MESSAGE, 18, "accent") : UiKit.avatar(who, "avatar-xs", false);
+        StackPane faceBox = new StackPane(face);
+        faceBox.setMinWidth(32);
+        Label title = UiKit.label(who == null ? where : who + " · " + where, "row-title");
+        Label snippet = UiKit.label(text, "row-sub");
+        VBox words = new VBox(1, title, snippet);
+        words.setMinWidth(0);
+        HBox.setHgrow(words, Priority.ALWAYS);
+        HBox row = new HBox(10, faceBox, words);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getStyleClass().add("catchup-row");
+        row.setOnMouseClicked(e -> {
+            overlay.close();
+            action.run();
+        });
+        return row;
+    }
+
+    /** "efe" for a direct chat, "# general · MobilCAD" for a channel, the group's name otherwise. */
+    private String where(String conversation) {
+        if (conversation.startsWith("dm:")) return conversation.substring(3);
+        return groupName(Long.parseLong(conversation.substring(2)));
+    }
+
+    private void jumpTo(History.Message m) {
+        open(m.conversation());
+        if (current != null) current.reveal(m.id());
+    }
+
+    private void jumpToThread(History.Message reply) {
+        open(reply.conversation());
+        try {
+            History.Message root = session.history().find(reply.conversation(), reply.replyTo());
+            if (root != null && current != null) current.act(root.id(), "thread");
+        } catch (IOException ignored) {
+            // the chat is open anyway
+        }
+    }
+
     void dispose() {
+        AppPrefs.setLastSeen(System.currentTimeMillis());
         if (current != null) current.dispose();
         UiKit.useKeys(null);
         Tray.get().setUnread(0);
