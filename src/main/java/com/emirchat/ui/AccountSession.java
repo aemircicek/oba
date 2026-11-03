@@ -54,6 +54,51 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
         /** A voice call changed (started, rang, connected, muted or ended). */
         default void call(com.emirchat.call.Calls.Call call) {}
+
+        /** A reply arrived in the thread of {@code rootId} (local id of the first message). */
+        default void threadReply(History.Message reply, long rootId) {}
+
+        /** Messages were pinned or unpinned. */
+        default void pinsChanged(String conversation) {}
+
+        /** Someone changed the topic of a channel or group. */
+        default void topicChanged(String conversation, String by, String topic) {}
+
+        /** Someone voted in a poll. */
+        default void votesChanged(String conversation, long pollId) {}
+
+        /** Our voice room changed (people, speakers, muting), or we joined or left one. */
+        default void voice(com.emirchat.call.VoiceChannels.State state) {}
+
+        /** Who is in the voice rooms of our groups. */
+        default void voiceRooms(java.util.Map<Long, List<String>> rooms) {}
+
+        /** A friend told us their time zone. */
+        default void clockChanged(String user) {}
+    }
+
+    @Override
+    public void voice(com.emirchat.call.VoiceChannels.State state) {
+        fx(v -> v.voice(state));
+    }
+
+    @Override
+    public void voiceRooms(java.util.Map<Long, List<String>> rooms) {
+        fx(v -> v.voiceRooms(rooms));
+    }
+
+    /** Re-reads who is in which voice room (after signing in or reconnecting). */
+    void refreshVoiceLater() {
+        background.execute(() -> {
+            ChatClient c = client;
+            if (c == null) return;
+            try {
+                c.refreshVoiceRooms();
+            } catch (Exception ignored) {
+                // the rooms show up with the next change
+            }
+            fx(v -> v.voice(c.voice().state()));
+        });
     }
 
     private volatile Runnable onConnectionLost;
@@ -80,11 +125,14 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         if (v != null) v.connection(true, 0);
         refreshFriendsLater();
         fx(View::groupsChanged);
+        refreshVoiceLater(); // the old connection left its room; show the rooms as they are now
     }
 
     /** Setting keys (stored per account in the history database). */
     static final String SEND_READ_RECEIPTS = "send-read-receipts";
     static final String SEND_TYPING = "send-typing";
+    /** Tell friends in a direct chat which time zone we are in (for the sky in their chat header). */
+    static final String SHARE_CLOCK = "share-clock";
     static final String NOTIFICATIONS = "notifications";
     static final String NOTIFICATION_PREVIEW = "notification-preview";
 
@@ -196,6 +244,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
     void setView(View view) {
         this.view = view;
+        if (view != null) refreshVoiceLater();
     }
 
     ChatClient client() {
@@ -237,8 +286,20 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     @Override
     public void incoming(ChatClient.Incoming m) {
         String conversation = m.groupId() == 0 ? dm(m.from()) : group(m.groupId());
-        if (m.text() != null) {
-            store(conversation, m.from(), m.text(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo());
+        if (m.poll() != null) {
+            // every field from a peer is sanitized like any text (bidi overrides, controls) before it is stored
+            com.emirchat.chat.Poll clean;
+            try {
+                clean = new com.emirchat.chat.Poll(TerminalSanitizer.sanitize(m.poll().question()).strip(),
+                        m.poll().options().stream().map(o -> TerminalSanitizer.sanitize(o).strip()).toList());
+            } catch (IllegalArgumentException e) {
+                fx(v -> v.problem(I18n.t("session.undecryptable", m.from(), e.getMessage())));
+                return;
+            }
+            store(conversation, m.from(), new ChatMessage(ChatMessage.Type.TEXT, System.currentTimeMillis(), clean.toStored()),
+                    m.envelopeId(), m.expireSeconds(), m.messageId(), new byte[0], false, true);
+        } else if (m.text() != null) {
+            store(conversation, m.from(), m.text(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo(), m.thread(), false);
         } else {
             storeFile(conversation, m.from(), m.file(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo());
         }
@@ -261,7 +322,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                     if (id >= 0) fx(v -> v.messageChanged(conversation, id));
                 }
                 case EDIT -> {
-                    long id = history.edit(conversation, a.target(), a.from(), TerminalSanitizer.sanitize(a.value()));
+                    long id = history.edit(conversation, a.target(), a.from(), TerminalSanitizer.sanitizeMultiline(a.value()));
                     if (id >= 0) fx(v -> v.messageChanged(conversation, id));
                 }
                 case DELETE -> {
@@ -279,9 +340,107 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                 case TYPING -> {
                     if ("1".equals(a.value())) fx(v -> v.typing(conversation, a.from()));
                 }
+                case PIN -> {
+                    if (!mayModerate(a.groupId(), a.from())) return;
+                    long id = history.pin(conversation, a.target(), a.from(), "1".equals(a.value()));
+                    if (id >= 0) fx(v -> v.pinsChanged(conversation));
+                }
+                case TOPIC -> {
+                    if (!mayModerate(a.groupId(), a.from())) return;
+                    String topic = TerminalSanitizer.sanitize(a.value()).strip();
+                    if (topic.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_TOPIC_BYTES) return;
+                    history.setTopic(conversation, topic);
+                    fx(v -> v.topicChanged(conversation, a.from(), topic));
+                }
+                case VOICE_KEY -> { } // handled inside ChatClient; never reaches the app
+                case CLOCK -> {
+                    java.time.ZoneId zone = parseZone(a.value());
+                    if (zone == null || a.groupId() != 0) return;
+                    clocks.put(a.from(), zone);
+                    history.setSetting("clock:" + a.from(), zone.getId());
+                    fx(v -> v.clockChanged(a.from()));
+                    shareClock(a.from()); // answer once, so both skies appear
+                }
+                case VOTE -> {
+                    int choice = parseChoice(a.value());
+                    History.Message poll = history.find(conversation, a.target());
+                    com.emirchat.chat.Poll p = poll == null ? null : com.emirchat.chat.Poll.fromStored(poll.text());
+                    if (p == null || choice >= p.options().size() || choice < -1) return; // only real polls, real answers
+                    long id = history.vote(conversation, a.target(), a.from(), choice);
+                    if (id >= 0) fx(v -> v.votesChanged(conversation, id));
+                }
             }
         } catch (IOException e) {
             fx(v -> v.problem(I18n.t("session.actionFailed", a.from(), e.getMessage())));
+        }
+    }
+
+    private final java.util.Map<String, java.time.ZoneId> clocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<String> clockSent = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** A region time zone (Europe/Istanbul), not an offset or anything made up; null otherwise. */
+    static java.time.ZoneId parseZone(String value) {
+        if (value == null || value.length() > 64 || !java.time.ZoneId.getAvailableZoneIds().contains(value)) return null;
+        try {
+            return java.time.ZoneId.of(value);
+        } catch (java.time.DateTimeException e) {
+            return null;
+        }
+    }
+
+    /** A friend's time zone, if they shared it (remembered across restarts). */
+    java.time.ZoneId clock(String user) {
+        java.time.ZoneId z = clocks.get(user);
+        if (z != null) return z;
+        z = parseZone(history.setting("clock:" + user, ""));
+        if (z != null) clocks.put(user, z);
+        return z;
+    }
+
+    /**
+     * Sends our time zone to a friend once per session, only if we share it and they are online
+     * (like typing notices it is never queued on the server).
+     */
+    void shareClock(String friend) {
+        ChatClient c = client;
+        if (c == null || !setting(SHARE_CLOCK) || !c.isOnline(friend)) return;
+        if (parseZone(java.time.ZoneId.systemDefault().getId()) == null || !clockSent.add(friend)) return; // an offset says little: skip
+        background.execute(() -> {
+            try {
+                c.sendAction(ChatClient.Chat.dm(friend), ChatClient.ActionKind.CLOCK, null, java.time.ZoneId.systemDefault().getId());
+            } catch (Exception e) {
+                clockSent.remove(friend); // try again next time
+            }
+        });
+    }
+
+    /** Longest topic accepted. */
+    static final int MAX_TOPIC_BYTES = 300;
+
+    /**
+     * Who may pin and set the topic: in a community channel its owner and admins, in a direct
+     * chat or a plain group everyone in it.
+     */
+    boolean mayModerate(long groupId, String user) {
+        if (groupId == 0) return true;
+        ChatClient c = client;
+        if (c == null) return false;
+        Packet.GroupInfo g = c.groups().stream().filter(x -> x.id() == groupId).findFirst().orElse(null);
+        if (g == null || !g.hasMember(user)) return false;
+        if (g.community() == 0) return true;
+        Packet.GroupInfo root = c.groups().stream().filter(x -> x.id() == g.community()).findFirst().orElse(null);
+        return root != null && root.canManage(user);
+    }
+
+    /** "" → -1 (vote taken back); a small number → that answer; anything else → an impossible index. */
+    static int parseChoice(String value) {
+        if (value == null || value.isEmpty()) return -1;
+        if (value.length() > 2) return Integer.MAX_VALUE;
+        try {
+            int n = Integer.parseInt(value);
+            return n < 0 ? Integer.MAX_VALUE : n;
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
         }
     }
 
@@ -315,12 +474,26 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     }
 
     private void store(String conversation, String from, ChatMessage message, long envelopeId, long expireSeconds,
-                       byte[] uid, byte[] replyTo) {
+                       byte[] uid, byte[] replyTo, boolean thread, boolean poll) {
         try {
-            String text = TerminalSanitizer.sanitize(message.text());
+            // a poll was sanitized field by field above (its marker is a control character)
+            String text = poll ? message.text() : TerminalSanitizer.sanitizeMultiline(message.text());
             long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
             long id = history.add(conversation, from, text, message.sentAtMillis(), false, History.RECEIVED, envelopeId,
                     expiresAt, uid, replyTo);
+            if (thread) {
+                History.Message root = history.find(conversation, replyTo);
+                if (root != null) {
+                    history.markThread(id);
+                    History.Message stored = history.get(id);
+                    fx(v -> {
+                        v.threadReply(stored, root.id());
+                        v.notifyIncoming(stored);
+                    });
+                    return;
+                }
+                // the thread's first message is gone (or never arrived): show the reply in the chat instead
+            }
             History.Message stored = history.get(id);
             fx(v -> {
                 v.messageStored(stored);

@@ -20,6 +20,8 @@ import java.util.concurrent.TimeUnit;
  */
 public final class ChatServer implements AutoCloseable {
     public static final int DEFAULT_PORT = 5056;
+    /** How often voice rooms are checked for people who are no longer members. */
+    static final long VOICE_SWEEP_MS = 2_000;
 
     /** @param pbkdf2Iterations lower only in tests; production uses {@link #defaultConfig}. */
     public record Config(Path dataDir, String bindAddress, int port, int pbkdf2Iterations) {}
@@ -52,10 +54,19 @@ public final class ChatServer implements AutoCloseable {
         Presence presence = new Presence();
         MessageService messages = new MessageService(db, presence, clock);
         AttachmentService attachments = new AttachmentService(db, messages, config.dataDir().resolve("attachments"), clock);
+        GroupService groups = new GroupService(db, presence);
+        VoiceRooms voice = new VoiceRooms(groups, presence);
+        maintenance.scheduleWithFixedDelay(() -> {
+            try {
+                voice.sweep();
+            } catch (RuntimeException ignored) {
+                // try again next time
+            }
+        }, VOICE_SWEEP_MS, VOICE_SWEEP_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
         this.services = new ClientConnection.Services(identity,
                 new AccountService(db, config.pbkdf2Iterations(), clock),
                 new FriendService(db, presence, clock), messages,
-                new GroupService(db, presence), attachments, presence);
+                groups, attachments, presence, voice);
         attachments.cleanUp();
         maintenance.scheduleAtFixedRate(attachments::cleanUp, 1, 1, TimeUnit.HOURS);
         // Plain TCP by design: ClientConnection runs the authenticated handshake on every socket.

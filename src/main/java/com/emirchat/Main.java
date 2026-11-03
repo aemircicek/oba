@@ -15,7 +15,7 @@ public final class Main {
 
     public static void main(String[] args) {
         // Desktop extras: "--background" (start hidden in the tray) and a backup file opened by
-        // double-click (the installer associates .scbackup files with Scorpion).
+        // double-click (the installer associates .scbackup files with Oba).
         boolean background = false;
         Path backupFile = null;
         java.util.List<String> rest = new java.util.ArrayList<>();

@@ -12,7 +12,7 @@ final class AppPrefs {
 
     private AppPrefs() {}
 
-    /** Closing the window keeps Scorpion running in the tray (receiving messages and notifications). */
+    /** Closing the window keeps Oba running in the tray (receiving messages and notifications). */
     static boolean keepRunning() {
         return NODE.getBoolean("keep-running", true);
     }
@@ -21,7 +21,7 @@ final class AppPrefs {
         NODE.putBoolean("keep-running", on);
     }
 
-    /** True once the user has been told that closing the window keeps Scorpion running. */
+    /** True once the user has been told that closing the window keeps Oba running. */
     static boolean trayHintShown() {
         return NODE.getBoolean("tray-hint-shown", false);
     }
@@ -45,6 +45,70 @@ final class AppPrefs {
 
     static void setWelcomeShown() {
         NODE.putBoolean("welcome-shown", true);
+    }
+
+    /** Turns off decorative animation (the send strike, reaction pops, the curling tail). */
+    static boolean reduceMotion() {
+        return NODE.getBoolean("reduce-motion", false);
+    }
+
+    static void setReduceMotion(boolean on) {
+        NODE.putBoolean("reduce-motion", on);
+    }
+
+    /** Accent colour name (see {@link Appearance#ACCENTS}). */
+    static String accent() {
+        return NODE.get("accent", "amber");
+    }
+
+    static void setAccent(String name) {
+        NODE.put("accent", name);
+    }
+
+    /** "small", "normal" or "large". */
+    static String textSize() {
+        return NODE.get("text-size", "normal");
+    }
+
+    static void setTextSize(String size) {
+        NODE.put("text-size", size);
+    }
+
+    /** Tighter rows and bubbles. */
+    static boolean compact() {
+        return NODE.getBoolean("compact", false);
+    }
+
+    static void setCompact(boolean on) {
+        NODE.putBoolean("compact", on);
+    }
+
+    /** "system", "light" or "dark". */
+    static String theme() {
+        return NODE.get("theme", "system");
+    }
+
+    static void setTheme(String theme) {
+        NODE.put("theme", theme);
+    }
+
+    /** Notification sound name (see {@link Sounds}), or "off". */
+    static String sound() {
+        String s = NODE.get("sound", "chime");
+        return s.equals("rattle") ? "crackle" : s; // renamed with the app
+    }
+
+    static void setSound(String name) {
+        NODE.put("sound", name);
+    }
+
+    /** When the window was last in use (for the welcome-back screen after a long absence). */
+    static long lastSeen() {
+        return NODE.getLong("last-seen", 0);
+    }
+
+    static void setLastSeen(long millis) {
+        NODE.putLong("last-seen", millis);
     }
 
     static void saveWindow(Stage stage) {

@@ -54,4 +54,13 @@ class ChatTest {
             assertEquals("rwx------", PosixFilePermissions.toString(Files.getPosixFilePermissions(home)));
         }
     }
+
+    @org.junit.jupiter.api.Test
+    void multilineKeepsLineBreaksOnly() {
+        org.junit.jupiter.api.Assertions.assertEquals("a\nb", TerminalSanitizer.sanitizeMultiline("a\nb"));
+        org.junit.jupiter.api.Assertions.assertEquals("a\uFFFDb", TerminalSanitizer.sanitizeMultiline("a\rb"));
+        org.junit.jupiter.api.Assertions.assertEquals("x\uFFFD[2J", TerminalSanitizer.sanitizeMultiline("x\u001b[2J"));
+        org.junit.jupiter.api.Assertions.assertEquals("a\n\n\n\nb", TerminalSanitizer.sanitizeMultiline("a" + "\n".repeat(40) + "b"));
+        org.junit.jupiter.api.Assertions.assertEquals("\uFFFDevil", TerminalSanitizer.sanitizeMultiline("\u202Eevil"));
+    }
 }

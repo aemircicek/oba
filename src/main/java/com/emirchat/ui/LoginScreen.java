@@ -43,8 +43,12 @@ final class LoginScreen {
 
     LoginScreen(String savedServer, String savedUser, String notice, DefaultServer defaults, boolean canRemember,
                 Actions actions) {
-        StackPane badge = new StackPane(Icons.of(Icons.SHIELD_CHECK, 28, "accent"));
-        badge.getStyleClass().addAll("icon-badge", "accent");
+        javafx.scene.image.ImageView logo = new javafx.scene.image.ImageView(
+                new javafx.scene.image.Image(LoginScreen.class.getResourceAsStream("icons/icon-128.png")));
+        logo.setFitWidth(64);
+        logo.setPreserveRatio(true);
+        logo.setSmooth(true);
+        StackPane badge = new StackPane(logo);
         Label title = UiKit.label(com.emirchat.AppInfo.NAME, "h1");
         Label tagline = UiKit.label(I18n.t("login.tagline"), "body");
         tagline.setWrapText(true);

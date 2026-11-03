@@ -121,6 +121,7 @@ public final class AccountPreview {
         System.setProperty("securechat.theme", theme);
         I18n.use(System.getProperty("preview.language", "en"));
         System.setProperty("securechat.preview", "true");
+        System.setProperty("securechat.audio", "none"); // never open the real microphone or speaker
         java.util.prefs.Preferences.userNodeForPackage(AppPrefs.class).node("preview-app").clear();
         Files.createDirectories(out);
         work = Files.createTempDirectory("securechat-account-preview");
@@ -185,6 +186,10 @@ public final class AccountPreview {
         waitFor("#friend-ayse");
         Thread.sleep(400);
 
+        // efe is in New York: he shares his time zone, so his sky shows in the chat header
+        efe.client.sendAction(ChatClient.Chat.dm("emir"), ChatClient.ActionKind.CLOCK, null, "America/New_York");
+        Thread.sleep(300);
+
         // A DM conversation
         efe.client.sendText("emir", "Selam Emir! Paftaları bitirdim 🎉");
         efe.client.sendText("emir", "Akşam MobilCAD için müsait misin?");
@@ -205,6 +210,12 @@ public final class AccountPreview {
         efe.client.sendFile("emir", "MobilCAD-sunum.pdf", "application/pdf", new byte[184_320]);
         Thread.sleep(1500);
         snap("05b-files");
+
+        // A voice message from efe (synthetic "speech": tones in syllable-like bursts)
+        efe.client.sendFile("emir", "voice-20261103-140210.wav", com.emirchat.call.VoiceNotes.MIME,
+                com.emirchat.call.VoiceNotes.wav(syntheticSpeech(7)));
+        Thread.sleep(1200);
+        snap("05k-voice");
 
         // Replies, reactions, edits and read receipts, driven from efe's side
         System.setProperty("securechat.notifications", "false");
@@ -227,6 +238,47 @@ public final class AccountPreview {
         efe.client.sendAction(toEmir, ChatClient.ActionKind.TYPING, null, "1");
         Thread.sleep(900);
         snap("05d-rich");
+
+        // Markdown with a code block, the hover tools, :emoji suggestions, the picker and the image viewer
+        efe.client.send(toEmir, "**Not:** son hali `kat-plani.png` dosyasında.\n```java\nint oda = 4; // salon dahil\nString ad = \"MobilCAD\";\n```\n> Bir de şuna bak: https://github.com/aemircicek", 0, null);
+        Thread.sleep(900);
+        fx(() -> {
+            Node last = null;
+            for (Node n : scene.getRoot().lookupAll(".msg-tools")) last = n;
+            if (last != null) last.getParent().setVisible(true);
+            return null;
+        });
+        snap("05g-markdown");
+        fx(() -> {
+            javafx.scene.control.TextInputControl box = (javafx.scene.control.TextInputControl) find("#composer");
+            box.setText("Harika :kal");
+            box.positionCaret(box.getText().length());
+            return null;
+        });
+        Thread.sleep(300);
+        snap("05h-emoji-suggest");
+        fx(() -> {
+            ((javafx.scene.control.TextInputControl) find("#composer")).setText("");
+            ((Button) find("#emoji-button")).fire();
+            return null;
+        });
+        Thread.sleep(300);
+        snap("05i-emoji-picker");
+        fx(() -> { ((Button) find("#emoji-button")).fire(); return null; });
+        fx(() -> { click(find(".file-preview")); return null; });
+        waitFor("#image-viewer");
+        Thread.sleep(500);
+        snap("05j-viewer");
+        fx(() -> { ((Button) find("#viewer-close")).fire(); return null; });
+
+        // efe deletes a message for everyone: it turns to sand (caught mid-way)
+        System.setProperty("securechat.motion", "force");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.DELETE, typo.messageId(), "");
+        Thread.sleep(650);
+        snap("05l-sand");
+        Thread.sleep(1400);
+        System.clearProperty("securechat.motion");
+        snap("05m-sand-after");
 
         fx(() -> { ((TextField) find("#search")).setText("sunum"); return null; });
         Thread.sleep(400);
@@ -284,6 +336,7 @@ public final class AccountPreview {
         ayse.client.sendGroupText(groupId, "Ben de DWG dosya formatını araştırırım.");
         Thread.sleep(300);
         ayse.client.sendGroupText(groupId, "LibreDWG lisansı GPL, dikkat etmeliyiz.");
+        ayse.client.sendGroupText(groupId, "@emir lisans tablosuna bakabilir misin?");
         Thread.sleep(900);
         snap("08-group");
 
@@ -353,6 +406,125 @@ public final class AccountPreview {
         Thread.sleep(800);
         snap("15-community");
 
+        // 3.4: a topic, dice, a poll with votes, a thread, pins and the member list
+        type("/topic Haftalık plan, çizimler ve kararlar");
+        Thread.sleep(400);
+        type("/roll 2d6");
+        Thread.sleep(400);
+        ChatClient.Chat general = ChatClient.Chat.group(joined.id());
+        ChatClient.Sent poll = ayse.client.sendPoll(general, new com.emirchat.chat.Poll("Toplantı ne zaman olsun?",
+                java.util.List.of("Salı 18:00", "Perşembe 18:00", "Cuma öğlen")), 0, ChatClient.newMessageId());
+        Thread.sleep(900);
+        ayse.client.sendAction(general, ChatClient.ActionKind.VOTE, poll.messageId(), "1");
+        efeNew.client.sendAction(general, ChatClient.ActionKind.VOTE, poll.messageId(), "0");
+        ayse.client.sendThreadReply(general, poll.messageId(), "Perşembe herkese uyar mı?", 0, ChatClient.newMessageId());
+        efeNew.client.sendThreadReply(general, poll.messageId(), "Bana **uyar** 👍", 0, ChatClient.newMessageId());
+        Thread.sleep(1200);
+        long pollId = fx(() -> {
+            for (Node n : scene.getRoot().lookupAll(".poll-option")) {
+                String id = n.getId();
+                if (id != null && id.endsWith("-1")) {
+                    click(n);
+                    return Long.parseLong(id.split("-")[2]);
+                }
+            }
+            throw new IllegalStateException("no poll");
+        });
+        Thread.sleep(500);
+        snap("15b-poll-topic");
+        fx(() -> {
+            ((ConversationView) find(".conversation-layer").getUserData()).act(pollId, "pin");
+            ((Button) find("#pins-button")).fire();
+            return null;
+        });
+        Thread.sleep(500);
+        snap("15c-pins");
+        fx(() -> { click(find("#thread-link-" + pollId)); return null; });
+        waitFor("#thread-input");
+        Thread.sleep(400);
+        snap("15d-thread");
+        fx(() -> { ((Button) find("#members-button")).fire(); return null; });
+        Thread.sleep(400);
+        snap("15e-members");
+        fx(() -> { ((Button) find("#side-close")).fire(); return null; });
+        fx(() -> {
+            javafx.scene.control.TextInputControl box = (javafx.scene.control.TextInputControl) find("#composer");
+            box.setText("/");
+            box.positionCaret(1);
+            return null;
+        });
+        Thread.sleep(300);
+        snap("15f-commands");
+        fx(() -> { ((javafx.scene.control.TextInputControl) find("#composer")).setText(""); return null; });
+
+        // A voice room: emir drops in, ayse joins and talks (a tone), her face lights up
+        ayse.client.useAudioDevices(ToneDevice::new);
+        efeNew.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
+        fx(() -> { ((Button) find("#voice-join")).fire(); return null; });
+        waitFor("#campfire");
+        ayse.client.voice().join(joined.id());
+        efeNew.client.voice().join(joined.id());
+        Thread.sleep(1500);
+        snap("15h-campfire");
+        // ayse wanders to the small fire on the left and keeps talking: quieter, from the left
+        ayse.client.voice().moveTo(0.25, 0.30);
+        efeNew.client.voice().moveTo(0.86, 0.74);
+        Thread.sleep(2200);
+        snap("15i-campfire-apart");
+        fx(() -> { ((Button) find("#campfire-back")).fire(); return null; });
+        Thread.sleep(500);
+        snap("15g-voice");
+        // the community as a map of oases, while people sit at the fire of # general
+        fx(() -> { click(find("#rail-community-" + joined.id())); return null; });
+        waitFor("#community-map");
+        Thread.sleep(700);
+        snap("15j-map");
+        fx(() -> { ((Button) find("#voice-leave")).fire(); return null; });
+        ayse.client.voice().leave();
+        efeNew.client.voice().leave();
+        Thread.sleep(600);
+
+        // Welcome back: as if emir had been away for 3 h 12 min, with new messages waiting
+        fx(() -> { click(find("#rail-home")); return null; });
+        ayse.client.sendGroupText(groupId, "@emir toplantı notlarını paylaştım 📎");
+        ayse.client.sendText("emir", "Akşam görüşelim mi?");
+        Thread.sleep(900);
+        fx(() -> {
+            ((MainView) find(".main-view").getUserData()).showCatchUp((3 * 60 + 12) * 60_000L, true);
+            return null;
+        });
+        waitFor("#catchup");
+        Thread.sleep(600);
+        snap("19a-catchup");
+        fx(() -> { ((Button) find("#catchup-continue")).fire(); return null; });
+        Thread.sleep(300);
+
+        // The quick switcher (Ctrl+K) and the appearance settings
+        fx(() -> {
+            scene.getAccelerators().entrySet().stream()
+                    .filter(e -> e.getKey().getName().contains("K")).findFirst().orElseThrow().getValue().run();
+            return null;
+        });
+        waitFor("#palette-query");
+        fx(() -> { ((TextField) find("#palette-query")).setText("tas"); return null; });
+        Thread.sleep(400);
+        snap("19-palette");
+        fx(() -> {
+            scene.getRoot().fireEvent(new javafx.scene.input.KeyEvent(javafx.scene.input.KeyEvent.KEY_PRESSED, "", "",
+                    javafx.scene.input.KeyCode.ESCAPE, false, false, false, false));
+            Node layer = scene.lookup(".overlay");
+            if (layer != null) ((StackPane) layer.getParent()).getChildren().remove(layer);
+            return null;
+        });
+        fx(() -> { ((Button) find("#settings")).fire(); return null; });
+        waitFor("#appearance");
+        fx(() -> { ((Button) find("#appearance")).fire(); return null; });
+        waitFor("#appearance-dialog");
+        Thread.sleep(400);
+        snap("20-appearance");
+        fx(() -> { ((Button) find("#appearance-done")).fire(); return null; });
+        Thread.sleep(300);
+
         // A voice call from ayse: ringing, answered, talking (silent devices: no real microphone)
         ayse.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
         ayse.client.calls().call("emir");
@@ -387,13 +559,65 @@ public final class AccountPreview {
         System.exit(0);
     }
 
+    /** A "microphone" that hums a tone while started (for the voice room picture). */
+    private static final class ToneDevice implements com.emirchat.call.AudioDevice {
+        private volatile boolean on;
+
+        @Override public void start(java.util.function.Consumer<byte[]> captured) {
+            on = true;
+            Thread.ofPlatform().daemon().start(() -> {
+                int f = 0;
+                while (on) {
+                    byte[] frame = new byte[FRAME_BYTES];
+                    for (int i = 0; i < FRAME_BYTES / 2; i++) {
+                        short v = (short) (Math.sin(2 * Math.PI * 220 * (f * 160 + i) / 8000.0) * 16000);
+                        frame[2 * i] = (byte) v;
+                        frame[2 * i + 1] = (byte) (v >> 8);
+                    }
+                    captured.accept(frame);
+                    f++;
+                    try {
+                        Thread.sleep(20);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            });
+        }
+
+        @Override public void play(byte[] frame) {}
+
+        @Override public void stop() {
+            on = false;
+        }
+    }
+
+    /** Seconds of speech-like sound: a few harmonics whose loudness rises and falls like syllables. */
+    private static byte[] syntheticSpeech(int seconds) {
+        int n = seconds * 8000;
+        byte[] pcm = new byte[n * 2];
+        java.util.Random random = new java.util.Random(7);
+        double envelope = 0;
+        double target = 0;
+        for (int i = 0; i < n; i++) {
+            if (i % 1400 == 0) target = random.nextDouble() < 0.25 ? 0.05 : 0.3 + random.nextDouble() * 0.7;
+            envelope += (target - envelope) * 0.002;
+            double t = i / 8000.0;
+            double v = Math.sin(2 * Math.PI * 180 * t) + 0.5 * Math.sin(2 * Math.PI * 360 * t) + 0.25 * Math.sin(2 * Math.PI * 720 * t);
+            short sample = (short) (v * envelope * 9000);
+            pcm[2 * i] = (byte) sample;
+            pcm[2 * i + 1] = (byte) (sample >> 8);
+        }
+        return pcm;
+    }
+
     private static void pause() throws InterruptedException {
         Thread.sleep(400);
     }
 
     private static void type(String text) throws Exception {
         fx(() -> {
-            ((TextField) find("#composer")).setText(text);
+            ((javafx.scene.control.TextInputControl) find("#composer")).setText(text);
             ((Button) find("#send")).fire();
             return null;
         });

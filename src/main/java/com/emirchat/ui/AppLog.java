@@ -14,7 +14,7 @@ import java.util.logging.SimpleFormatter;
  * passwords, keys or message contents.
  */
 final class AppLog {
-    private static final Logger LOG = Logger.getLogger("scorpion");
+    private static final Logger LOG = Logger.getLogger("oba");
     private static Path dir;
 
     private AppLog() {}
@@ -24,7 +24,7 @@ final class AppLog {
         try {
             dir = Files.createDirectories(home.resolve("logs"));
             System.setProperty("java.util.logging.SimpleFormatter.format", "%1$tF %1$tT %4$s %5$s%6$s%n");
-            FileHandler file = new FileHandler(dir.resolve("scorpion-%g.log").toString(), 1_000_000, 3, true);
+            FileHandler file = new FileHandler(dir.resolve("oba-%g.log").toString(), 1_000_000, 3, true);
             file.setFormatter(new SimpleFormatter());
             LOG.addHandler(file);
             LOG.setUseParentHandlers(false);

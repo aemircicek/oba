@@ -7,8 +7,10 @@ import java.util.Locale;
 
 /** The product's name and version, and where it keeps its data on each operating system. */
 public final class AppInfo {
-    public static final String NAME = "Scorpion";
-    public static final String REPOSITORY = "aemircicek/secure-chat";
+    public static final String NAME = "Oba";
+    /** The app's name until 3.4 (its data folder, saved password and autostart entry are moved over). */
+    public static final String FORMER_NAME = "Scorpion";
+    public static final String REPOSITORY = "aemircicek/oba";
     public static final String WEBSITE = "https://github.com/" + REPOSITORY;
 
     private AppInfo() {}
@@ -20,25 +22,33 @@ public final class AppInfo {
     }
 
     /**
-     * Where keys and history live: {@code %APPDATA%\Scorpion} on Windows,
-     * {@code ~/Library/Application Support/Scorpion} on macOS, {@code $XDG_DATA_HOME/scorpion}
-     * (default {@code ~/.local/share/scorpion}) elsewhere. Data from the old {@code ~/.securechat}
-     * folder is moved there on first start.
+     * Where keys and history live: {@code %APPDATA%\Oba} on Windows,
+     * {@code ~/Library/Application Support/Oba} on macOS, {@code $XDG_DATA_HOME/oba}
+     * (default {@code ~/.local/share/oba}) elsewhere. On first start the data of earlier versions
+     * is moved there: the Scorpion folder, or the even older {@code ~/.securechat}.
      */
     public static Path defaultHome() {
-        Path home = platformHome(System.getProperty("os.name", ""), System.getenv("APPDATA"),
-                System.getenv("XDG_DATA_HOME"), Path.of(System.getProperty("user.home")));
-        return adoptLegacy(Path.of(System.getProperty("user.home"), ".securechat"), home);
+        String os = System.getProperty("os.name", "");
+        String appData = System.getenv("APPDATA");
+        String xdg = System.getenv("XDG_DATA_HOME");
+        Path user = Path.of(System.getProperty("user.home"));
+        Path home = adoptLegacy(platformHome(os, appData, xdg, user, FORMER_NAME), platformHome(os, appData, xdg, user));
+        return adoptLegacy(user.resolve(".securechat"), home);
     }
 
     static Path platformHome(String os, String appData, String xdgDataHome, Path userHome) {
+        return platformHome(os, appData, xdgDataHome, userHome, NAME);
+    }
+
+    static Path platformHome(String os, String appData, String xdgDataHome, Path userHome, String name) {
         String o = os.toLowerCase(Locale.ROOT);
         if (o.contains("win")) {
-            return appData != null && !appData.isBlank() ? Path.of(appData, NAME) : userHome.resolve("AppData/Roaming/" + NAME);
+            return appData != null && !appData.isBlank() ? Path.of(appData, name) : userHome.resolve("AppData/Roaming/" + name);
         }
-        if (o.contains("mac")) return userHome.resolve("Library/Application Support/" + NAME);
-        return xdgDataHome != null && !xdgDataHome.isBlank() ? Path.of(xdgDataHome, "scorpion")
-                : userHome.resolve(".local/share/scorpion");
+        if (o.contains("mac")) return userHome.resolve("Library/Application Support/" + name);
+        String lower = name.toLowerCase(Locale.ROOT);
+        return xdgDataHome != null && !xdgDataHome.isBlank() ? Path.of(xdgDataHome, lower)
+                : userHome.resolve(".local/share/" + lower);
     }
 
     /**

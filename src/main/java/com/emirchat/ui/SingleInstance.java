@@ -19,7 +19,7 @@ import java.util.HexFormat;
 import java.util.function.BiConsumer;
 
 /**
- * Keeps one Scorpion window per data folder. The first instance holds a lock file and listens on
+ * Keeps one Oba window per data folder. The first instance holds a lock file and listens on
  * a loopback port; a second start (from the Start menu, or by double-clicking a backup file)
  * hands its request to the first one and exits. The port and a random token are in an owner-only
  * file, so other users on the computer cannot drive the app.
@@ -54,7 +54,7 @@ final class SingleInstance implements AutoCloseable {
         if (lock == null) {
             channel.close();
             if (sendToRunning(home, command, argument)) return null;
-            throw new IOException("Scorpion is already running but does not answer.");
+            throw new IOException("Oba is already running but does not answer.");
         }
         // Loopback-only IPC between two starts of the app on this computer: it carries "show" or a file
         // path plus a random token from an owner-only file, nothing secret, and never leaves the machine.

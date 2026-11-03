@@ -112,6 +112,15 @@ public final class ServerConnection implements AutoCloseable {
         }
     }
 
+    /** Sends one voice room audio packet (fire and forget, like call audio). */
+    public void sendVoice(long groupId, byte[] data) {
+        try {
+            session.channel().send(Packet.encode(0, new Packet.VoiceAudio(groupId, data)));
+        } catch (IOException | SecurityException ignored) {
+            // the connection is going away; the room is left with it
+        }
+    }
+
     /** Sends a request and waits for the answer; server errors become {@link ApiException}. */
     public Packet call(Packet packet) throws IOException, ApiException {
         try {

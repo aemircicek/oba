@@ -33,6 +33,7 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
@@ -56,14 +57,35 @@ final class MainView implements AccountSession.View {
     private boolean focusHooked;
     private final HBox updateBanner = new HBox(8);
     private final HBox callBar = new HBox(10);
+    private final HBox voiceBar = new HBox(10);
+    private com.emirchat.call.VoiceChannels.State voiceState = com.emirchat.call.VoiceChannels.State.IDLE;
+    private Map<Long, List<String>> voiceRooms = Map.of();
+    private Campfire campfire;           // the voice room's scene, while we are in a room
+    private boolean campfireShown;
+    private long mapShown;               // the community whose map is on screen, or 0
     private javafx.animation.Timeline callTicker;
     private javafx.animation.PauseTransition callHide;
-    private final Label connectionLabel = UiKit.label("● " + I18n.t("main.connected"), "row-sub", "accent-text");
+    /** The strip at the far left: home, one icon per community, and "+" (like a server list). */
+    private final VBox rail = new VBox(8);
+    private final Label connectionLabel = UiKit.label(I18n.t("main.connected"), "row-sub", "success-text");
+    private final Flame connectionFlame = Flame.status(16);
 
     MainView(AccountSession session, Runnable onLogout) {
         this.session = session;
         this.onLogout = onLogout;
         ChatClient client = session.client();
+        String myFingerprint = Identity.fingerprint(client.deviceKey());
+        UiKit.useKeys(new UiKit.Keys() {
+            @Override public String fingerprint(String user) {
+                return user.equals(client.username()) ? myFingerprint : client.currentFingerprint(user);
+            }
+
+            @Override public UiKit.Trust trust(String user) {
+                if (user.equals(client.username())) return UiKit.Trust.KNOWN;
+                if (client.keyChanged(user)) return UiKit.Trust.CHANGED;
+                return client.isVerified(user) ? UiKit.Trust.VERIFIED : UiKit.Trust.KNOWN;
+            }
+        });
 
         // Sidebar header
         Button logout = new Button();
@@ -77,7 +99,9 @@ final class MainView implements AccountSession.View {
         me.getStyleClass().add("icon-button");
         me.setTooltip(new Tooltip(I18n.t("main.myKey")));
         me.setOnAction(e -> openMyKey());
-        VBox meText = new VBox(0, UiKit.label(client.username(), "me-name"), connectionLabel);
+        HBox connection = new HBox(5, connectionFlame, connectionLabel);
+        connection.setAlignment(Pos.CENTER_LEFT);
+        VBox meText = new VBox(1, UiKit.label(client.username(), "me-name"), connection);
         Button settings = new Button();
         settings.setGraphic(Icons.of(Icons.SETTINGS, 16, null));
         settings.getStyleClass().add("icon-button");
@@ -106,15 +130,19 @@ final class MainView implements AccountSession.View {
             refreshSidebar();
         });
         chatsTab.setSelected(true);
-        HBox segmented = new HBox(chatsTab, communitiesTab, friendsTab);
+        HBox segmented = new HBox(chatsTab, friendsTab);
         segmented.getStyleClass().add("segmented");
+        segmented.visibleProperty().bind(communitiesTab.selectedProperty().not());
+        segmented.managedProperty().bind(segmented.visibleProperty());
+        communitiesTab.setVisible(false);
+        communitiesTab.setManaged(false);
         search.setId("search");
         search.setPromptText(I18n.t("main.search"));
         search.getStyleClass().add("search");
         search.textProperty().addListener((o, a, b) -> refreshSidebar());
         search.visibleProperty().bind(chatsTab.selectedProperty());
         search.managedProperty().bind(search.visibleProperty());
-        VBox tabBox = new VBox(10, segmented, search);
+        VBox tabBox = new VBox(10, segmented, search, communitiesTab);
         tabBox.getStyleClass().add("sidebar-section");
 
         ScrollPane listScroll = new ScrollPane(list);
@@ -127,18 +155,35 @@ final class MainView implements AccountSession.View {
         sidebar.getStyleClass().add("sidebar");
 
         showEmpty();
-        frame.setLeft(sidebar);
+        rail.getStyleClass().add("rail");
+        rail.setAlignment(Pos.TOP_CENTER);
+        ScrollPane railScroll = new ScrollPane(rail);
+        railScroll.setFitToWidth(true);
+        railScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        railScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        railScroll.getStyleClass().add("rail-scroll");
+        frame.setLeft(new HBox(railScroll, sidebar));
         callBar.managedProperty().bind(callBar.visibleProperty());
         callBar.setVisible(false);
         VBox.setVgrow(content, Priority.ALWAYS);
-        frame.setCenter(new VBox(callBar, content));
+        voiceBar.managedProperty().bind(voiceBar.visibleProperty());
+        voiceBar.setVisible(false);
+        frame.setCenter(new VBox(callBar, voiceBar, content));
         stack.getChildren().add(frame);
+        stack.getStyleClass().add("main-view");
+        stack.setUserData(this); // lets the preview tool open the welcome-back screen
+        stack.sceneProperty().addListener((o, a, scene) -> {
+            if (scene != null) scene.getAccelerators().put(
+                    new javafx.scene.input.KeyCodeCombination(javafx.scene.input.KeyCode.K,
+                            javafx.scene.input.KeyCombination.SHORTCUT_DOWN), this::openPalette);
+        });
         refreshSidebar();
         session.setView(this);
         if (AppPrefs.checkUpdates()) {
             session.downloads().execute(() -> UpdateCheck.newerVersion().ifPresent(v -> Platform.runLater(() -> showUpdate(v))));
         }
         if (!AppPrefs.welcomeShown()) Platform.runLater(() -> openWelcome(0));
+        else Platform.runLater(this::maybeCatchUp);
     }
 
     private void showUpdate(String version) {
@@ -244,7 +289,77 @@ final class MainView implements AccountSession.View {
 
     // ------------------------------------------------------------------ sidebar
 
+    /** Home, then every community as a rounded icon with an unread dot, then "+". */
+    private void buildRail() {
+        rail.getChildren().clear();
+        boolean home = !communitiesTab.isSelected();
+        Map<String, History.Summary> summaries = summaries();
+        int homeUnread = 0;
+        for (History.Summary s : summaries.values()) {
+            if (s.conversation().startsWith("dm:") || isPlainGroup(s.conversation())) homeUnread += unread(s.conversation(), summaries);
+        }
+        javafx.scene.image.ImageView logo = new javafx.scene.image.ImageView(
+                new javafx.scene.image.Image(MainView.class.getResourceAsStream("icons/icon-64.png")));
+        logo.setFitWidth(30);
+        logo.setPreserveRatio(true);
+        rail.getChildren().add(railItem(logo, I18n.t("rail.home"), home, homeUnread > 0, "rail-home", () -> {
+            selectedCommunity = 0;
+            chatsTab.setSelected(true);
+        }));
+        Region line = new Region();
+        line.getStyleClass().add("rail-line");
+        rail.getChildren().add(line);
+        ChatClient c = session.client();
+        List<Packet.GroupInfo> roots = c.groups().stream().filter(Packet.GroupInfo::isCommunity)
+                .sorted(java.util.Comparator.comparing(ConversationView::groupName, String.CASE_INSENSITIVE_ORDER)).toList();
+        for (Packet.GroupInfo root : roots) {
+            int unread = c.channels(root.id()).stream().mapToInt(ch -> unread(AccountSession.group(ch.id()), summaries)).sum();
+            boolean selected = communitiesTab.isSelected() && selectedCommunity == root.id();
+            String name = ConversationView.groupName(root);
+            rail.getChildren().add(railItem(UiKit.communityIcon(name, root.id()), name, selected, unread > 0,
+                    "rail-community-" + root.id(), () -> {
+                        selectedCommunity = root.id();
+                        if (!communitiesTab.isSelected()) communitiesTab.setSelected(true);
+                        showMap(root.id());
+                    }));
+        }
+        Label plus = UiKit.label("+", "rail-plus");
+        rail.getChildren().add(railItem(plus, I18n.t("rail.add"), communitiesTab.isSelected() && selectedCommunity == 0, false,
+                "rail-add", () -> {
+                    selectedCommunity = 0;
+                    if (!communitiesTab.isSelected()) communitiesTab.setSelected(true);
+                    else refreshSidebar();
+                }));
+    }
+
+    /** Which channel was last open in each community, so coming back lands there. */
+    private final Map<Long, Long> lastChannel = new java.util.HashMap<>();
+
+    private boolean isPlainGroup(String conversation) {
+        if (!conversation.startsWith("g:")) return false;
+        Packet.GroupInfo g = group(Long.parseLong(conversation.substring(2)));
+        return g != null && g.community() == 0;
+    }
+
+    private Node railItem(Node icon, String tip, boolean selected, boolean unread, String id, Runnable action) {
+        StackPane face = new StackPane(icon);
+        face.getStyleClass().add("rail-face");
+        if (selected) face.getStyleClass().add("selected");
+        Region pill = new Region();
+        pill.getStyleClass().add("rail-pill");
+        pill.setVisible(selected || unread);
+        if (!selected) pill.getStyleClass().add("small");
+        StackPane item = new StackPane(face, pill);
+        StackPane.setAlignment(pill, Pos.CENTER_LEFT);
+        item.getStyleClass().add("rail-item");
+        item.setId(id);
+        Tooltip.install(item, new Tooltip(tip));
+        item.setOnMouseClicked(e -> action.run());
+        return item;
+    }
+
     private void refreshSidebar() {
+        buildRail();
         Packet.FriendList friends = session.client().friends();
         int requests = friends.incoming().size();
         friendsBadge.setText(String.valueOf(requests));
@@ -275,7 +390,7 @@ final class MainView implements AccountSession.View {
             String where = m.conversation().startsWith("g:") ? groupName(Long.parseLong(m.conversation().substring(2)))
                     : m.conversation().substring(3);
             Label sub = UiKit.label((m.outgoing() ? "You: " : m.conversation().startsWith("g:") ? m.sender() + ": " : "")
-                    + (m.file() != null ? "📎 " : "") + m.text(), "row-sub");
+                    + (m.file() != null ? "📎 " : "") + Markdown.plain(m.text()), "row-sub");
             VBox text = new VBox(2, UiKit.label(where, "row-title"), sub);
             text.setMinWidth(0);
             HBox row = new HBox(10, text, UiKit.grow(), UiKit.label(UiKit.time(m.sentAt()), "row-time"));
@@ -343,8 +458,10 @@ final class MainView implements AccountSession.View {
             if (roots.isEmpty()) {
                 Label empty = UiKit.label(I18n.t("community.none"), "caption");
                 empty.setWrapText(true);
-                empty.setPadding(new Insets(10, 14, 0, 14));
-                list.getChildren().add(empty);
+                VBox box = new VBox(10, Illustrations.desert(220), empty);
+                box.setAlignment(Pos.CENTER);
+                box.setPadding(new Insets(14, 14, 0, 14));
+                list.getChildren().add(box);
             }
             for (Packet.GroupInfo root : roots) {
                 int unread = c.channels(root.id()).stream().mapToInt(ch -> unread(AccountSession.group(ch.id()), summaries)).sum();
@@ -382,7 +499,13 @@ final class MainView implements AccountSession.View {
         settings.setTooltip(new Tooltip(I18n.t("community.settings")));
         settings.setId("community-settings");
         settings.setOnAction(e -> openCommunityInfo(root.id()));
-        HBox top = new HBox(6, back, name, UiKit.grow(), settings);
+        Button mapButton = new Button();
+        mapButton.setGraphic(Icons.of(Icons.MAP, 15, mapShown == root.id() ? "accent" : "muted"));
+        mapButton.getStyleClass().addAll("small", "attach");
+        mapButton.setTooltip(new Tooltip(I18n.t("map.open")));
+        mapButton.setId("community-map-button");
+        mapButton.setOnAction(e -> showMap(root.id()));
+        HBox top = new HBox(6, back, name, UiKit.grow(), mapButton, settings);
         top.setAlignment(Pos.CENTER_LEFT);
         top.setPadding(new Insets(4, 10, 4, 6));
         list.getChildren().add(top);
@@ -416,7 +539,28 @@ final class MainView implements AccountSession.View {
             row.setId("channel-" + ch.id());
             row.setOnMouseClicked(e -> open(conversation));
             list.getChildren().add(row);
+            addVoiceParticipants(ch.id());
         }
+    }
+
+    /** Who is in a channel's (or group's) voice room, under its row: faces light up while they talk. */
+    private void addVoiceParticipants(long groupId) {
+        List<String> people = voiceRooms.getOrDefault(groupId, List.of());
+        if (people.isEmpty()) return;
+        VBox box = new VBox(2);
+        box.getStyleClass().add("voice-people");
+        for (String u : people) {
+            boolean talking = voiceState.groupId() == groupId && voiceState.speaking().contains(u);
+            Label name = UiKit.label(u.equals(session.client().username()) ? I18n.t("group.you", u) : u, "voice-name");
+            HBox row = new HBox(8, UiKit.voiceFace(u, talking, 22), name);
+            if (voiceState.groupId() == groupId && u.equals(session.client().username()) && voiceState.muted()) {
+                row.getChildren().add(Icons.of(Icons.MIC_OFF, 12, "danger"));
+            }
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.setId("voice-person-" + groupId + "-" + u);
+            box.getChildren().add(row);
+        }
+        list.getChildren().add(box);
     }
 
     private void openNewCommunity() {
@@ -627,6 +771,8 @@ final class MainView implements AccountSession.View {
                         AccountSession.SEND_READ_RECEIPTS),
                 toggle(I18n.t("settings.typing"), I18n.t("settings.typingHint"),
                         AccountSession.SEND_TYPING),
+                toggle(I18n.t("settings.clock"), I18n.t("settings.clockHint"),
+                        AccountSession.SHARE_CLOCK),
                 toggle(I18n.t("settings.notifications"), I18n.t("settings.notificationsHint"),
                         AccountSession.NOTIFICATIONS),
                 toggle(I18n.t("settings.preview"), I18n.t("settings.previewHint"),
@@ -677,9 +823,264 @@ final class MainView implements AccountSession.View {
         Button backup = new Button(I18n.t("backup.button"));
         backup.setId("backup");
         backup.setOnAction(e -> openBackup());
-        VBox box = Overlay.dialog(I18n.t("main.settings"), toggles, new HBox(10, backup, UiKit.grow(), done));
+        Button looks = new Button(I18n.t("appearance.title"));
+        looks.setId("appearance");
+        looks.setOnAction(e -> openAppearance());
+        VBox box = Overlay.dialog(I18n.t("main.settings"), toggles, new HBox(10, backup, looks, UiKit.grow(), done));
         box.setId("settings-dialog");
         overlay.show(box);
+    }
+
+    /** Theme, accent colour, text size, density, motion and the notification sound; applied at once. */
+    private void openAppearance() {
+        ComboBox<String> theme = new ComboBox<>();
+        theme.setId("appearance-theme");
+        String[] themes = {"system", "light", "dark"};
+        theme.getItems().addAll(I18n.t("appearance.system"), I18n.t("appearance.light"), I18n.t("appearance.dark"));
+        theme.getSelectionModel().select(java.util.Arrays.asList(themes).indexOf(AppPrefs.theme()));
+        theme.setOnAction(e -> {
+            AppPrefs.setTheme(themes[theme.getSelectionModel().getSelectedIndex()]);
+            Theme.refreshAll();
+            refreshSidebar();
+        });
+        HBox swatches = new HBox(10);
+        swatches.setAlignment(Pos.CENTER_LEFT);
+        Runnable[] drawSwatches = new Runnable[1];
+        drawSwatches[0] = () -> {
+            swatches.getChildren().clear();
+            for (String name : Appearance.ACCENTS.keySet()) {
+                String[][] palette = Appearance.ACCENTS.get(name);
+                String hex = palette == null ? (Theme.isDark() ? "#f2a43a" : "#c0650c") : palette[Theme.isDark() ? 1 : 0][0];
+                javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(13, javafx.scene.paint.Color.web(hex));
+                StackPane swatch = new StackPane(dot);
+                swatch.getStyleClass().add("swatch");
+                if (name.equals(AppPrefs.accent())) swatch.getStyleClass().add("selected");
+                swatch.setId("accent-" + name);
+                Tooltip.install(swatch, new Tooltip(accentName(name)));
+                swatch.setOnMouseClicked(e -> {
+                    AppPrefs.setAccent(name);
+                    Theme.refreshAll();
+                    drawSwatches[0].run();
+                    refreshSidebar();
+                    if (current != null) current.refreshHeader();
+                });
+                swatches.getChildren().add(swatch);
+            }
+        };
+        drawSwatches[0].run();
+        ComboBox<String> size = new ComboBox<>();
+        size.setId("appearance-size");
+        String[] sizes = {"small", "normal", "large"};
+        size.getItems().addAll(I18n.t("appearance.small"), I18n.t("appearance.normal"), I18n.t("appearance.large"));
+        size.getSelectionModel().select(java.util.Arrays.asList(sizes).indexOf(AppPrefs.textSize()));
+        size.setOnAction(e -> {
+            AppPrefs.setTextSize(sizes[size.getSelectionModel().getSelectedIndex()]);
+            Theme.refreshAll();
+        });
+        ComboBox<String> sound = new ComboBox<>();
+        sound.setId("appearance-sound");
+        for (String n : Sounds.NAMES) sound.getItems().add(soundName(n));
+        sound.getSelectionModel().select(Math.max(0, Sounds.NAMES.indexOf(AppPrefs.sound())));
+        sound.setOnAction(e -> {
+            String chosen = Sounds.NAMES.get(sound.getSelectionModel().getSelectedIndex());
+            AppPrefs.setSound(chosen);
+            Sounds.play(chosen);
+        });
+        Button listen = new Button("▶");
+        listen.getStyleClass().add("small");
+        listen.setTooltip(new Tooltip(I18n.t("appearance.listen")));
+        listen.setOnAction(e -> Sounds.play(AppPrefs.sound()));
+        VBox rows = new VBox(14,
+                field(I18n.t("appearance.theme"), theme),
+                field(I18n.t("appearance.accent"), swatches),
+                field(I18n.t("appearance.textSize"), size),
+                appToggle(I18n.t("appearance.compact"), I18n.t("appearance.compactHint"), "appearance-compact",
+                        AppPrefs.compact(), on -> {
+                            AppPrefs.setCompact(on);
+                            Theme.refreshAll();
+                        }),
+                appToggle(I18n.t("appearance.motion"), I18n.t("appearance.motionHint"), "appearance-motion",
+                        AppPrefs.reduceMotion(), AppPrefs::setReduceMotion),
+                field(I18n.t("appearance.sound"), new HBox(8, sound, listen)));
+        Button done = new Button(I18n.t("common.done"));
+        done.getStyleClass().add("primary");
+        done.setId("appearance-done");
+        done.setOnAction(e -> overlay.close());
+        VBox box = Overlay.dialog(I18n.t("appearance.title"), rows, new HBox(UiKit.grow(), done));
+        box.setId("appearance-dialog");
+        overlay.show(box);
+    }
+
+    private static Node field(String label, Node control) {
+        Label l = UiKit.label(label, "field-label");
+        l.setMinWidth(120);
+        HBox row = new HBox(12, l, control);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private static String accentName(String name) {
+        return switch (name) {
+            case "venom" -> I18n.t("appearance.venom");
+            case "sky" -> I18n.t("appearance.sky");
+            case "rose" -> I18n.t("appearance.rose");
+            case "violet" -> I18n.t("appearance.violet");
+            default -> I18n.t("appearance.amber");
+        };
+    }
+
+    private static String soundName(String name) {
+        return switch (name) {
+            case "tock" -> I18n.t("sound.tock");
+            case "drop" -> I18n.t("sound.drop");
+            case "crackle" -> I18n.t("sound.crackle");
+            case "off" -> I18n.t("sound.off");
+            default -> I18n.t("sound.chime");
+        };
+    }
+
+    // ------------------------------------------------------------------ quick switcher
+
+    static boolean isMac() {
+        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac");
+    }
+
+    /** Everything the quick switcher can jump to: recent chats first, then channels, friends and actions. */
+    private List<Palette.Entry> paletteEntries() {
+        ChatClient c = session.client();
+        List<Palette.Entry> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        try {
+            for (History.Summary s : session.history().summaries()) {
+                String conv = s.conversation();
+                if (conv.startsWith("dm:")) {
+                    out.add(new Palette.Entry(Palette.Kind.CHAT, conv.substring(3), I18n.t("palette.dm"), conv, () -> open(conv)));
+                } else {
+                    Packet.GroupInfo g = group(Long.parseLong(conv.substring(2)));
+                    if (g == null) continue;
+                    String title = g.community() != 0 ? ConversationView.channelTitle(g) : ConversationView.groupName(g);
+                    String sub = g.community() != 0 ? communityName(g.community()) : I18n.t("palette.group");
+                    out.add(new Palette.Entry(g.community() != 0 ? Palette.Kind.CHANNEL : Palette.Kind.CHAT, title, sub, conv, () -> open(conv)));
+                }
+                seen.add(conv);
+            }
+        } catch (IOException ignored) {
+            // the rest still works
+        }
+        for (Packet.GroupInfo g : c.groups()) {
+            String conv = AccountSession.group(g.id());
+            if (seen.contains(conv)) continue;
+            if (g.isCommunity()) {
+                out.add(new Palette.Entry(Palette.Kind.COMMUNITY, ConversationView.groupName(g), I18n.t("palette.community"), conv, () -> {
+                    selectedCommunity = g.id();
+                    open(conv);
+                }));
+            } else {
+                String title = g.community() != 0 ? ConversationView.channelTitle(g) : ConversationView.groupName(g);
+                String sub = g.community() != 0 ? communityName(g.community()) : I18n.t("palette.group");
+                out.add(new Palette.Entry(g.community() != 0 ? Palette.Kind.CHANNEL : Palette.Kind.CHAT, title, sub, conv, () -> open(conv)));
+            }
+        }
+        for (Packet.Friend f : c.friends().friends()) {
+            String conv = AccountSession.dm(f.username());
+            if (!seen.contains(conv)) {
+                out.add(new Palette.Entry(Palette.Kind.FRIEND, f.username(), I18n.t("palette.friend"), conv, () -> open(conv)));
+            }
+        }
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("main.settings"), I18n.t("palette.action"), "settings", this::openSettings));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("appearance.title"), I18n.t("palette.action"), "appearance", this::openAppearance));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("conv.newGroup"), I18n.t("palette.action"), "new-group", this::openNewGroup));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("community.new"), I18n.t("palette.action"), "new-community", this::openNewCommunity));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("community.join"), I18n.t("palette.action"), "join-community", this::openJoinCommunity));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("main.myKey"), I18n.t("palette.action"), "my-key", this::openMyKey));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, I18n.t("catchup.title"), I18n.t("palette.action"), "catch-up",
+                () -> showCatchUp(0, true)));
+        out.add(new Palette.Entry(Palette.Kind.ACTION, Theme.isDark() ? I18n.t("palette.light") : I18n.t("palette.dark"),
+                I18n.t("palette.action"), "theme", () -> {
+                    AppPrefs.setTheme(Theme.isDark() ? "light" : "dark");
+                    Theme.refreshAll();
+                    refreshSidebar();
+                    if (current != null) current.refreshHeader();
+                }));
+        return out;
+    }
+
+    private void openPalette() {
+        List<Palette.Entry> entries = paletteEntries();
+        TextField query = new TextField();
+        query.setId("palette-query");
+        query.setPromptText(I18n.t("palette.prompt"));
+        query.getStyleClass().add("palette-query");
+        VBox results = new VBox(2);
+        results.setId("palette-results");
+        List<Palette.Entry> shown = new ArrayList<>();
+        int[] selected = {0};
+        Runnable[] render = new Runnable[1];
+        java.util.function.Consumer<Palette.Entry> go = entry -> {
+            overlay.close();
+            entry.action().run();
+        };
+        render[0] = () -> {
+            shown.clear();
+            shown.addAll(Palette.rank(query.getText(), entries, 9));
+            selected[0] = Math.min(selected[0], Math.max(0, shown.size() - 1));
+            results.getChildren().clear();
+            if (shown.isEmpty()) results.getChildren().add(UiKit.label(I18n.t("palette.nothing"), "caption"));
+            for (int i = 0; i < shown.size(); i++) {
+                Palette.Entry entry = shown.get(i);
+                Node icon = switch (entry.kind()) {
+                    case CHAT -> entry.id().startsWith("g:") ? UiKit.avatar(entry.title(), "avatar-xs", true)
+                            : UiKit.avatar(entry.title(), "avatar-xs", false);
+                    case FRIEND -> UiKit.avatar(entry.title(), "avatar-xs", false);
+                    case CHANNEL -> Icons.of(Icons.MESSAGE, 16, "muted");
+                    case COMMUNITY -> Icons.of(Icons.USERS, 16, "muted");
+                    case ACTION -> Icons.of(Icons.SETTINGS, 16, "muted");
+                };
+                StackPane iconBox = new StackPane(icon);
+                iconBox.setMinWidth(30);
+                HBox row = new HBox(10, iconBox, UiKit.label(entry.title(), "row-title"), UiKit.grow(),
+                        UiKit.label(entry.subtitle() == null ? "" : entry.subtitle(), "row-time"));
+                row.getStyleClass().add("palette-row");
+                if (i == selected[0]) row.getStyleClass().add("selected");
+                row.setAlignment(Pos.CENTER_LEFT);
+                row.setId("palette-" + entry.id().replace(':', '-'));
+                row.setOnMouseClicked(e -> go.accept(entry));
+                results.getChildren().add(row);
+            }
+        };
+        query.textProperty().addListener((o, a, b) -> {
+            selected[0] = 0;
+            render[0].run();
+        });
+        query.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, e -> {
+            switch (e.getCode()) {
+                case DOWN -> {
+                    selected[0] = Math.min(shown.size() - 1, selected[0] + 1);
+                    render[0].run();
+                    e.consume();
+                }
+                case UP -> {
+                    selected[0] = Math.max(0, selected[0] - 1);
+                    render[0].run();
+                    e.consume();
+                }
+                case ENTER -> {
+                    if (!shown.isEmpty()) go.accept(shown.get(selected[0]));
+                    e.consume();
+                }
+                default -> { }
+            }
+        });
+        render[0].run();
+        HBox head = new HBox(10, Icons.of(Icons.SEARCH, 18, "muted"), query);
+        HBox.setHgrow(query, Priority.ALWAYS);
+        head.setAlignment(Pos.CENTER_LEFT);
+        Label keys = UiKit.label(I18n.t("palette.keys"), "caption");
+        VBox box = new VBox(10, head, results, keys);
+        box.getStyleClass().addAll("dialog", "palette");
+        box.setId("palette");
+        overlay.show(box);
+        Platform.runLater(query::requestFocus);
     }
 
     /** An encrypted backup of keys, sessions and history, protected by its own passphrase. */
@@ -800,6 +1201,18 @@ final class MainView implements AccountSession.View {
         }
     }
 
+    /** The question of a stored poll, or null if the text is not one. */
+    static String pollQuestion(String text) {
+        com.emirchat.chat.Poll p = com.emirchat.chat.Poll.fromStored(text);
+        return p == null ? null : p.question();
+    }
+
+    /** Voice messages are files named voice-….wav (see ConversationView#startRecording). */
+    static boolean isVoiceName(String text) {
+        String name = text.startsWith("📎 ") ? text.substring("📎 ".length()) : text;
+        return name.startsWith("voice-") && name.endsWith(".wav") && !name.contains(" ");
+    }
+
     private Node chatRow(String conversation, History.Summary s) {
         ChatClient client = session.client();
         boolean group = conversation.startsWith("g:");
@@ -815,7 +1228,10 @@ final class MainView implements AccountSession.View {
             title = conversation.substring(3);
             avatar = UiKit.avatarWithPresence(title, client.isOnline(title));
         }
-        String last = s == null ? "" : s.lastText().equals(History.DELETED_TEXT) ? I18n.t("conv.deleted") : s.lastText();
+        String last = s == null ? "" : s.lastText().equals(History.DELETED_TEXT) ? I18n.t("conv.deleted")
+                : isVoiceName(s.lastText()) ? "🎤 " + I18n.t("voice.message")
+                : pollQuestion(s.lastText()) != null ? "📊 " + pollQuestion(s.lastText())
+                : Markdown.plain(s.lastText());
         String preview = s == null ? I18n.t("main.noMessages")
                 : (s.lastSender().equals(client.username()) ? I18n.t("conv.you") + ": " : group ? s.lastSender() + ": " : "") + last;
         Label sub = UiKit.label(preview, "row-sub");
@@ -826,6 +1242,10 @@ final class MainView implements AccountSession.View {
         right.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         if (s != null) right.getChildren().add(UiKit.label(UiKit.time(s.lastAt()), "row-time"));
         boolean open = current != null && current.conversation().equals(conversation);
+        if (group) {
+            int inVoice = voiceRooms.getOrDefault(Long.parseLong(conversation.substring(2)), List.of()).size();
+            if (inVoice > 0) right.getChildren().add(UiKit.label("🔊 " + inVoice, "voice-badge"));
+        }
         if (s != null && s.unread() > 0 && !open) right.getChildren().add(UiKit.label(String.valueOf(s.unread()), "unread-badge"));
         if (avatar instanceof javafx.scene.layout.Region r) r.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         HBox row = new HBox(avatar, text, UiKit.grow(), right);
@@ -898,8 +1318,11 @@ final class MainView implements AccountSession.View {
         list.getChildren().add(heading(I18n.t("main.friendsHeading", friends.friends().size())));
         if (friends.friends().isEmpty()) {
             Label none = UiKit.label(I18n.t("main.noFriends"), "caption");
-            none.setPadding(new Insets(4, 14, 0, 14));
-            list.getChildren().add(none);
+            none.setWrapText(true);
+            VBox box = new VBox(10, Illustrations.desert(220), none);
+            box.setAlignment(Pos.CENTER);
+            box.setPadding(new Insets(14, 14, 0, 14));
+            list.getChildren().add(box);
         }
         for (Packet.Friend f : friends.friends()) {
             ChatClient c = session.client();
@@ -934,10 +1357,13 @@ final class MainView implements AccountSession.View {
     // ------------------------------------------------------------------ content
 
     private void showEmpty() {
+        if (current != null) current.dispose();
         current = null;
-        VBox empty = new VBox(12, Icons.of(Icons.LOCK, 40, "muted"),
+        mapShown = 0;
+        Label shortcut = UiKit.label(I18n.t("palette.hint", isMac() ? "⌘K" : "Ctrl+K"), "shortcut-hint");
+        VBox empty = new VBox(12, Illustrations.desert(300),
                 UiKit.label(I18n.t("main.select"), "h2"),
-                UiKit.label(I18n.t("main.selectHint"), "caption"));
+                UiKit.label(I18n.t("main.selectHint"), "caption"), shortcut);
         empty.setAlignment(Pos.CENTER);
         empty.getStyleClass().add("content-empty");
         content.getChildren().setAll(empty);
@@ -950,15 +1376,36 @@ final class MainView implements AccountSession.View {
 
             @Override public void openGroupInfo(long groupId) { MainView.this.openGroupInfo(groupId); }
 
-            @Override public void call(String friend) { session.client().calls().call(friend); }
+            @Override public void call(String friend) {
+                if (voiceState.joined()) {
+                    notice(I18n.t("voice.leaveFirst"), true);
+                    return;
+                }
+                session.client().calls().call(friend);
+            }
+
+            @Override public void joinVoice(long groupId) {
+                session.background().execute(() -> session.client().voice().join(groupId));
+            }
+
+            @Override public boolean inVoice(long groupId) { return voiceState.groupId() == groupId; }
+
+            @Override public int voiceCount(long groupId) { return voiceRooms.getOrDefault(groupId, List.of()).size(); }
         };
+        if (current != null) current.dispose();
         current = conversation.startsWith("g:")
                 ? ConversationView.group(session, Long.parseLong(conversation.substring(2)), actions)
                 : ConversationView.dm(session, conversation.substring(3), actions);
         content.getChildren().setAll(current.root());
+        mapShown = 0;
+        if (campfireShown) {
+            campfireShown = false;
+            if (voiceState.joined()) showVoiceBar(voiceState);
+        }
         Packet.GroupInfo opened = conversation.startsWith("g:") ? group(Long.parseLong(conversation.substring(2))) : null;
         if (opened != null && opened.community() != 0) {
             selectedCommunity = opened.community();
+            lastChannel.put(opened.community(), opened.id());
             if (!communitiesTab.isSelected()) communitiesTab.setSelected(true); else refreshSidebar();
         } else if (!chatsTab.isSelected() && conversation.startsWith("dm:")) {
             chatsTab.setSelected(true); // also refreshes
@@ -1210,6 +1657,7 @@ final class MainView implements AccountSession.View {
             }
         }
         if (!friendsTab.isSelected()) refreshSidebar();
+        if (current == null) refreshMap();
     }
 
     @Override
@@ -1270,14 +1718,16 @@ final class MainView implements AccountSession.View {
 
     @Override
     public void connection(boolean online, int retryInSeconds) {
-        connectionLabel.getStyleClass().removeAll("accent-text", "danger-text");
+        connectionLabel.getStyleClass().removeAll("success-text", "danger-text");
+        boolean wasOnline = "status-online".equals(connectionLabel.getId()) || connectionLabel.getId() == null;
         if (online) {
-            connectionLabel.setText("● " + I18n.t("main.connected"));
-            connectionLabel.getStyleClass().add("accent-text");
+            connectionLabel.setText(I18n.t("main.connected"));
+            connectionLabel.getStyleClass().add("success-text");
         } else {
-            connectionLabel.setText("● " + I18n.t("main.reconnecting", retryInSeconds));
+            connectionLabel.setText(I18n.t("main.reconnecting", retryInSeconds));
             connectionLabel.getStyleClass().add("danger-text");
         }
+        if (online != wasOnline) connectionFlame.setOnline(online);
         connectionLabel.setId(online ? "status-online" : "status-offline");
     }
 
@@ -1285,6 +1735,179 @@ final class MainView implements AccountSession.View {
     public void messageChanged(String conversation, long localId) {
         if (current != null && current.conversation().equals(conversation)) current.refresh(localId);
         refreshSidebar();
+    }
+
+    @Override
+    public void voice(com.emirchat.call.VoiceChannels.State state) {
+        boolean wasJoined = voiceState.joined();
+        long before = voiceState.groupId();
+        voiceState = state;
+        if (state.error() != null) {
+            notice("busy".equals(state.error()) ? I18n.t("voice.busy") : I18n.t("voice.failed", state.error()), true);
+        }
+        if (!state.joined()) {
+            voiceBar.setVisible(false);
+            if (campfire != null) {
+                campfire.stop();
+                if (campfireShown) backFromCampfire();
+                campfire = null;
+            }
+        } else {
+            if (campfire == null || campfire.groupId() != state.groupId()) {
+                if (campfire != null) campfire.stop();
+                Packet.GroupInfo g = group(state.groupId());
+                String title = g == null ? "" : g.community() != 0 ? ConversationView.channelTitle(g) : ConversationView.groupName(g);
+                campfire = new Campfire(session, state.groupId(), title, this::backFromCampfire);
+                showCampfire(); // joining a room takes you to its fire
+            }
+            campfire.update(state);
+            showVoiceBar(state);
+        }
+        if (current != null && (wasJoined != state.joined() || before != state.groupId())) current.refreshHeader();
+        refreshSidebar();
+    }
+
+    @Override
+    public void clockChanged(String user) {
+        if (current != null && user.equals(current.peer())) current.refreshHeader();
+    }
+
+    /** The community as a map of oases (see {@link CommunityMap}). */
+    private void showMap(long communityId) {
+        Packet.GroupInfo root = group(communityId);
+        if (root == null) return;
+        if (current != null) { // the map replaces the open chat (so its unread messages count again)
+            current.dispose();
+            current = null;
+        }
+        ChatClient c = session.client();
+        Map<String, History.Summary> summaries = summaries();
+        List<CommunityMap.Oasis> oases = new ArrayList<>();
+        for (Packet.GroupInfo ch : c.channels(communityId)) {
+            String conv = AccountSession.group(ch.id());
+            History.Summary s = summaries.get(conv);
+            String topic;
+            try {
+                topic = session.history().topic(conv);
+            } catch (IOException e) {
+                topic = "";
+            }
+            String line = s == null ? "" : (s.lastSender().equals(c.username()) ? I18n.t("conv.you") : s.lastSender()) + ": "
+                    + (pollQuestion(s.lastText()) != null ? "📊 " + pollQuestion(s.lastText()) : Markdown.plain(s.lastText()));
+            oases.add(new CommunityMap.Oasis(ch.id(), ConversationView.channelTitle(ch), topic, line,
+                    unread(conv, summaries), s == null ? 0 : s.lastAt(), voiceRooms.getOrDefault(ch.id(), List.of()).size()));
+        }
+        CommunityMap map = new CommunityMap(communityId, ConversationView.groupName(root), oases, new CommunityMap.Actions() {
+            @Override public void open(long channelId) { MainView.this.open(AccountSession.group(channelId)); }
+
+            @Override public void joinVoice(long channelId) {
+                session.background().execute(() -> session.client().voice().join(channelId));
+            }
+        });
+        campfireShown = false;
+        mapShown = communityId;
+        content.getChildren().setAll(map.root());
+        refreshSidebar();
+    }
+
+    /** Redraws the map if one is open (new messages, people in voice rooms). */
+    private void refreshMap() {
+        if (mapShown != 0 && !campfireShown && group(mapShown) != null) showMap(mapShown);
+    }
+
+    private void showCampfire() {
+        if (campfire == null) return;
+        campfireShown = true;
+        content.getChildren().setAll(campfire.root());
+        if (voiceState.joined()) showVoiceBar(voiceState);
+    }
+
+    /** Back from the fire to the chat that was open (or the room's own chat). */
+    private void backFromCampfire() {
+        campfireShown = false;
+        if (current != null) content.getChildren().setAll(current.root());
+        else if (voiceState.joined()) open(AccountSession.group(voiceState.groupId()));
+        else showEmpty();
+        if (voiceState.joined()) showVoiceBar(voiceState);
+    }
+
+    @Override
+    public void voiceRooms(Map<Long, List<String>> rooms) {
+        voiceRooms = rooms;
+        refreshSidebar();
+        refreshMap();
+    }
+
+    /** The bar over the conversation while we are in a voice room: who is there, mute, deafen, leave. */
+    private void showVoiceBar(com.emirchat.call.VoiceChannels.State state) {
+        com.emirchat.call.VoiceChannels voice = session.client().voice();
+        Packet.GroupInfo g = group(state.groupId());
+        String where = g == null ? "" : g.community() != 0
+                ? ConversationView.channelTitle(g) + " · " + communityName(g.community()) : ConversationView.groupName(g);
+        Label title = UiKit.label(I18n.t("voice.inRoom", where), "row-title");
+        Label sub = UiKit.label("🔒 " + I18n.t("voice.encrypted"), "row-sub");
+        VBox text = new VBox(2, title, sub);
+        text.setMinWidth(0);
+        HBox faces = new HBox(6);
+        faces.setAlignment(Pos.CENTER_LEFT);
+        for (String u : state.participants()) {
+            Node face = UiKit.voiceFace(u, state.speaking().contains(u), 30);
+            Tooltip.install(face, new Tooltip(u));
+            faces.getChildren().add(face);
+        }
+        Button mute = new Button();
+        mute.setTooltip(new Tooltip(state.muted() ? I18n.t("call.unmute") : I18n.t("call.mute")));
+        mute.setGraphic(Icons.of(state.muted() ? Icons.MIC_OFF : Icons.MIC, 15, state.muted() ? "danger" : "muted"));
+        mute.getStyleClass().add("small");
+        mute.setId("voice-mute");
+        mute.setOnAction(e -> session.background().execute(() -> voice.setMuted(!state.muted())));
+        Button deaf = new Button();
+        deaf.setTooltip(new Tooltip(state.deafened() ? I18n.t("voice.undeafen") : I18n.t("voice.deafen")));
+        deaf.setGraphic(Icons.of(Icons.HEADPHONES, 15, state.deafened() ? "danger" : "muted"));
+        deaf.getStyleClass().add("small");
+        deaf.setId("voice-deafen");
+        deaf.setOnAction(e -> session.background().execute(() -> voice.setDeafened(!state.deafened())));
+        Button leave = new Button(I18n.t("voice.leave"));
+        leave.setGraphic(Icons.of(Icons.PHONE, 14, "danger"));
+        leave.getStyleClass().addAll("small", "danger-ghost");
+        leave.setId("voice-leave");
+        leave.setOnAction(e -> session.background().execute(voice::leave));
+        StackPane badge = new StackPane(Icons.of(Icons.HEADPHONES, 18, "accent"));
+        badge.getStyleClass().add("voice-badge-icon");
+        Button fire = new Button(campfireShown ? I18n.t("campfire.chat") : I18n.t("campfire.open"));
+        fire.setMinWidth(Region.USE_PREF_SIZE);
+        fire.getStyleClass().add("small");
+        fire.setId("voice-campfire");
+        fire.setOnAction(e -> {
+            if (campfireShown) backFromCampfire();
+            else showCampfire();
+        });
+        voiceBar.getChildren().setAll(badge, text, faces, UiKit.grow(), fire, mute, deaf, leave);
+        voiceBar.getStyleClass().setAll("call-bar", "voice-bar");
+        voiceBar.setAlignment(Pos.CENTER_LEFT);
+        voiceBar.setId("voice-bar");
+        voiceBar.setVisible(true);
+    }
+
+    @Override
+    public void threadReply(History.Message reply, long rootId) {
+        if (current != null && current.conversation().equals(reply.conversation())) current.threadReply(reply, rootId);
+        if (!friendsTab.isSelected()) refreshSidebar();
+    }
+
+    @Override
+    public void pinsChanged(String conversation) {
+        if (current != null && current.conversation().equals(conversation)) current.pinsChanged();
+    }
+
+    @Override
+    public void topicChanged(String conversation, String by, String topic) {
+        if (current != null && current.conversation().equals(conversation)) current.topicChanged(by, topic);
+    }
+
+    @Override
+    public void votesChanged(String conversation, long pollId) {
+        if (current != null && current.conversation().equals(conversation)) current.refresh(pollId);
     }
 
     @Override
@@ -1330,7 +1953,16 @@ final class MainView implements AccountSession.View {
                 accept.setGraphic(Icons.of(Icons.PHONE, 14, "on-accent"));
                 accept.getStyleClass().addAll("small", "primary");
                 accept.setId("call-accept");
-                accept.setOnAction(e -> calls.accept());
+                accept.setOnAction(e -> {
+                    if (!voiceState.joined()) {
+                        calls.accept();
+                        return;
+                    }
+                    session.background().execute(() -> { // the call takes the microphone: leave the room first
+                        session.client().voice().leave();
+                        calls.accept();
+                    });
+                });
                 buttons.getChildren().addAll(hangUpButton(I18n.t("call.reject"), calls::reject), accept);
                 notifyCall(c.peer(), I18n.t("call.incomingFrom", c.peer()));
                 ring();
@@ -1431,9 +2063,12 @@ final class MainView implements AccountSession.View {
                 : m.sender();
         String title = m.conversation().startsWith("g:") ? I18n.t("notify.inGroup", m.sender(), where) : where;
         String body = session.setting(AccountSession.NOTIFICATION_PREVIEW)
-                ? (m.file() != null ? "📎 " + m.text() : m.text())
+                ? (m.file() != null ? (isVoiceName(m.text()) ? "🎤 " + I18n.t("voice.message") : "📎 " + m.text())
+                        : pollQuestion(m.text()) != null ? "📊 " + pollQuestion(m.text())
+                        : Markdown.plain(m.text()))
                 : I18n.t("notify.newMessage");
         Tray.get().notify(title, body);
+        Sounds.play();
     }
 
     /** Called once the view is in a window: report reads when the window comes back into focus. */
@@ -1442,10 +2077,203 @@ final class MainView implements AccountSession.View {
         focusHooked = true;
         stack.getScene().getWindow().focusedProperty().addListener((o, a, focused) -> {
             if (focused && current != null) current.windowFocused();
+            if (!focused) AppPrefs.setLastSeen(System.currentTimeMillis());
+            else maybeCatchUp();
         });
     }
 
+    /** After a long enough absence (and with something to show), the welcome-back screen. */
+    static final long AWAY_MS = 20 * 60_000;
+
+    private void maybeCatchUp() {
+        long last = AppPrefs.lastSeen();
+        long now = System.currentTimeMillis();
+        if (last <= 0 || now - last < AWAY_MS || overlayOpen()) return;
+        AppPrefs.setLastSeen(now);
+        showCatchUp(now - last, false);
+    }
+
+    private boolean overlayOpen() {
+        return stack.lookup(".overlay") != null;
+    }
+
+    /**
+     * "Welcome back": your own sky, how long you were away, and what is waiting (mentions, polls
+     * without your vote, replies in your threads, the busiest chats), worked out from the local
+     * history. {@code always}: also when there is nothing new (from the quick switcher).
+     */
+    void showCatchUp(long awayMillis, boolean always) {
+        String me = session.client().username();
+        session.background().execute(() -> {
+            CatchUp.Digest d;
+            try {
+                d = CatchUp.compute(CatchUp.of(session.history()), me, System.currentTimeMillis());
+            } catch (RuntimeException e) {
+                return;
+            }
+            if (!always && !d.worthShowing()) return;
+            CatchUp.Digest digest = d;
+            Platform.runLater(() -> openCatchUp(digest, awayMillis));
+        });
+    }
+
+    private void openCatchUp(CatchUp.Digest d, long awayMillis) {
+        String me = session.client().username();
+        // the banner: our own sky right now, with the greeting on it
+        Sky sky = new Sky(java.time.ZoneId.systemDefault(), Theme.isDark());
+        sky.fade = false;
+        Label hello = UiKit.label(CatchUp.greeting(java.time.LocalTime.now().getHour()) + ", " + me, "catchup-hello");
+        Label away = UiKit.label(awayMillis > 0 ? I18n.t("catchup.away", CatchUp.away(awayMillis)) : I18n.t("catchup.title"), "catchup-away");
+        VBox words = new VBox(4, hello, away);
+        words.setPadding(new Insets(22, 24, 22, 24));
+        words.setAlignment(Pos.BOTTOM_LEFT);
+        StackPane banner = new StackPane(sky, words);
+        banner.getStyleClass().add("catchup-banner");
+        banner.setMinHeight(130);
+        banner.setPrefHeight(130);
+        javafx.scene.shape.Rectangle round = new javafx.scene.shape.Rectangle();
+        round.setArcWidth(28);
+        round.setArcHeight(28);
+        round.widthProperty().bind(banner.widthProperty());
+        round.heightProperty().bind(banner.heightProperty());
+        banner.setClip(round);
+
+        HBox stats = new HBox(10, statTile(d.unread(), I18n.t("catchup.messages"), "stat-messages"),
+                statTile(d.conversations(), I18n.t("catchup.chats"), "stat-chats"),
+                statTile(d.mentions().size(), I18n.t("catchup.mentions"), "stat-mentions"));
+        VBox body = new VBox(14, stats);
+        if (!d.mentions().isEmpty()) {
+            body.getChildren().add(catchUpSection(I18n.t("catchup.mentionedYou"), d.mentions().stream().map(m ->
+                    catchUpRow(m.sender(), where(m.conversation()), Markdown.plain(m.text()), () -> jumpTo(m))).toList()));
+        }
+        if (!d.openPolls().isEmpty()) {
+            body.getChildren().add(catchUpSection(I18n.t("catchup.polls"), d.openPolls().stream().map(m -> {
+                com.emirchat.chat.Poll p = com.emirchat.chat.Poll.fromStored(m.text());
+                return catchUpRow(m.sender(), where(m.conversation()), "📊 " + (p == null ? "" : p.question()), () -> jumpTo(m));
+            }).toList()));
+        }
+        if (!d.threadReplies().isEmpty()) {
+            body.getChildren().add(catchUpSection(I18n.t("catchup.threads"), d.threadReplies().stream().map(m ->
+                    catchUpRow(m.sender(), where(m.conversation()), Markdown.plain(m.text()), () -> jumpToThread(m))).toList()));
+        }
+        if (!d.busiest().isEmpty()) {
+            int top = d.busiest().get(0).unread();
+            body.getChildren().add(catchUpSection(I18n.t("catchup.busiest"), d.busiest().stream().map(b -> {
+                Region bar = new Region();
+                bar.getStyleClass().add("busy-bar");
+                bar.setPrefWidth(Math.max(10, 140.0 * b.unread() / Math.max(1, top)));
+                bar.setMaxHeight(8);
+                HBox right = new HBox(8, bar, UiKit.label(String.valueOf(b.unread()), "unread-badge"));
+                right.setAlignment(Pos.CENTER_RIGHT);
+                HBox row = catchUpRow(null, where(b.conversation()), Markdown.plain(b.latest().text()), () -> open(b.conversation()));
+                row.getChildren().add(right);
+                return row;
+            }).toList()));
+        }
+        if (d.unread() == 0 && d.openPolls().isEmpty()) body.getChildren().add(UiKit.label(I18n.t("catchup.nothing"), "caption"));
+        ScrollPane scroll = new ScrollPane(body);
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.setPrefViewportHeight(Math.min(360, 90 + 66.0 * (d.mentions().size() + d.openPolls().size() + d.threadReplies().size() + d.busiest().size())));
+        Button allRead = new Button(I18n.t("catchup.allRead"));
+        allRead.setId("catchup-all-read");
+        allRead.setOnAction(e -> {
+            try {
+                for (History.Summary s : session.history().summaries()) session.history().markRead(s.conversation());
+            } catch (IOException ignored) {
+                // the counts stay
+            }
+            overlay.close();
+            refreshSidebar();
+        });
+        allRead.setDisable(d.unread() == 0);
+        Button go = new Button(I18n.t("catchup.continue"));
+        go.getStyleClass().add("primary");
+        go.setId("catchup-continue");
+        go.setDefaultButton(true);
+        go.setOnAction(e -> overlay.close());
+        VBox box = new VBox(16, banner, scroll, new HBox(10, allRead, UiKit.grow(), go));
+        box.getStyleClass().addAll("dialog", "catchup");
+        box.setId("catchup");
+        overlay.show(box);
+    }
+
+    private Node statTile(int value, String label, String id) {
+        Label number = UiKit.label("0", "stat-number");
+        number.setId(id);
+        VBox tile = new VBox(2, number, UiKit.label(label, "stat-label"));
+        tile.getStyleClass().add("stat-tile");
+        HBox.setHgrow(tile, Priority.ALWAYS);
+        tile.setMaxWidth(Double.MAX_VALUE);
+        if (Motion.enabled() && value > 0) {
+            // count up, quickly at first and slowing down at the end
+            javafx.animation.Transition count = new javafx.animation.Transition() {
+                {
+                    setCycleDuration(javafx.util.Duration.millis(Math.min(1200, 400 + value * 40L)));
+                    setInterpolator(javafx.animation.Interpolator.EASE_OUT);
+                }
+
+                @Override protected void interpolate(double f) {
+                    number.setText(String.valueOf(Math.round(value * f)));
+                }
+            };
+            count.play();
+        } else {
+            number.setText(String.valueOf(value));
+        }
+        return tile;
+    }
+
+    private static Node catchUpSection(String title, List<HBox> rows) {
+        VBox box = new VBox(4, UiKit.label(title.toUpperCase(I18n.locale()), "overline"));
+        box.getChildren().addAll(rows);
+        return box;
+    }
+
+    private HBox catchUpRow(String who, String where, String text, Runnable action) {
+        Node face = who == null ? Icons.of(Icons.MESSAGE, 18, "accent") : UiKit.avatar(who, "avatar-xs", false);
+        StackPane faceBox = new StackPane(face);
+        faceBox.setMinWidth(32);
+        Label title = UiKit.label(who == null ? where : who + " · " + where, "row-title");
+        Label snippet = UiKit.label(text, "row-sub");
+        VBox words = new VBox(1, title, snippet);
+        words.setMinWidth(0);
+        HBox.setHgrow(words, Priority.ALWAYS);
+        HBox row = new HBox(10, faceBox, words);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getStyleClass().add("catchup-row");
+        row.setOnMouseClicked(e -> {
+            overlay.close();
+            action.run();
+        });
+        return row;
+    }
+
+    /** "efe" for a direct chat, "# general · MobilCAD" for a channel, the group's name otherwise. */
+    private String where(String conversation) {
+        if (conversation.startsWith("dm:")) return conversation.substring(3);
+        return groupName(Long.parseLong(conversation.substring(2)));
+    }
+
+    private void jumpTo(History.Message m) {
+        open(m.conversation());
+        if (current != null) current.reveal(m.id());
+    }
+
+    private void jumpToThread(History.Message reply) {
+        open(reply.conversation());
+        try {
+            History.Message root = session.history().find(reply.conversation(), reply.replyTo());
+            if (root != null && current != null) current.act(root.id(), "thread");
+        } catch (IOException ignored) {
+            // the chat is open anyway
+        }
+    }
+
     void dispose() {
+        AppPrefs.setLastSeen(System.currentTimeMillis());
+        if (current != null) current.dispose();
+        UiKit.useKeys(null);
         Tray.get().setUnread(0);
         if (stack.getScene() != null && stack.getScene().getWindow() instanceof javafx.stage.Stage s) {
             s.setTitle(com.emirchat.AppInfo.NAME);

@@ -1,5 +1,64 @@
 # Changelog
 
+## 3.4.0 (unreleased)
+
+**Scorpion is now Oba**: a nomad camp of tents around a fire. New name and icon (two tents and
+a campfire under a night sky); the flame replaces the scorpion's tail in the app. On first start
+the Scorpion data folder, the password saved with "remember me" and the start-with-the-computer
+entry move over by themselves; Windows installs Oba over Scorpion. The protocol keeps its
+labels, so Oba talks to Scorpion 3.2 and 3.3 as before.
+
+A redesign and a round of features. Messages use new kinds and actions (polls, thread replies,
+pins, topics, votes, voice room keys): **update all clients together**; a 3.3 client shows those
+as messages it could not read.
+
+### Added
+- **New look**: "desert night" (dark) and "sand" (light) themes with an amber accent, the
+  campfire flame as the loading spinner and the connection light, sparks from the send button.
+- **Avatars drawn from keys**: a mirrored pattern over two colours from each person's key; a new
+  key gives a new face. Rings for verified friends and changed keys.
+- **Formatting**: bold, italic, strikethrough, inline code, quotes, links and fenced code blocks
+  with syntax colouring; a multi-line composer (Shift+Enter), ↑ to edit your last message.
+- **Emoji**: `:name` suggestions (English and Turkish names) and a picker with categories and
+  search; hover tools on every message (quick reactions, any reaction, reply, more); reactions pop in.
+- **Voice messages** with a live meter while recording and a seekable waveform; sent as ordinary
+  encrypted attachments (μ-law WAV).
+- **Pictures and files**: drag and drop, paste files or screenshots, and a full-window viewer.
+- **Date separators** and sender avatars in groups.
+- **Communities**: a rail of community icons, channel topics, pinned messages, a member list by
+  role, threads in a side panel, and polls with live results.
+- **Commands**: `/poll`, `/roll`, `/flip`, `/remind`, `/shrug`, `/me`, `/topic`, `/help`, with
+  suggestions while typing.
+- **Voice rooms** in every channel and group: drop in and out, end-to-end encrypted with per-person
+  keys that change whenever the room changes; speaking indicators, mute, deafen.
+- **Quick switcher** (Ctrl+K / ⌘K) for chats, channels, friends and actions.
+- **Appearance settings**: theme, five accents, text size, compact mode, reduce motion and
+  synthesised notification sounds.
+- Empty screens with a small desert scene.
+- **The campfire**: voice rooms as a desert at night with three fires; sit anywhere, voices by
+  distance and from their side (stereo), drag yourself or click the sand. Places travel inside
+  the room's encryption and are never stored.
+- **The map of oases**: a community as a desert map, each channel an oasis that shows unread
+  messages, recent talk, a week of quiet or people in voice; pan, zoom, click to go in.
+- **Your friend's sky** in the chat header, from the time zone they share (optional).
+- **Welcome back** after a while away: your own sky, how long you were gone, mentions of you,
+  polls without your vote, replies in your threads and the busiest chats; **@mentions** with
+  suggestions.
+- **Messages turn to sand** when deleted or when they disappear.
+
+### Changed
+- Conversations load 80 messages at a time (older ones when scrolling up) and decrypt pictures only
+  when they come into view; the view follows new messages unless you have scrolled up.
+- Windows packages use AppCDS (`-XX:+AutoCreateSharedArchive`) for faster starts.
+
+### Security
+- Incoming text keeps line breaks but still has every other control character and bidi override
+  replaced; every field of a received poll is sanitized the same way.
+- Voice rooms: membership is swept every two seconds, so a removed member is cut off even if they
+  never speak; clients drop a removed member's keys and replace their own at once.
+- Voice messages are never sent without the user: switching chats discards a recording, and at
+  the length limit the recording waits for Send. Oversized voice files are not decoded.
+
 ## 3.3.0 (unreleased)
 
 ### Added

@@ -9,7 +9,7 @@ import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 /**
- * "Start Scorpion when I log in": the installed app is registered to start hidden in the tray
+ * "Start Oba when I log in": the installed app is registered to start hidden in the tray
  * ({@code --background}). Only available for the installed app, whose launcher sets
  * {@code jpackage.app-path}; a jar started by hand has no stable path to register.
  */
@@ -36,7 +36,7 @@ final class Autostart {
         Path app = appPath();
         if (app == null) return false;
         try {
-            if (os().contains("win")) return run(List.of("reg", "query", RUN_KEY, "/v", "Scorpion")) == 0;
+            if (os().contains("win")) return run(List.of("reg", "query", RUN_KEY, "/v", com.emirchat.AppInfo.NAME)) == 0;
             return Files.exists(entryFile());
         } catch (IOException e) {
             return false;
@@ -48,9 +48,9 @@ final class Autostart {
         if (app == null) throw new IOException("Only the installed app can start automatically.");
         if (os().contains("win")) {
             int code = on
-                    ? run(List.of("reg", "add", RUN_KEY, "/v", "Scorpion", "/t", "REG_SZ", "/d",
+                    ? run(List.of("reg", "add", RUN_KEY, "/v", com.emirchat.AppInfo.NAME, "/t", "REG_SZ", "/d",
                             "\"" + app + "\" " + BACKGROUND_FLAG, "/f"))
-                    : run(List.of("reg", "delete", RUN_KEY, "/v", "Scorpion", "/f"));
+                    : run(List.of("reg", "delete", RUN_KEY, "/v", com.emirchat.AppInfo.NAME, "/f"));
             if (code != 0 && on) throw new IOException("Windows did not accept the start-up entry.");
             return;
         }
@@ -64,11 +64,37 @@ final class Autostart {
     }
 
     private static Path entryFile() {
+        return entryFile("org.oba.app", "oba");
+    }
+
+    private static Path entryFile(String macLabel, String linuxName) {
         Path home = Path.of(System.getProperty("user.home"));
-        if (os().contains("mac")) return home.resolve("Library/LaunchAgents/org.scorpion.app.plist");
+        if (os().contains("mac")) return home.resolve("Library/LaunchAgents/" + macLabel + ".plist");
         String config = System.getenv("XDG_CONFIG_HOME");
         Path base = config != null && !config.isBlank() ? Path.of(config) : home.resolve(".config");
-        return base.resolve("autostart/scorpion.desktop");
+        return base.resolve("autostart/" + linuxName + ".desktop");
+    }
+
+    /**
+     * After the rename: if Scorpion was set to start with the computer, that entry points at the
+     * old app. Remove it and, if this is the installed Oba, start this one instead. Runs once at
+     * start-up; failures are ignored (the setting can be turned on again by hand).
+     */
+    static void adoptFormer() {
+        try {
+            boolean was;
+            if (os().contains("win")) {
+                was = run(List.of("reg", "query", RUN_KEY, "/v", com.emirchat.AppInfo.FORMER_NAME)) == 0;
+                if (was) run(List.of("reg", "delete", RUN_KEY, "/v", com.emirchat.AppInfo.FORMER_NAME, "/f"));
+            } else {
+                Path old = entryFile("org.scorpion.app", "scorpion");
+                was = Files.exists(old);
+                if (was) Files.deleteIfExists(old);
+            }
+            if (was && supported() && !enabled()) set(true);
+        } catch (IOException ignored) {
+            // the user can switch it on again in Settings
+        }
     }
 
     static String launchAgent(Path app) {
@@ -77,7 +103,7 @@ final class Autostart {
                 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
                 <plist version="1.0">
                 <dict>
-                  <key>Label</key><string>org.scorpion.app</string>
+                  <key>Label</key><string>org.oba.app</string>
                   <key>ProgramArguments</key>
                   <array><string>%s</string><string>%s</string></array>
                   <key>RunAtLoad</key><true/>
@@ -90,7 +116,7 @@ final class Autostart {
         return """
                 [Desktop Entry]
                 Type=Application
-                Name=Scorpion
+                Name=Oba
                 Exec="%s" %s
                 X-GNOME-Autostart-enabled=true
                 """.formatted(app.toString().replace("\"", "\\\""), BACKGROUND_FLAG);

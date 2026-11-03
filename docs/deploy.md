@@ -31,7 +31,7 @@ authenticated, encrypted handshake, and clients pin the server's key.
 
 ```sh
 curl -fsSL https://get.docker.com | sh        # or install docker.io + docker-compose-v2 from apt
-git clone https://github.com/aemircicek/secure-chat.git && cd secure-chat
+git clone https://github.com/aemircicek/oba.git secure-chat && cd secure-chat   # the folder name keeps docker compose stable
 sudo docker compose up -d --build
 sudo docker compose logs secure-chat          # shows the server fingerprint
 ```

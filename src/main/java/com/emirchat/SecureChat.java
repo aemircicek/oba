@@ -31,7 +31,7 @@ public final class SecureChat {
             "  secure-chat fingerprint",
             "",
             "Options:",
-            "  --home <dir>   key and known-peers directory (default: the Scorpion data folder)",
+            "  --home <dir>   key and known-peers directory (default: the Oba data folder)",
             "",
             "Type " + ChatSession.QUIT_COMMAND + " to leave a chat.",
             "",
