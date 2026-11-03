@@ -10,7 +10,7 @@
   <packaging>jar</packaging>
   <name>secure-chat</name>
   <description>End-to-end encrypted messenger (accounts, friends, direct messages and groups) for the desktop and the terminal.</description>
-  <url>https://github.com/aemircicek/secure-chat</url>
+  <url>https://github.com/aemircicek/oba</url>
 
   <licenses>
     <license>

@@ -27,7 +27,9 @@ final class UpdateCheck {
         String current = AppInfo.version();
         if (current.equals("dev")) return Optional.empty();
         try {
-            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).build();
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8))
+                    .followRedirects(HttpClient.Redirect.NORMAL) // GitHub redirects renamed repositories
+                    .build();
             HttpRequest request = HttpRequest.newBuilder(API).timeout(Duration.ofSeconds(10))
                     .header("Accept", "application/vnd.github+json").header("User-Agent", "Oba/" + current).build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());

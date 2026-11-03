@@ -88,7 +88,7 @@ jobs:
           COMMON=(--name Oba --input input --main-jar secure-chat.jar --main-class com.emirchat.Main
                   --app-version "${VERSION%%-*}" --vendor "Emir Cicek" --copyright "(c) 2026 Emir Cicek, MIT License"
                   --description "End-to-end encrypted messenger")
-          INSTALLER=(--about-url "https://github.com/aemircicek/secure-chat")   # not valid for app-image
+          INSTALLER=(--about-url "https://github.com/aemircicek/oba")   # not valid for app-image
           # Faster starts (AppCDS): the JVM writes a class archive next to the app on the first run and
           # maps it on later ones. Only where the app folder belongs to the user (Windows per-user
           # install and the portable zip); a macOS bundle must not change after signing and /opt is

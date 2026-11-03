@@ -2,7 +2,7 @@
 
 # Oba
 
-[![CI](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/aemircicek/secure-chat/actions/workflows/ci.yml)
+[![CI](https://github.com/aemircicek/oba/actions/workflows/ci.yml/badge.svg)](https://github.com/aemircicek/oba/actions/workflows/ci.yml)
 
 **Oba** is an end-to-end encrypted messenger for Windows, macOS and Linux (plus a terminal
 client): accounts, friends, direct messages, groups, communities with channels, threads and
@@ -13,7 +13,7 @@ the server relays and stores messages it cannot read.
 *Oba* is a nomad camp: a few tents pitched together, everyone in their own, and everyone around
 the fire in the evening. That is the app: your direct chats are your tent, communities and their
 campfires the shared ground. Until 3.4 the app was called *Scorpion*, and this repository
-*secure-chat* before that; data, saved passwords and autostart settings move over by themselves.
+*secure-chat* (old links still lead here); data, saved passwords and autostart settings move over by themselves.
 
 <p align="center">
   <img src="docs/screenshots/campfire-dark.png" width="420" alt="The campfire: a voice room you walk around in, voices by distance and side">
@@ -30,7 +30,7 @@ direct message, and Sender Keys for groups.
 
 ## Quick start
 
-From the [latest release](https://github.com/aemircicek/secure-chat/releases/latest), download
+From the [latest release](https://github.com/aemircicek/oba/releases/latest), download
 Oba with Java included:
 
 | | File | |
@@ -46,7 +46,7 @@ Check a download before running it, with the checksum file or GitHub's signed bu
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing                       # on Windows: Get-FileHash <file>
-gh attestation verify Oba-3.4.0-windows-x64.exe -R aemircicek/secure-chat
+gh attestation verify Oba-3.4.0-windows-x64.exe -R aemircicek/oba
 ```
 
 The packages are not code-signed (that needs paid certificates), so Windows SmartScreen and macOS

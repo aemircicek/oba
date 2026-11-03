@@ -10,7 +10,7 @@ public final class AppInfo {
     public static final String NAME = "Oba";
     /** The app's name until 3.4 (its data folder, saved password and autostart entry are moved over). */
     public static final String FORMER_NAME = "Scorpion";
-    public static final String REPOSITORY = "aemircicek/secure-chat";
+    public static final String REPOSITORY = "aemircicek/oba";
     public static final String WEBSITE = "https://github.com/" + REPOSITORY;
 
     private AppInfo() {}
