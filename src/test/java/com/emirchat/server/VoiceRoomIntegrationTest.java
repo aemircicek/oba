@@ -207,4 +207,39 @@ class VoiceRoomIntegrationTest {
             assertTrue(!ayse.audio.heardSpeech(1500), "the removed listener hears nothing");
         }
     }
+
+    @Test
+    void placesTravelAndDistanceDecidesWhoIsHeard() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe")) {
+            befriend(emir, efe);
+            long g = emir.client.createGroup("kamp", List.of("efe")).id();
+            for (int i = 0; i < 100 && efe.client.refreshGroups().stream().noneMatch(x -> x.id() == g); i++) Thread.sleep(50);
+            emir.client.voice().join(g);
+            efe.client.voice().join(g);
+            awaitRoom(emir, g, 2);
+            Thread.sleep(800);
+            emir.audio.say(20);
+            assertTrue(efe.audio.heardSpeech(3000), "side by side at the fire");
+
+            emir.client.voice().moveTo(0.97, 0.95); // walks far into the desert
+            efe.client.voice().moveTo(0.03, 0.05);
+            double[] seen = null;
+            for (int i = 0; i < 60; i++) {
+                seen = efe.client.voice().places().get("emir");
+                if (seen != null && seen[0] > 0.9) break;
+                Thread.sleep(50);
+            }
+            assertTrue(seen != null && seen[0] > 0.9 && seen[1] > 0.9, "efe sees where emir went");
+            Thread.sleep(200);
+            efe.audio.heard.clear();
+            emir.audio.say(20);
+            assertTrue(!efe.audio.heardSpeech(1200), "too far away to hear");
+
+            emir.client.voice().moveTo(0.05, 0.08); // comes back next to efe
+            Thread.sleep(400);
+            efe.audio.heard.clear();
+            emir.audio.say(20);
+            assertTrue(efe.audio.heardSpeech(3000), "close again");
+        }
+    }
 }

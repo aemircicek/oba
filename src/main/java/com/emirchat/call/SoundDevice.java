@@ -13,6 +13,8 @@ import javax.sound.sampled.TargetDataLine;
 /** The computer's default microphone and speaker, through Java Sound. */
 public final class SoundDevice implements AudioDevice {
     private static final AudioFormat FORMAT = new AudioFormat(SAMPLE_RATE, 16, 1, true, false);
+    /** The speaker plays in stereo: mono frames go to both sides, voice rooms place people left and right. */
+    private static final AudioFormat SPEAKER = new AudioFormat(SAMPLE_RATE, 16, 2, true, false);
     /** At most this many frames wait for the speaker (100 ms); older ones are dropped to keep the delay low. */
     private static final int MAX_QUEUED = 5;
 
@@ -28,8 +30,8 @@ public final class SoundDevice implements AudioDevice {
         try {
             microphone = AudioSystem.getTargetDataLine(FORMAT);
             microphone.open(FORMAT, FRAME_BYTES * 4);
-            speaker = AudioSystem.getSourceDataLine(FORMAT);
-            speaker.open(FORMAT, FRAME_BYTES * 8);
+            speaker = AudioSystem.getSourceDataLine(SPEAKER);
+            speaker.open(SPEAKER, FRAME_BYTES * 16);
         } catch (LineUnavailableException | IllegalArgumentException | SecurityException e) {
             closeLines();
             throw new IllegalStateException("No microphone or speaker available: " + e.getMessage(), e);
@@ -61,6 +63,23 @@ public final class SoundDevice implements AudioDevice {
 
     @Override
     public void play(byte[] frame) {
+        byte[] both = new byte[frame.length * 2];
+        for (int i = 0; i + 1 < frame.length; i += 2) {
+            both[2 * i] = frame[i];
+            both[2 * i + 1] = frame[i + 1];
+            both[2 * i + 2] = frame[i];
+            both[2 * i + 3] = frame[i + 1];
+        }
+        playStereo(both);
+    }
+
+    @Override
+    public boolean stereo() {
+        return true;
+    }
+
+    @Override
+    public void playStereo(byte[] frame) {
         while (!speakerQueue.offer(frame)) speakerQueue.poll(); // drop the oldest: stay close to real time
     }
 

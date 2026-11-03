@@ -56,6 +56,77 @@ public final class VoiceChannels implements AutoCloseable {
         }
     }
 
+    // ------------------------------------------------------------------ the campfire: places and hearing
+
+    /** Inside this distance (in widths of the scene) people sound at full volume ... */
+    public static final double HEAR_FULL = 0.16;
+    /** ... and beyond this one not at all. */
+    public static final double HEAR_NONE = 0.55;
+    /** The scene is wider than tall; distances count the height in the same units as the width. */
+    public static final double ASPECT = 1.6;
+    /** Where the fires burn (x, y as fractions of the scene). */
+    public static final double[][] FIRES = {{0.50, 0.56}, {0.20, 0.32}, {0.80, 0.72}};
+
+    /** Someone's first place: a seat around the big fire, decided by their name so everyone agrees. */
+    public static double[] seat(String user) {
+        double angle = Math.floorMod(user.hashCode() * 2654435761L, 360) * Math.PI / 180;
+        return new double[] {FIRES[0][0] + Math.cos(angle) * 0.11, FIRES[0][1] + Math.sin(angle) * 0.11 * ASPECT};
+    }
+
+    public static double distance(double[] a, double[] b) {
+        return Math.hypot(a[0] - b[0], (a[1] - b[1]) / ASPECT);
+    }
+
+    /** Volume (0-1) of someone at {@code them} for a listener at {@code me}. */
+    public static double gain(double[] me, double[] them) {
+        double d = distance(me, them);
+        if (d <= HEAR_FULL) return 1;
+        if (d >= HEAR_NONE) return 0;
+        double f = (d - HEAR_FULL) / (HEAR_NONE - HEAR_FULL);
+        return (1 - f) * (1 - f); // falls off faster than a straight line, like a voice outdoors
+    }
+
+    /** -1 (all left) to 1 (all right): where someone is, seen from the listener. */
+    public static double pan(double[] me, double[] them) {
+        return Math.max(-1, Math.min(1, (them[0] - me[0]) / 0.30));
+    }
+
+    private static final byte AUDIO = 0;
+    private static final byte PLACE = 1;
+    private final Map<String, double[]> places = new HashMap<>();
+    private int heartbeat;
+
+    /** Where everyone in the room is (fractions of the scene), us included. */
+    public synchronized Map<String, double[]> places() {
+        Map<String, double[]> out = new HashMap<>();
+        for (String p : participants) out.put(p, places.getOrDefault(p, seat(p)).clone());
+        return out;
+    }
+
+    /** Moves us (and tells the others: inside the room's encryption, never stored by the server). */
+    public void moveTo(double x, double y) {
+        synchronized (this) {
+            if (groupId == 0) return;
+            places.put(me, new double[] {Math.max(0.02, Math.min(0.98, x)), Math.max(0.04, Math.min(0.96, y))});
+        }
+        sendPlace();
+    }
+
+    private void sendPlace() {
+        VoiceCrypto.Sender s;
+        long group;
+        double[] p;
+        synchronized (this) {
+            if (groupId == 0 || sender == null) return;
+            s = sender;
+            group = groupId;
+            p = places.getOrDefault(me, seat(me));
+        }
+        byte[] body = java.nio.ByteBuffer.allocate(5).put(PLACE)
+                .putShort((short) Math.round(p[0] * 65535)).putShort((short) Math.round(p[1] * 65535)).array();
+        transport.audio(group, s.seal(group, me, body));
+    }
+
     /** Louder than this counts as speaking (see {@link VoiceNotes#level}). */
     private static final float SPEAKING_LEVEL = 0.18f;
     private static final long SPEAKING_HOLD_MS = 350;
@@ -167,6 +238,7 @@ public final class VoiceChannels implements AutoCloseable {
             sender = null;
             queues.clear();
             loudAt.clear();
+            places.clear();
             deafened = false;
             muted = false;
             if (mixing != null) mixing.cancel(false);
@@ -220,6 +292,7 @@ public final class VoiceChannels implements AutoCloseable {
         } catch (Exception e) {
             listener.state(snapshot("key: " + e.getMessage()));
         }
+        sendPlace();
     }
 
     // ------------------------------------------------------------------ from the network
@@ -238,6 +311,7 @@ public final class VoiceChannels implements AutoCloseable {
                 for (String gone : before) {
                     if (!people.contains(gone)) {
                         receiver.forget(gone);
+                        places.remove(gone);
                         queues.remove(gone);
                         loudAt.remove(gone);
                     }
@@ -290,11 +364,25 @@ public final class VoiceChannels implements AutoCloseable {
         synchronized (this) {
             if (group != groupId || deafened || !participants.contains(from)) return;
         }
+        byte[] plain;
         try {
-            ulaw = receiver.open(group, from, packet);
+            plain = receiver.open(group, from, packet);
         } catch (SecurityException e) {
             return;
         }
+        if (plain.length == 0) return;
+        if (plain[0] == PLACE) {
+            if (plain.length != 5) return;
+            java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(plain, 1, 4);
+            double x = (b.getShort() & 0xffff) / 65535.0;
+            double y = (b.getShort() & 0xffff) / 65535.0;
+            synchronized (this) {
+                places.put(from, new double[] {x, y});
+            }
+            return;
+        }
+        if (plain[0] != AUDIO) return; // something newer than us: ignore it
+        ulaw = java.util.Arrays.copyOfRange(plain, 1, plain.length);
         byte[] pcm = Mulaw.decode(ulaw);
         synchronized (this) {
             Deque<byte[]> q = queues.computeIfAbsent(from, k -> new ArrayDeque<>());
@@ -315,27 +403,66 @@ public final class VoiceChannels implements AutoCloseable {
             group = groupId;
             if (VoiceNotes.level(frame) > SPEAKING_LEVEL) loudAt.put(me, System.currentTimeMillis());
         }
-        transport.audio(group, s.seal(group, me, Mulaw.encode(frame)));
+        byte[] ulaw = Mulaw.encode(frame);
+        byte[] body = new byte[ulaw.length + 1];
+        body[0] = AUDIO;
+        System.arraycopy(ulaw, 0, body, 1, ulaw.length);
+        transport.audio(group, s.seal(group, me, body));
     }
 
-    /** Every 20 ms: one frame from each speaker, summed (with clipping) and played. */
+    /**
+     * Every 20 ms: one frame from each speaker, each at the volume of their distance and placed
+     * left or right of us (equal-power panning), summed with clipping and played.
+     */
     private void mix() {
         AudioDevice d;
-        int[] sum = null;
+        int[] left = null;
+        int[] right = null;
         synchronized (this) {
             d = device;
             if (d == null || deafened) return;
-            for (Deque<byte[]> q : queues.values()) {
-                byte[] frame = q.pollFirst();
+            double[] here = places.getOrDefault(me, seat(me));
+            for (var e : queues.entrySet()) {
+                byte[] frame = e.getValue().pollFirst();
                 if (frame == null) continue;
-                if (sum == null) sum = new int[frame.length / 2];
-                for (int i = 0; i < sum.length && 2 * i + 1 < frame.length; i++) {
-                    sum[i] += (short) ((frame[2 * i] & 0xff) | (frame[2 * i + 1] << 8));
+                double[] there = places.getOrDefault(e.getKey(), seat(e.getKey()));
+                double g = gain(here, there);
+                if (g <= 0) continue;
+                double angle = (pan(here, there) + 1) * Math.PI / 4;
+                double gl = g * Math.cos(angle) * Math.sqrt(2);
+                double gr = g * Math.sin(angle) * Math.sqrt(2);
+                if (left == null) {
+                    left = new int[frame.length / 2];
+                    right = new int[frame.length / 2];
+                }
+                for (int i = 0; i < left.length && 2 * i + 1 < frame.length; i++) {
+                    int v = (short) ((frame[2 * i] & 0xff) | (frame[2 * i + 1] << 8));
+                    left[i] += (int) (v * Math.min(1, gl));
+                    right[i] += (int) (v * Math.min(1, gr));
                 }
             }
         }
-        if (sum == null) return;
-        d.play(mixPcm(sum));
+        if (left == null) return;
+        if (d.stereo()) {
+            d.playStereo(interleave(left, right));
+        } else {
+            int[] mono = new int[left.length];
+            for (int i = 0; i < mono.length; i++) mono[i] = (left[i] + right[i]) / 2;
+            d.play(mixPcm(mono));
+        }
+    }
+
+    static byte[] interleave(int[] left, int[] right) {
+        byte[] out = new byte[left.length * 4];
+        for (int i = 0; i < left.length; i++) {
+            int l = Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, left[i]));
+            int r = Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, right[i]));
+            out[4 * i] = (byte) l;
+            out[4 * i + 1] = (byte) (l >> 8);
+            out[4 * i + 2] = (byte) r;
+            out[4 * i + 3] = (byte) (r >> 8);
+        }
+        return out;
     }
 
     static byte[] mixPcm(int[] sum) {
@@ -359,6 +486,7 @@ public final class VoiceChannels implements AutoCloseable {
 
     /** Ten times a second: tell the UI when the set of speakers changed. */
     private void tick() {
+        if (++heartbeat % 30 == 0) sendPlace();
         Set<String> now;
         synchronized (this) {
             now = speakingNow();

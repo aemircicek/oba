@@ -64,4 +64,23 @@ class VoiceCryptoTest {
         assertEquals(Short.MIN_VALUE, (short) ((out[2] & 0xff) | (out[3] << 8)));
         assertEquals(100, (short) ((out[4] & 0xff) | (out[5] << 8)));
     }
+
+    @Test
+    void hearingByDistanceAndSide() {
+        double[] me = {0.5, 0.5};
+        assertEquals(1, VoiceChannels.gain(me, new double[] {0.55, 0.5}), 1e-9, "close by: full volume");
+        assertEquals(0, VoiceChannels.gain(me, new double[] {0.98, 0.98}), 1e-9, "across the desert: silent");
+        double mid = VoiceChannels.gain(me, new double[] {0.8, 0.5});
+        org.junit.jupiter.api.Assertions.assertTrue(mid > 0 && mid < 1);
+        org.junit.jupiter.api.Assertions.assertTrue(VoiceChannels.gain(me, new double[] {0.7, 0.5}) > mid, "nearer is louder");
+        assertEquals(-1, VoiceChannels.pan(me, new double[] {0.1, 0.5}), 1e-9);
+        assertEquals(1, VoiceChannels.pan(me, new double[] {0.9, 0.5}), 1e-9);
+        assertEquals(0, VoiceChannels.pan(me, new double[] {0.5, 0.9}), 1e-9, "straight ahead or behind: both sides");
+        double[] seat = VoiceChannels.seat("efe");
+        assertArrayEquals(seat, VoiceChannels.seat("efe"), "everyone agrees on a newcomer's seat");
+        org.junit.jupiter.api.Assertions.assertTrue(VoiceChannels.distance(seat, VoiceChannels.FIRES[0]) < 0.12);
+        byte[] lr = VoiceChannels.interleave(new int[] {100, 40000}, new int[] {-100, -40000});
+        assertEquals(8, lr.length);
+        assertEquals(Short.MAX_VALUE, (short) ((lr[4] & 0xff) | (lr[5] << 8)), "clipped");
+    }
 }
