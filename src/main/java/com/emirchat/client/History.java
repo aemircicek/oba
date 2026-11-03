@@ -166,6 +166,22 @@ public final class History implements AutoCloseable {
                 s.execute("CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
                 s.execute("""
                         CREATE TABLE IF NOT EXISTS timers (conversation TEXT PRIMARY KEY, seconds INTEGER NOT NULL)""");
+                // 3.4: threads, polls, pins and channel topics
+                if (!columns.contains("thread")) s.execute("ALTER TABLE messages ADD COLUMN thread INTEGER NOT NULL DEFAULT 0");
+                s.execute("""
+                        CREATE TABLE IF NOT EXISTS votes (
+                            message_id INTEGER NOT NULL,
+                            voter      TEXT    NOT NULL,
+                            choice     BLOB    NOT NULL,
+                            PRIMARY KEY (message_id, voter)
+                        )""");
+                s.execute("""
+                        CREATE TABLE IF NOT EXISTS pins (
+                            message_id INTEGER PRIMARY KEY,
+                            pinned_by  TEXT    NOT NULL,
+                            pinned_at  INTEGER NOT NULL
+                        )""");
+                s.execute("CREATE TABLE IF NOT EXISTS topics (conversation TEXT PRIMARY KEY, body BLOB NOT NULL)");
             }
             byte[] salt = meta(db, "salt");
             if (salt == null) {
@@ -316,6 +332,158 @@ public final class History implements AutoCloseable {
         return m.id();
     }
 
+    // ------------------------------------------------------------------ threads, polls, pins, topics
+
+    /** Marks a stored message as a reply inside the thread of the message it answers. */
+    public synchronized void markThread(long id) throws IOException {
+        try (PreparedStatement ps = db.prepareStatement("UPDATE messages SET thread = 1 WHERE id = ?")) {
+            ps.setLong(1, id);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+    }
+
+    /** Local ids of the thread replies in a conversation (shown in their thread, not in the channel). */
+    public synchronized java.util.Set<Long> threadReplies(String conversation) throws IOException {
+        java.util.Set<Long> ids = new java.util.HashSet<>();
+        try (PreparedStatement ps = db.prepareStatement("SELECT id FROM messages WHERE conversation = ? AND thread = 1")) {
+            ps.setString(1, conversation);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) ids.add(rs.getLong(1));
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        return ids;
+    }
+
+    /**
+     * Records {@code voter}'s choice in a poll (one vote per person; a negative choice takes it back).
+     *
+     * @return the poll's local id, or -1 if there is no such (undeleted) message
+     */
+    public synchronized long vote(String conversation, byte[] uid, String voter, int choice) throws IOException {
+        Message m = find(conversation, uid);
+        if (m == null || m.deleted()) return -1;
+        try {
+            if (choice < 0) {
+                try (PreparedStatement ps = db.prepareStatement("DELETE FROM votes WHERE message_id = ? AND voter = ?")) {
+                    ps.setLong(1, m.id());
+                    ps.setString(2, voter);
+                    ps.executeUpdate();
+                }
+            } else {
+                try (PreparedStatement ps = db.prepareStatement(
+                        "INSERT INTO votes (message_id, voter, choice) VALUES (?, ?, ?) "
+                                + "ON CONFLICT(message_id, voter) DO UPDATE SET choice = excluded.choice")) {
+                    ps.setLong(1, m.id());
+                    ps.setString(2, voter);
+                    ps.setBytes(3, seal(Integer.toString(choice).getBytes(StandardCharsets.UTF_8)));
+                    ps.executeUpdate();
+                }
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        return m.id();
+    }
+
+    /** Votes in a conversation: poll id → (voter → choice). */
+    public synchronized Map<Long, Map<String, Integer>> votes(String conversation) throws IOException {
+        Map<Long, Map<String, Integer>> result = new HashMap<>();
+        try (PreparedStatement ps = db.prepareStatement(
+                "SELECT v.message_id, v.voter, v.choice FROM votes v JOIN messages m ON m.id = v.message_id "
+                        + "WHERE m.conversation = ? ORDER BY v.voter")) {
+            ps.setString(1, conversation);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    byte[] plain = open(rs.getBytes(3));
+                    if (plain == null) continue;
+                    try {
+                        result.computeIfAbsent(rs.getLong(1), k -> new java.util.TreeMap<>())
+                                .put(rs.getString(2), Integer.parseInt(new String(plain, StandardCharsets.UTF_8)));
+                    } catch (NumberFormatException ignored) {
+                        // a damaged row counts as no vote
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        return result;
+    }
+
+    /**
+     * Pins or unpins a message.
+     *
+     * @return its local id, or -1 if there is no such (undeleted) message
+     */
+    public synchronized long pin(String conversation, byte[] uid, String by, boolean on) throws IOException {
+        Message m = find(conversation, uid);
+        if (m == null || (on && m.deleted())) return -1;
+        try (PreparedStatement ps = db.prepareStatement(on
+                ? "INSERT INTO pins (message_id, pinned_by, pinned_at) VALUES (?, ?, ?) ON CONFLICT(message_id) DO NOTHING"
+                : "DELETE FROM pins WHERE message_id = ?")) {
+            ps.setLong(1, m.id());
+            if (on) {
+                ps.setString(2, by);
+                ps.setLong(3, System.currentTimeMillis());
+            }
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        return m.id();
+    }
+
+    /** Pinned messages of a conversation, most recently pinned first (deleted ones are left out). */
+    public synchronized List<Message> pinned(String conversation) throws IOException {
+        List<Long> ids = new ArrayList<>();
+        try (PreparedStatement ps = db.prepareStatement(
+                "SELECT p.message_id FROM pins p JOIN messages m ON m.id = p.message_id "
+                        + "WHERE m.conversation = ? AND m.deleted = 0 ORDER BY p.pinned_at DESC")) {
+            ps.setString(1, conversation);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) ids.add(rs.getLong(1));
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        List<Message> out = new ArrayList<>();
+        for (long id : ids) {
+            Message m = get(id);
+            if (m != null) out.add(m);
+        }
+        return out;
+    }
+
+    /** A channel's or group's topic (empty to clear it). */
+    public synchronized void setTopic(String conversation, String topic) throws IOException {
+        try (PreparedStatement ps = db.prepareStatement(topic.isEmpty()
+                ? "DELETE FROM topics WHERE conversation = ?"
+                : "INSERT INTO topics (conversation, body) VALUES (?, ?) ON CONFLICT(conversation) DO UPDATE SET body = excluded.body")) {
+            ps.setString(1, conversation);
+            if (!topic.isEmpty()) ps.setBytes(2, seal(topic.getBytes(StandardCharsets.UTF_8)));
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+    }
+
+    public synchronized String topic(String conversation) throws IOException {
+        try (PreparedStatement ps = db.prepareStatement("SELECT body FROM topics WHERE conversation = ?")) {
+            ps.setString(1, conversation);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return "";
+                byte[] plain = open(rs.getBytes(1));
+                return plain == null ? "" : new String(plain, StandardCharsets.UTF_8);
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+    }
+
     /** Reactions in a conversation: local message id → (reactor → emoji). */
     public synchronized Map<Long, Map<String, String>> reactions(String conversation) throws IOException {
         Map<Long, Map<String, String>> result = new HashMap<>();
@@ -456,10 +624,14 @@ public final class History implements AutoCloseable {
                 }
             }
             try (PreparedStatement del = db.prepareStatement("DELETE FROM messages WHERE expires_at > 0 AND expires_at <= ?");
-                 PreparedStatement r = db.prepareStatement("DELETE FROM reactions WHERE message_id = ?")) {
+                 PreparedStatement r = db.prepareStatement("DELETE FROM reactions WHERE message_id = ?");
+                 PreparedStatement v = db.prepareStatement("DELETE FROM votes WHERE message_id = ?");
+                 PreparedStatement p = db.prepareStatement("DELETE FROM pins WHERE message_id = ?")) {
                 for (Expired e : expired) {
-                    r.setLong(1, e.id());
-                    r.executeUpdate();
+                    for (PreparedStatement st : new PreparedStatement[] {r, v, p}) {
+                        st.setLong(1, e.id());
+                        st.executeUpdate();
+                    }
                 }
                 del.setLong(1, now);
                 del.executeUpdate();

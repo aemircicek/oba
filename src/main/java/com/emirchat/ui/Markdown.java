@@ -150,7 +150,7 @@ final class Markdown {
     private static boolean opensAt(String text, int i, String marker) {
         int after = i + marker.length();
         if (after >= text.length() || Character.isWhitespace(text.charAt(after))) return false;
-        if (marker.equals("_") && i > 0 && Character.isLetterOrDigit(text.charAt(i - 1))) return false;
+        if (marker.equals("_") && i > 0 && (Character.isLetterOrDigit(text.charAt(i - 1)) || text.charAt(i - 1) == '\\')) return false;
         return true;
     }
 

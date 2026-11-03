@@ -133,6 +133,27 @@ final class UiKit {
         }
     }
 
+    /** A community's icon on the rail: its initials on a rounded square in its own colours. */
+    static Node communityIcon(String name, long id) {
+        double size = 42;
+        double[] hues = FingerprintArt.avatarHues(FingerprintArt.pseudoFingerprint("community:" + id));
+        Region square = new Region();
+        square.setMinSize(size, size);
+        square.setMaxSize(size, size);
+        square.setStyle("-fx-background-radius: 14; -fx-background-color: linear-gradient(to bottom right, "
+                + css(Color.hsb(hues[0], 0.55, 0.80)) + ", " + css(Color.hsb(hues[1], 0.70, 0.48)) + ");");
+        StringBuilder initials = new StringBuilder();
+        for (String word : name.strip().split("\\s+")) {
+            if (!word.isEmpty() && initials.length() < 2) initials.appendCodePoint(word.codePointAt(0));
+        }
+        Label text = new Label(initials.toString().toUpperCase(I18n.locale()));
+        text.getStyleClass().add("community-initials");
+        StackPane icon = new StackPane(square, text);
+        icon.setMinSize(size, size);
+        icon.setMaxSize(size, size);
+        return icon;
+    }
+
     /** Avatar with an online/offline dot in the corner. */
     static Node avatarWithPresence(String name, boolean online) {
         StackPane a = avatar(name, "avatar-sm", false);

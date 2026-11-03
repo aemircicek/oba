@@ -638,3 +638,91 @@
 .bubble.peer .voice-length { -fx-text-fill: -sc-text-3; }
 .voice-play .icon { -fx-fill: -sc-on-accent; }
 .bubble.own .voice-play .icon { -fx-fill: #fff8ec; -fx-stroke: #fff8ec; }
+
+/* ================================================================== communities (3.4) */
+
+/* The rail of communities at the far left */
+.rail-scroll, .rail-scroll > .viewport { -fx-background-color: -sc-rail; }
+.rail-scroll { -fx-min-width: 68; -fx-pref-width: 68; -fx-max-width: 68; -fx-border-color: transparent -sc-border transparent transparent; }
+.rail { -fx-padding: 12 0 12 0; -fx-background-color: -sc-rail; }
+.rail-item { -fx-min-width: 68; -fx-max-width: 68; -fx-cursor: hand; }
+.rail-face {
+    -fx-min-width: 44; -fx-min-height: 44; -fx-max-width: 44; -fx-max-height: 44;
+    -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 22;
+}
+.rail-face:hover { -fx-background-radius: 14; -fx-background-color: -sc-surface-3; }
+.rail-face.selected { -fx-background-radius: 14; -fx-background-color: -sc-accent-weak; }
+.rail-pill { -fx-background-color: -sc-text; -fx-background-radius: 0 4 4 0; -fx-min-width: 4; -fx-max-width: 4; -fx-min-height: 34; -fx-max-height: 34; }
+.rail-pill.small { -fx-min-height: 8; -fx-max-height: 8; }
+.rail-line { -fx-background-color: -sc-border; -fx-min-height: 2; -fx-max-height: 2; -fx-min-width: 30; -fx-max-width: 30; -fx-background-radius: 1; }
+.rail-plus { -fx-text-fill: -sc-success; -fx-font-size: 24px; -fx-font-weight: bold; }
+.community-initials { -fx-text-fill: #fffaf0; -fx-font-weight: bold; -fx-font-size: 15px; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.25), 3, 0, 0, 1); }
+
+/* Topic under the channel name */
+.topic-line { -fx-text-fill: -sc-text-2; -fx-font-size: 12px; -fx-padding: 1 0 0 0; }
+.topic-line.empty { -fx-text-fill: -sc-text-3; -fx-font-style: italic; }
+.timer-button.active { -fx-background-color: -sc-accent-weak; }
+
+/* Side panel: members, pins, threads */
+.side-panel {
+    -fx-background-color: -sc-surface;
+    -fx-border-color: transparent transparent transparent -sc-border;
+    -fx-min-width: 290; -fx-pref-width: 290; -fx-max-width: 290;
+}
+.side-head { -fx-padding: 14 12 10 16; -fx-border-color: transparent transparent -sc-border transparent; }
+.member-heading { -fx-padding: 12 4 4 4; }
+.member-row { -fx-padding: 6 6; -fx-background-radius: 8; }
+.member-row.offline { -fx-opacity: 0.55; }
+.pin-card {
+    -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 10;
+    -fx-padding: 10 12;
+    -fx-cursor: hand;
+}
+.pin-card:hover { -fx-background-color: -sc-surface-3; }
+
+/* Threads */
+.thread-summary { -fx-cursor: hand; -fx-padding: 3 6; -fx-background-radius: 8; }
+.thread-summary:hover { -fx-background-color: -sc-surface-2; }
+.thread-link { -fx-text-fill: -sc-accent-text; -fx-font-size: 12px; -fx-font-weight: bold; }
+.thread-root { -fx-background-color: -sc-surface-2; -fx-background-radius: 12; -fx-padding: 12; }
+.thread-reply { -fx-background-radius: 12; -fx-padding: 6 10; }
+.thread-text { -fx-font-size: 13px; }
+.bubble.own .thread-text { -fx-text-fill: -sc-on-own-bubble; }
+.bubble.peer .thread-text { -fx-text-fill: -sc-text; }
+.bubble.own.thread-reply .row-title, .bubble.own.thread-reply .row-time { -fx-text-fill: -sc-on-own-bubble; }
+.thread-composer { -fx-padding: 10 12; -fx-border-color: -sc-border transparent transparent transparent; }
+
+/* Polls */
+.poll-card { -fx-padding: 2 0 2 0; }
+.poll-kind { -fx-font-size: 11px; -fx-font-weight: bold; }
+.bubble.own .poll-kind { -fx-text-fill: -sc-own-time; }
+.bubble.peer .poll-kind { -fx-text-fill: -sc-accent-text; }
+.poll-question { -fx-font-size: 14.5px; -fx-font-weight: bold; }
+.bubble.own .poll-question, .bubble.own .poll-answer, .bubble.own .poll-count { -fx-text-fill: -sc-on-own-bubble; }
+.bubble.peer .poll-question, .bubble.peer .poll-answer { -fx-text-fill: -sc-text; }
+.bubble.peer .poll-count { -fx-text-fill: -sc-text-2; }
+.poll-option {
+    -fx-background-radius: 9;
+    -fx-border-radius: 9;
+    -fx-cursor: hand;
+}
+.bubble.peer .poll-option { -fx-background-color: -sc-surface-3; }
+.bubble.own .poll-option { -fx-background-color: rgba(255, 255, 255, 0.14); }
+.poll-option:hover { -fx-opacity: 0.88; }
+.poll-fill { -fx-background-radius: 9; }
+.bubble.peer .poll-fill { -fx-background-color: -sc-accent-weak; }
+.bubble.peer .poll-fill.mine { -fx-background-color: derive(-sc-accent, -45%); }
+.root.light .bubble.peer .poll-fill.mine { -fx-background-color: derive(-sc-accent, 70%); }
+.bubble.own .poll-fill { -fx-background-color: rgba(255, 255, 255, 0.22); }
+.bubble.own .poll-fill.mine { -fx-background-color: rgba(255, 255, 255, 0.38); }
+.poll-answer { -fx-font-size: 13px; }
+.poll-count { -fx-font-size: 12px; -fx-font-weight: bold; }
+.poll-total { -fx-font-size: 11px; }
+.bubble.own .poll-total { -fx-text-fill: -sc-own-time; }
+.bubble.peer .poll-total { -fx-text-fill: -sc-text-3; }
+.icon.on-own { -fx-stroke: -sc-on-own-bubble; }
+
+/* /command suggestions */
+.suggest-command { -fx-text-fill: -sc-accent-text; -fx-font-weight: bold; -fx-font-family: "Menlo", "SF Mono", "Consolas", monospace; -fx-font-size: 12.5px; }

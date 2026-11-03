@@ -33,6 +33,7 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
@@ -58,6 +59,8 @@ final class MainView implements AccountSession.View {
     private final HBox callBar = new HBox(10);
     private javafx.animation.Timeline callTicker;
     private javafx.animation.PauseTransition callHide;
+    /** The strip at the far left: home, one icon per community, and "+" (like a server list). */
+    private final VBox rail = new VBox(8);
     private final Label connectionLabel = UiKit.label(I18n.t("main.connected"), "row-sub", "success-text");
     private final Tail connectionTail = Tail.status(16);
 
@@ -121,15 +124,19 @@ final class MainView implements AccountSession.View {
             refreshSidebar();
         });
         chatsTab.setSelected(true);
-        HBox segmented = new HBox(chatsTab, communitiesTab, friendsTab);
+        HBox segmented = new HBox(chatsTab, friendsTab);
         segmented.getStyleClass().add("segmented");
+        segmented.visibleProperty().bind(communitiesTab.selectedProperty().not());
+        segmented.managedProperty().bind(segmented.visibleProperty());
+        communitiesTab.setVisible(false);
+        communitiesTab.setManaged(false);
         search.setId("search");
         search.setPromptText(I18n.t("main.search"));
         search.getStyleClass().add("search");
         search.textProperty().addListener((o, a, b) -> refreshSidebar());
         search.visibleProperty().bind(chatsTab.selectedProperty());
         search.managedProperty().bind(search.visibleProperty());
-        VBox tabBox = new VBox(10, segmented, search);
+        VBox tabBox = new VBox(10, segmented, search, communitiesTab);
         tabBox.getStyleClass().add("sidebar-section");
 
         ScrollPane listScroll = new ScrollPane(list);
@@ -142,7 +149,14 @@ final class MainView implements AccountSession.View {
         sidebar.getStyleClass().add("sidebar");
 
         showEmpty();
-        frame.setLeft(sidebar);
+        rail.getStyleClass().add("rail");
+        rail.setAlignment(Pos.TOP_CENTER);
+        ScrollPane railScroll = new ScrollPane(rail);
+        railScroll.setFitToWidth(true);
+        railScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        railScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        railScroll.getStyleClass().add("rail-scroll");
+        frame.setLeft(new HBox(railScroll, sidebar));
         callBar.managedProperty().bind(callBar.visibleProperty());
         callBar.setVisible(false);
         VBox.setVgrow(content, Priority.ALWAYS);
@@ -259,7 +273,76 @@ final class MainView implements AccountSession.View {
 
     // ------------------------------------------------------------------ sidebar
 
+    /** Home, then every community as a rounded icon with an unread dot, then "+". */
+    private void buildRail() {
+        rail.getChildren().clear();
+        boolean home = !communitiesTab.isSelected();
+        Map<String, History.Summary> summaries = summaries();
+        int homeUnread = 0;
+        for (History.Summary s : summaries.values()) {
+            if (s.conversation().startsWith("dm:") || isPlainGroup(s.conversation())) homeUnread += unread(s.conversation(), summaries);
+        }
+        javafx.scene.image.ImageView logo = new javafx.scene.image.ImageView(
+                new javafx.scene.image.Image(MainView.class.getResourceAsStream("icons/icon-64.png")));
+        logo.setFitWidth(30);
+        logo.setPreserveRatio(true);
+        rail.getChildren().add(railItem(logo, I18n.t("rail.home"), home, homeUnread > 0, "rail-home", () -> {
+            selectedCommunity = 0;
+            chatsTab.setSelected(true);
+        }));
+        Region line = new Region();
+        line.getStyleClass().add("rail-line");
+        rail.getChildren().add(line);
+        ChatClient c = session.client();
+        List<Packet.GroupInfo> roots = c.groups().stream().filter(Packet.GroupInfo::isCommunity)
+                .sorted(java.util.Comparator.comparing(ConversationView::groupName, String.CASE_INSENSITIVE_ORDER)).toList();
+        for (Packet.GroupInfo root : roots) {
+            int unread = c.channels(root.id()).stream().mapToInt(ch -> unread(AccountSession.group(ch.id()), summaries)).sum();
+            boolean selected = communitiesTab.isSelected() && selectedCommunity == root.id();
+            String name = ConversationView.groupName(root);
+            rail.getChildren().add(railItem(UiKit.communityIcon(name, root.id()), name, selected, unread > 0,
+                    "rail-community-" + root.id(), () -> {
+                        selectedCommunity = root.id();
+                        open(AccountSession.group(lastChannel.getOrDefault(root.id(), root.id())));
+                    }));
+        }
+        Label plus = UiKit.label("+", "rail-plus");
+        rail.getChildren().add(railItem(plus, I18n.t("rail.add"), communitiesTab.isSelected() && selectedCommunity == 0, false,
+                "rail-add", () -> {
+                    selectedCommunity = 0;
+                    if (!communitiesTab.isSelected()) communitiesTab.setSelected(true);
+                    else refreshSidebar();
+                }));
+    }
+
+    /** Which channel was last open in each community, so coming back lands there. */
+    private final Map<Long, Long> lastChannel = new java.util.HashMap<>();
+
+    private boolean isPlainGroup(String conversation) {
+        if (!conversation.startsWith("g:")) return false;
+        Packet.GroupInfo g = group(Long.parseLong(conversation.substring(2)));
+        return g != null && g.community() == 0;
+    }
+
+    private Node railItem(Node icon, String tip, boolean selected, boolean unread, String id, Runnable action) {
+        StackPane face = new StackPane(icon);
+        face.getStyleClass().add("rail-face");
+        if (selected) face.getStyleClass().add("selected");
+        Region pill = new Region();
+        pill.getStyleClass().add("rail-pill");
+        pill.setVisible(selected || unread);
+        if (!selected) pill.getStyleClass().add("small");
+        StackPane item = new StackPane(face, pill);
+        StackPane.setAlignment(pill, Pos.CENTER_LEFT);
+        item.getStyleClass().add("rail-item");
+        item.setId(id);
+        Tooltip.install(item, new Tooltip(tip));
+        item.setOnMouseClicked(e -> action.run());
+        return item;
+    }
+
     private void refreshSidebar() {
+        buildRail();
         Packet.FriendList friends = session.client().friends();
         int requests = friends.incoming().size();
         friendsBadge.setText(String.valueOf(requests));
@@ -815,6 +898,12 @@ final class MainView implements AccountSession.View {
         }
     }
 
+    /** The question of a stored poll, or null if the text is not one. */
+    static String pollQuestion(String text) {
+        com.emirchat.chat.Poll p = com.emirchat.chat.Poll.fromStored(text);
+        return p == null ? null : p.question();
+    }
+
     /** Voice messages are files named voice-….wav (see ConversationView#startRecording). */
     static boolean isVoiceName(String text) {
         String name = text.startsWith("📎 ") ? text.substring("📎 ".length()) : text;
@@ -837,7 +926,9 @@ final class MainView implements AccountSession.View {
             avatar = UiKit.avatarWithPresence(title, client.isOnline(title));
         }
         String last = s == null ? "" : s.lastText().equals(History.DELETED_TEXT) ? I18n.t("conv.deleted")
-                : isVoiceName(s.lastText()) ? "🎤 " + I18n.t("voice.message") : Markdown.plain(s.lastText());
+                : isVoiceName(s.lastText()) ? "🎤 " + I18n.t("voice.message")
+                : pollQuestion(s.lastText()) != null ? "📊 " + pollQuestion(s.lastText())
+                : Markdown.plain(s.lastText());
         String preview = s == null ? I18n.t("main.noMessages")
                 : (s.lastSender().equals(client.username()) ? I18n.t("conv.you") + ": " : group ? s.lastSender() + ": " : "") + last;
         Label sub = UiKit.label(preview, "row-sub");
@@ -983,6 +1074,7 @@ final class MainView implements AccountSession.View {
         Packet.GroupInfo opened = conversation.startsWith("g:") ? group(Long.parseLong(conversation.substring(2))) : null;
         if (opened != null && opened.community() != 0) {
             selectedCommunity = opened.community();
+            lastChannel.put(opened.community(), opened.id());
             if (!communitiesTab.isSelected()) communitiesTab.setSelected(true); else refreshSidebar();
         } else if (!chatsTab.isSelected() && conversation.startsWith("dm:")) {
             chatsTab.setSelected(true); // also refreshes
@@ -1314,6 +1406,27 @@ final class MainView implements AccountSession.View {
     }
 
     @Override
+    public void threadReply(History.Message reply, long rootId) {
+        if (current != null && current.conversation().equals(reply.conversation())) current.threadReply(reply, rootId);
+        if (!friendsTab.isSelected()) refreshSidebar();
+    }
+
+    @Override
+    public void pinsChanged(String conversation) {
+        if (current != null && current.conversation().equals(conversation)) current.pinsChanged();
+    }
+
+    @Override
+    public void topicChanged(String conversation, String by, String topic) {
+        if (current != null && current.conversation().equals(conversation)) current.topicChanged(by, topic);
+    }
+
+    @Override
+    public void votesChanged(String conversation, long pollId) {
+        if (current != null && current.conversation().equals(conversation)) current.refresh(pollId);
+    }
+
+    @Override
     public void typing(String conversation, String who) {
         if (current != null && current.conversation().equals(conversation)) current.typing(who);
     }
@@ -1457,9 +1570,12 @@ final class MainView implements AccountSession.View {
                 : m.sender();
         String title = m.conversation().startsWith("g:") ? I18n.t("notify.inGroup", m.sender(), where) : where;
         String body = session.setting(AccountSession.NOTIFICATION_PREVIEW)
-                ? (m.file() != null ? (isVoiceName(m.text()) ? "🎤 " + I18n.t("voice.message") : "📎 " + m.text()) : Markdown.plain(m.text()))
+                ? (m.file() != null ? (isVoiceName(m.text()) ? "🎤 " + I18n.t("voice.message") : "📎 " + m.text())
+                        : pollQuestion(m.text()) != null ? "📊 " + pollQuestion(m.text())
+                        : Markdown.plain(m.text()))
                 : I18n.t("notify.newMessage");
         Tray.get().notify(title, body);
+        Sounds.play();
     }
 
     /** Called once the view is in a window: report reads when the window comes back into focus. */

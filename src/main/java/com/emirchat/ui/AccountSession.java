@@ -54,6 +54,18 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
         /** A voice call changed (started, rang, connected, muted or ended). */
         default void call(com.emirchat.call.Calls.Call call) {}
+
+        /** A reply arrived in the thread of {@code rootId} (local id of the first message). */
+        default void threadReply(History.Message reply, long rootId) {}
+
+        /** Messages were pinned or unpinned. */
+        default void pinsChanged(String conversation) {}
+
+        /** Someone changed the topic of a channel or group. */
+        default void topicChanged(String conversation, String by, String topic) {}
+
+        /** Someone voted in a poll. */
+        default void votesChanged(String conversation, long pollId) {}
     }
 
     private volatile Runnable onConnectionLost;
@@ -237,8 +249,11 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     @Override
     public void incoming(ChatClient.Incoming m) {
         String conversation = m.groupId() == 0 ? dm(m.from()) : group(m.groupId());
-        if (m.text() != null) {
-            store(conversation, m.from(), m.text(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo());
+        if (m.poll() != null) {
+            store(conversation, m.from(), new ChatMessage(ChatMessage.Type.TEXT, System.currentTimeMillis(), m.poll().toStored()),
+                    m.envelopeId(), m.expireSeconds(), m.messageId(), new byte[0], false, true);
+        } else if (m.text() != null) {
+            store(conversation, m.from(), m.text(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo(), m.thread(), false);
         } else {
             storeFile(conversation, m.from(), m.file(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo());
         }
@@ -279,9 +294,59 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                 case TYPING -> {
                     if ("1".equals(a.value())) fx(v -> v.typing(conversation, a.from()));
                 }
+                case PIN -> {
+                    if (!mayModerate(a.groupId(), a.from())) return;
+                    long id = history.pin(conversation, a.target(), a.from(), "1".equals(a.value()));
+                    if (id >= 0) fx(v -> v.pinsChanged(conversation));
+                }
+                case TOPIC -> {
+                    if (!mayModerate(a.groupId(), a.from())) return;
+                    String topic = TerminalSanitizer.sanitize(a.value()).strip();
+                    if (topic.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_TOPIC_BYTES) return;
+                    history.setTopic(conversation, topic);
+                    fx(v -> v.topicChanged(conversation, a.from(), topic));
+                }
+                case VOTE -> {
+                    int choice = parseChoice(a.value());
+                    History.Message poll = history.find(conversation, a.target());
+                    com.emirchat.chat.Poll p = poll == null ? null : com.emirchat.chat.Poll.fromStored(poll.text());
+                    if (p == null || choice >= p.options().size() || choice < -1) return; // only real polls, real answers
+                    long id = history.vote(conversation, a.target(), a.from(), choice);
+                    if (id >= 0) fx(v -> v.votesChanged(conversation, id));
+                }
             }
         } catch (IOException e) {
             fx(v -> v.problem(I18n.t("session.actionFailed", a.from(), e.getMessage())));
+        }
+    }
+
+    /** Longest topic accepted. */
+    static final int MAX_TOPIC_BYTES = 300;
+
+    /**
+     * Who may pin and set the topic: in a community channel its owner and admins, in a direct
+     * chat or a plain group everyone in it.
+     */
+    boolean mayModerate(long groupId, String user) {
+        if (groupId == 0) return true;
+        ChatClient c = client;
+        if (c == null) return false;
+        Packet.GroupInfo g = c.groups().stream().filter(x -> x.id() == groupId).findFirst().orElse(null);
+        if (g == null || !g.hasMember(user)) return false;
+        if (g.community() == 0) return true;
+        Packet.GroupInfo root = c.groups().stream().filter(x -> x.id() == g.community()).findFirst().orElse(null);
+        return root != null && root.canManage(user);
+    }
+
+    /** "" → -1 (vote taken back); a small number → that answer; anything else → an impossible index. */
+    static int parseChoice(String value) {
+        if (value == null || value.isEmpty()) return -1;
+        if (value.length() > 2) return Integer.MAX_VALUE;
+        try {
+            int n = Integer.parseInt(value);
+            return n < 0 ? Integer.MAX_VALUE : n;
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
         }
     }
 
@@ -315,12 +380,26 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     }
 
     private void store(String conversation, String from, ChatMessage message, long envelopeId, long expireSeconds,
-                       byte[] uid, byte[] replyTo) {
+                       byte[] uid, byte[] replyTo, boolean thread, boolean poll) {
         try {
-            String text = TerminalSanitizer.sanitizeMultiline(message.text());
+            // a poll is ours to format; everything else from a peer is sanitized
+            String text = poll ? message.text() : TerminalSanitizer.sanitizeMultiline(message.text());
             long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
             long id = history.add(conversation, from, text, message.sentAtMillis(), false, History.RECEIVED, envelopeId,
                     expiresAt, uid, replyTo);
+            if (thread) {
+                History.Message root = history.find(conversation, replyTo);
+                if (root != null) {
+                    history.markThread(id);
+                    History.Message stored = history.get(id);
+                    fx(v -> {
+                        v.threadReply(stored, root.id());
+                        v.notifyIncoming(stored);
+                    });
+                    return;
+                }
+                // the thread's first message is gone (or never arrived): show the reply in the chat instead
+            }
             History.Message stored = history.get(id);
             fx(v -> {
                 v.messageStored(stored);

@@ -232,4 +232,38 @@ class HistoryTest {
             assertEquals("still works", h.load("dm:efe", 1).get(0).text());
         }
     }
+
+    @Test
+    void threadsVotesPinsAndTopics(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp) throws Exception {
+        try (History h = History.open(tmp.resolve("h.db"), "pw", 1000)) {
+            byte[] rootUid = new byte[16];
+            rootUid[0] = 1;
+            byte[] replyUid = new byte[16];
+            replyUid[0] = 2;
+            long root = h.add("g:1", "emir", "Kök", 1, true, History.SENT, 0, 0, rootUid, new byte[0]);
+            long reply = h.add("g:1", "efe", "Yanıt", 2, false, History.RECEIVED, 0, 0, replyUid, rootUid);
+            h.markThread(reply);
+            org.junit.jupiter.api.Assertions.assertEquals(java.util.Set.of(reply), h.threadReplies("g:1"));
+
+            org.junit.jupiter.api.Assertions.assertEquals(root, h.vote("g:1", rootUid, "efe", 1));
+            h.vote("g:1", rootUid, "ayse", 0);
+            h.vote("g:1", rootUid, "efe", 0); // changed their mind: one vote per person
+            org.junit.jupiter.api.Assertions.assertEquals(java.util.Map.of("ayse", 0, "efe", 0), h.votes("g:1").get(root));
+            h.vote("g:1", rootUid, "ayse", -1);
+            org.junit.jupiter.api.Assertions.assertEquals(java.util.Map.of("efe", 0), h.votes("g:1").get(root));
+            org.junit.jupiter.api.Assertions.assertEquals(-1, h.vote("g:1", new byte[16], "efe", 0), "no such message");
+
+            h.pin("g:1", rootUid, "emir", true);
+            h.pin("g:1", replyUid, "emir", true);
+            org.junit.jupiter.api.Assertions.assertEquals(2, h.pinned("g:1").size());
+            h.pin("g:1", rootUid, "emir", false);
+            org.junit.jupiter.api.Assertions.assertEquals(List.of(reply), h.pinned("g:1").stream().map(History.Message::id).toList());
+
+            org.junit.jupiter.api.Assertions.assertEquals("", h.topic("g:1"));
+            h.setTopic("g:1", "Haftalık plan");
+            org.junit.jupiter.api.Assertions.assertEquals("Haftalık plan", h.topic("g:1"));
+            h.setTopic("g:1", "");
+            org.junit.jupiter.api.Assertions.assertEquals("", h.topic("g:1"));
+        }
+    }
 }

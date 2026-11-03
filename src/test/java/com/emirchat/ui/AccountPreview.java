@@ -391,6 +391,57 @@ public final class AccountPreview {
         Thread.sleep(800);
         snap("15-community");
 
+        // 3.4: a topic, dice, a poll with votes, a thread, pins and the member list
+        type("/topic Haftalık plan, çizimler ve kararlar");
+        Thread.sleep(400);
+        type("/roll 2d6");
+        Thread.sleep(400);
+        ChatClient.Chat general = ChatClient.Chat.group(joined.id());
+        ChatClient.Sent poll = ayse.client.sendPoll(general, new com.emirchat.chat.Poll("Toplantı ne zaman olsun?",
+                java.util.List.of("Salı 18:00", "Perşembe 18:00", "Cuma öğlen")), 0, ChatClient.newMessageId());
+        Thread.sleep(900);
+        ayse.client.sendAction(general, ChatClient.ActionKind.VOTE, poll.messageId(), "1");
+        efeNew.client.sendAction(general, ChatClient.ActionKind.VOTE, poll.messageId(), "0");
+        ayse.client.sendThreadReply(general, poll.messageId(), "Perşembe herkese uyar mı?", 0, ChatClient.newMessageId());
+        efeNew.client.sendThreadReply(general, poll.messageId(), "Bana **uyar** 👍", 0, ChatClient.newMessageId());
+        Thread.sleep(1200);
+        long pollId = fx(() -> {
+            for (Node n : scene.getRoot().lookupAll(".poll-option")) {
+                String id = n.getId();
+                if (id != null && id.endsWith("-1")) {
+                    click(n);
+                    return Long.parseLong(id.split("-")[2]);
+                }
+            }
+            throw new IllegalStateException("no poll");
+        });
+        Thread.sleep(500);
+        snap("15b-poll-topic");
+        fx(() -> {
+            ((ConversationView) find(".conversation-layer").getUserData()).act(pollId, "pin");
+            ((Button) find("#pins-button")).fire();
+            return null;
+        });
+        Thread.sleep(500);
+        snap("15c-pins");
+        fx(() -> { click(find("#thread-link-" + pollId)); return null; });
+        waitFor("#thread-input");
+        Thread.sleep(400);
+        snap("15d-thread");
+        fx(() -> { ((Button) find("#members-button")).fire(); return null; });
+        Thread.sleep(400);
+        snap("15e-members");
+        fx(() -> { ((Button) find("#side-close")).fire(); return null; });
+        fx(() -> {
+            javafx.scene.control.TextInputControl box = (javafx.scene.control.TextInputControl) find("#composer");
+            box.setText("/");
+            box.positionCaret(1);
+            return null;
+        });
+        Thread.sleep(300);
+        snap("15f-commands");
+        fx(() -> { ((javafx.scene.control.TextInputControl) find("#composer")).setText(""); return null; });
+
         // A voice call from ayse: ringing, answered, talking (silent devices: no real microphone)
         ayse.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
         ayse.client.calls().call("emir");
