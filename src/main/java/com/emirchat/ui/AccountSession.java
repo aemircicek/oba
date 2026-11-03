@@ -250,7 +250,16 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     public void incoming(ChatClient.Incoming m) {
         String conversation = m.groupId() == 0 ? dm(m.from()) : group(m.groupId());
         if (m.poll() != null) {
-            store(conversation, m.from(), new ChatMessage(ChatMessage.Type.TEXT, System.currentTimeMillis(), m.poll().toStored()),
+            // every field from a peer is sanitized like any text (bidi overrides, controls) before it is stored
+            com.emirchat.chat.Poll clean;
+            try {
+                clean = new com.emirchat.chat.Poll(TerminalSanitizer.sanitize(m.poll().question()).strip(),
+                        m.poll().options().stream().map(o -> TerminalSanitizer.sanitize(o).strip()).toList());
+            } catch (IllegalArgumentException e) {
+                fx(v -> v.problem(I18n.t("session.undecryptable", m.from(), e.getMessage())));
+                return;
+            }
+            store(conversation, m.from(), new ChatMessage(ChatMessage.Type.TEXT, System.currentTimeMillis(), clean.toStored()),
                     m.envelopeId(), m.expireSeconds(), m.messageId(), new byte[0], false, true);
         } else if (m.text() != null) {
             store(conversation, m.from(), m.text(), m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo(), m.thread(), false);
@@ -382,7 +391,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     private void store(String conversation, String from, ChatMessage message, long envelopeId, long expireSeconds,
                        byte[] uid, byte[] replyTo, boolean thread, boolean poll) {
         try {
-            // a poll is ours to format; everything else from a peer is sanitized
+            // a poll was sanitized field by field above (its marker is a control character)
             String text = poll ? message.text() : TerminalSanitizer.sanitizeMultiline(message.text());
             long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
             long id = history.add(conversation, from, text, message.sentAtMillis(), false, History.RECEIVED, envelopeId,
