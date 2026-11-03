@@ -228,6 +228,38 @@ public final class AccountPreview {
         Thread.sleep(900);
         snap("05d-rich");
 
+        // Markdown with a code block, the hover tools, :emoji suggestions, the picker and the image viewer
+        efe.client.send(toEmir, "**Not:** son hali `kat-plani.png` dosyasında.\n```java\nint oda = 4; // salon dahil\nString ad = \"MobilCAD\";\n```\n> Bir de şuna bak: https://github.com/aemircicek", 0, null);
+        Thread.sleep(900);
+        fx(() -> {
+            Node last = null;
+            for (Node n : scene.getRoot().lookupAll(".msg-tools")) last = n;
+            if (last != null) last.getParent().setVisible(true);
+            return null;
+        });
+        snap("05g-markdown");
+        fx(() -> {
+            javafx.scene.control.TextInputControl box = (javafx.scene.control.TextInputControl) find("#composer");
+            box.setText("Harika :kal");
+            box.positionCaret(box.getText().length());
+            return null;
+        });
+        Thread.sleep(300);
+        snap("05h-emoji-suggest");
+        fx(() -> {
+            ((javafx.scene.control.TextInputControl) find("#composer")).setText("");
+            ((Button) find("#emoji-button")).fire();
+            return null;
+        });
+        Thread.sleep(300);
+        snap("05i-emoji-picker");
+        fx(() -> { ((Button) find("#emoji-button")).fire(); return null; });
+        fx(() -> { click(find(".file-preview")); return null; });
+        waitFor("#image-viewer");
+        Thread.sleep(500);
+        snap("05j-viewer");
+        fx(() -> { ((Button) find("#viewer-close")).fire(); return null; });
+
         fx(() -> { ((TextField) find("#search")).setText("sunum"); return null; });
         Thread.sleep(400);
         snap("05e-search");
@@ -393,7 +425,7 @@ public final class AccountPreview {
 
     private static void type(String text) throws Exception {
         fx(() -> {
-            ((TextField) find("#composer")).setText(text);
+            ((javafx.scene.control.TextInputControl) find("#composer")).setText(text);
             ((Button) find("#send")).fire();
             return null;
         });

@@ -500,3 +500,122 @@
 .root.compact .bubble { -fx-padding: 5 10 4 10; }
 .root.compact .chat-header { -fx-padding: 8 16; }
 .root.compact .composer { -fx-padding: 8 14; }
+
+/* ================================================================== chat polish */
+
+/* Multi-line composer (TextArea) */
+.composer .composer-input {
+    -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 20;
+    -fx-border-color: transparent;
+    -fx-border-radius: 20;
+    -fx-border-width: 1.5;
+    -fx-padding: 4 8;
+    -fx-text-fill: -sc-text;
+    -fx-prompt-text-fill: -sc-text-3;
+    -fx-highlight-fill: -sc-accent;
+    -fx-highlight-text-fill: -sc-on-accent;
+    -fx-font-size: 13.5px;
+}
+.composer .composer-input:focused { -fx-border-color: -sc-accent; }
+.composer .composer-input .content { -fx-background-color: transparent; -fx-padding: 3 6; }
+.composer .composer-input .scroll-pane { -fx-background-color: transparent; }
+.composer .composer-input .scroll-pane > .viewport { -fx-background-color: transparent; }
+.composer .composer-input .scroll-bar:vertical { -fx-pref-width: 8; }
+
+/* :emoji suggestions */
+.suggest-box {
+    -fx-background-color: -sc-surface;
+    -fx-background-radius: 12;
+    -fx-border-color: -sc-border;
+    -fx-border-radius: 12;
+    -fx-padding: 6;
+    -fx-effect: dropshadow(gaussian, -sc-shadow, 16, 0, 0, 4);
+}
+.suggest-row { -fx-padding: 5 10; -fx-background-radius: 8; -fx-cursor: hand; }
+.suggest-row:hover { -fx-background-color: -sc-surface-2; }
+.suggest-row.selected { -fx-background-color: -sc-accent-weak; }
+.suggest-emoji { -fx-font-size: 18px; }
+.suggest-name { -fx-text-fill: -sc-text-2; -fx-font-size: 12.5px; }
+
+/* Emoji picker */
+.emoji-picker {
+    -fx-background-color: -sc-surface;
+    -fx-background-radius: 14;
+    -fx-border-color: -sc-border;
+    -fx-border-radius: 14;
+    -fx-padding: 10;
+    -fx-effect: dropshadow(gaussian, -sc-shadow, 22, 0, 0, 6);
+}
+.emoji-tabs { -fx-padding: 0 0 4 0; -fx-border-color: transparent transparent -sc-border transparent; }
+.emoji-tab { -fx-font-size: 16px; -fx-padding: 3 6; -fx-background-radius: 8; -fx-cursor: hand; -fx-opacity: 0.6; }
+.emoji-tab:hover { -fx-opacity: 1; -fx-background-color: -sc-surface-2; }
+.emoji-tab.selected { -fx-opacity: 1; -fx-background-color: -sc-accent-weak; }
+.emoji-cell { -fx-font-size: 21px; -fx-padding: 3; -fx-min-width: 36; -fx-alignment: center; -fx-background-radius: 8; -fx-cursor: hand; }
+.emoji-cell:hover { -fx-background-color: -sc-surface-2; -fx-scale-x: 1.15; -fx-scale-y: 1.15; }
+
+/* Hover tools beside a message */
+.msg-tools {
+    -fx-background-color: -sc-surface;
+    -fx-background-radius: 999;
+    -fx-border-color: -sc-border;
+    -fx-border-radius: 999;
+    -fx-padding: 2 4;
+    -fx-effect: dropshadow(gaussian, -sc-shadow, 8, 0, 0, 2);
+}
+.button.tool-button { -fx-background-color: transparent; -fx-padding: 3 5; -fx-background-radius: 999; -fx-font-weight: normal; }
+.button.tool-button:hover { -fx-background-color: -sc-surface-2; }
+.button.tool-emoji { -fx-font-size: 14px; -fx-padding: 1 4; }
+.button.tool-emoji.mine { -fx-background-color: -sc-accent-weak; }
+
+/* Date separators */
+.date-line { -fx-background-color: -sc-border; -fx-min-height: 1; -fx-max-height: 1; }
+.date-chip { -fx-text-fill: -sc-text-3; -fx-font-size: 11px; -fx-font-weight: bold; }
+
+/* Markdown */
+.md { -fx-font-size: 13.5px; }
+.root.text-small .md { -fx-font-size: 12.5px; }
+.root.text-large .md { -fx-font-size: 15.5px; }
+.bubble.own .md { -fx-fill: -sc-on-own-bubble; }
+.bubble.peer .md { -fx-fill: -sc-text; }
+.md.md-bold { -fx-font-weight: bold; }
+.md.md-italic { -fx-font-style: italic; }
+.md.md-code { -fx-font-family: "Menlo", "SF Mono", "Consolas", "DejaVu Sans Mono", monospace; -fx-font-size: 12.5px; }
+.bubble.peer .md.md-link { -fx-fill: -sc-accent-text; }
+.bubble.own .md.md-link { -fx-fill: -sc-on-own-bubble; }
+.md-code-block {
+    -fx-background-color: rgba(0, 0, 0, 0.28);
+    -fx-background-radius: 8;
+    -fx-padding: 8 10;
+    -fx-spacing: 4;
+}
+.root.light .bubble.peer .md-code-block { -fx-background-color: #2a241d; }
+.md-code-block .md { -fx-fill: #eee3d3; }
+.md-code-block .md.md-keyword { -fx-fill: #f2a43a; -fx-font-weight: bold; }
+.md-code-block .md.md-string { -fx-fill: #9be15d; }
+.md-code-block .md.md-number { -fx-fill: #7cc7ff; }
+.md-code-block .md.md-comment { -fx-fill: #8f8474; -fx-font-style: italic; }
+.md-code-lang { -fx-text-fill: #b6aa9a; -fx-font-size: 10px; -fx-font-weight: bold; }
+.md-quote { -fx-border-color: transparent transparent transparent -sc-accent; -fx-border-width: 0 0 0 3; -fx-padding: 0 0 0 8; }
+.bubble.own .md-quote { -fx-border-color: transparent transparent transparent rgba(255, 255, 255, 0.7); }
+.bubble.peer .md-quote .md { -fx-fill: -sc-text-2; }
+
+/* Drop a file */
+.drop-veil {
+    -fx-background-color: rgba(15, 13, 11, 0.72);
+    -fx-border-color: -sc-accent;
+    -fx-border-width: 2;
+    -fx-border-style: segments(10, 8);
+    -fx-border-insets: 10;
+    -fx-border-radius: 16;
+}
+.drop-hint { -fx-text-fill: #fff6ea; -fx-font-size: 15px; -fx-font-weight: bold; }
+
+/* Image viewer */
+.viewer { -fx-background-color: rgba(8, 7, 6, 0.92); }
+.viewer-caption { -fx-text-fill: #fff6ea; -fx-font-size: 13px; -fx-font-weight: bold; }
+.viewer-count { -fx-text-fill: #b6aa9a; -fx-font-size: 12px; }
+.viewer-bar { -fx-max-width: 900; }
+.button.viewer-button { -fx-background-color: rgba(255, 255, 255, 0.10); -fx-background-radius: 999; -fx-padding: 8; }
+.button.viewer-button:hover { -fx-background-color: rgba(255, 255, 255, 0.20); }
+.icon.on-dark { -fx-stroke: #fff6ea; }

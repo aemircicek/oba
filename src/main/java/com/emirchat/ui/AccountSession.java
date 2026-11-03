@@ -261,7 +261,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                     if (id >= 0) fx(v -> v.messageChanged(conversation, id));
                 }
                 case EDIT -> {
-                    long id = history.edit(conversation, a.target(), a.from(), TerminalSanitizer.sanitize(a.value()));
+                    long id = history.edit(conversation, a.target(), a.from(), TerminalSanitizer.sanitizeMultiline(a.value()));
                     if (id >= 0) fx(v -> v.messageChanged(conversation, id));
                 }
                 case DELETE -> {
@@ -317,7 +317,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     private void store(String conversation, String from, ChatMessage message, long envelopeId, long expireSeconds,
                        byte[] uid, byte[] replyTo) {
         try {
-            String text = TerminalSanitizer.sanitize(message.text());
+            String text = TerminalSanitizer.sanitizeMultiline(message.text());
             long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
             long id = history.add(conversation, from, text, message.sentAtMillis(), false, History.RECEIVED, envelopeId,
                     expiresAt, uid, replyTo);

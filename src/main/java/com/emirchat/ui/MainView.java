@@ -290,7 +290,7 @@ final class MainView implements AccountSession.View {
             String where = m.conversation().startsWith("g:") ? groupName(Long.parseLong(m.conversation().substring(2)))
                     : m.conversation().substring(3);
             Label sub = UiKit.label((m.outgoing() ? "You: " : m.conversation().startsWith("g:") ? m.sender() + ": " : "")
-                    + (m.file() != null ? "📎 " : "") + m.text(), "row-sub");
+                    + (m.file() != null ? "📎 " : "") + Markdown.plain(m.text()), "row-sub");
             VBox text = new VBox(2, UiKit.label(where, "row-title"), sub);
             text.setMinWidth(0);
             HBox row = new HBox(10, text, UiKit.grow(), UiKit.label(UiKit.time(m.sentAt()), "row-time"));
@@ -830,7 +830,7 @@ final class MainView implements AccountSession.View {
             title = conversation.substring(3);
             avatar = UiKit.avatarWithPresence(title, client.isOnline(title));
         }
-        String last = s == null ? "" : s.lastText().equals(History.DELETED_TEXT) ? I18n.t("conv.deleted") : s.lastText();
+        String last = s == null ? "" : s.lastText().equals(History.DELETED_TEXT) ? I18n.t("conv.deleted") : Markdown.plain(s.lastText());
         String preview = s == null ? I18n.t("main.noMessages")
                 : (s.lastSender().equals(client.username()) ? I18n.t("conv.you") + ": " : group ? s.lastSender() + ": " : "") + last;
         Label sub = UiKit.label(preview, "row-sub");
@@ -1448,7 +1448,7 @@ final class MainView implements AccountSession.View {
                 : m.sender();
         String title = m.conversation().startsWith("g:") ? I18n.t("notify.inGroup", m.sender(), where) : where;
         String body = session.setting(AccountSession.NOTIFICATION_PREVIEW)
-                ? (m.file() != null ? "📎 " + m.text() : m.text())
+                ? (m.file() != null ? "📎 " + m.text() : Markdown.plain(m.text()))
                 : I18n.t("notify.newMessage");
         Tray.get().notify(title, body);
     }

@@ -31,6 +31,14 @@ final class Icons {
     static final String MIC_OFF = "M1 1l22 22 M9 9v3a3 3 0 0 0 5.12 2.12 M15 9.34V4a3 3 0 0 0-5.94-.6 M17 16.95A7 7 0 0 1 5 12v-2 M19 10v2a7 7 0 0 1-.11 1.23 M12 19v4 M8 23h8";
     static final String DOWNLOAD ="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3";
 
+    static final String SMILE = "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M8 14s1.5 2 4 2 4-2 4-2 M9 9h.01 M15 9h.01";
+    static final String SMILE_PLUS = "M20.5 12A8.5 8.5 0 1 1 12 3.5 M8 14s1.5 2 4 2 4-2 4-2 M9 9h.01 M15 9h.01 M19 2v6 M16 5h6";
+    static final String CORNER_UP_LEFT = "M9 14L4 9l5-5 M20 20v-7a4 4 0 0 0-4-4H4";
+    static final String MORE = "M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z M19 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z M5 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z";
+    static final String X = "M18 6L6 18 M6 6l12 12";
+    static final String CHEVRON_LEFT = "M15 18l-6-6 6-6";
+    static final String CHEVRON_RIGHT = "M9 18l6-6-6-6";
+
     private Icons() {}
 
     /** An icon of {@code size} pixels; {@code tone} is an extra style class such as "accent" or "danger". */

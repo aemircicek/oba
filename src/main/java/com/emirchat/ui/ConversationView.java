@@ -56,12 +56,23 @@ final class ConversationView {
     private final long groupId;         // group only (0 for DMs)
     private final Actions actions;
     private final BorderPane root = new BorderPane();
+    /** root plus floating layers: emoji suggestions, the emoji picker and the image viewer. */
+    private final StackPane layer = new StackPane(root);
     private final VBox top = new VBox();
     private final VBox messages = new VBox();
     private final ScrollPane scroller = new ScrollPane(messages);
     private final Map<Long, Label> statusLabels = new HashMap<>();
     private final Map<Long, Node> rows = new HashMap<>();
-    private final TextField input = new TextField();
+    private final javafx.scene.control.TextArea input = new javafx.scene.control.TextArea();
+    private final HBox composer = new HBox();
+    private final EmojiSuggestions suggestions = new EmojiSuggestions();
+    private Node picker;                 // the open emoji picker, or null
+    /** Shown images in order, for the viewer's previous/next; decrypted pictures are kept here. */
+    private final List<FileMessage> gallery = new java.util.ArrayList<>();
+    private final Map<String, Image> images = new HashMap<>();
+    private java.time.LocalDate lastDay;
+    private long popId;                  // message whose reaction just changed (to animate it)
+    private String popEmoji;
     private final Button sendButton = new Button();
     private final Map<Long, Boolean> continuedById = new HashMap<>();
     private Map<Long, Map<String, String>> reactions = new HashMap<>();
@@ -101,6 +112,11 @@ final class ConversationView {
         messages.heightProperty().addListener((o, a, b) -> scroller.setVvalue(1.0));
 
         input.setId("composer");
+        input.setWrapText(true);
+        input.setPrefRowCount(1);
+        input.getStyleClass().add("composer-input");
+        input.textProperty().addListener((o, a, b) -> resizeComposer());
+        input.widthProperty().addListener((o, a, b) -> resizeComposer());
         HBox.setHgrow(input, Priority.ALWAYS);
         Button send = sendButton;
         send.setId("send");
@@ -108,7 +124,6 @@ final class ConversationView {
         send.setGraphic(Icons.of(Icons.SEND, 17, "on-accent"));
         send.setTooltip(new Tooltip(I18n.t("conv.sendTip")));
         send.disableProperty().bind(input.textProperty().isEmpty());
-        input.setOnAction(e -> send());
         send.setOnAction(e -> send());
         Button attach = new Button();
         attach.setId("attach");
@@ -116,9 +131,15 @@ final class ConversationView {
         attach.setGraphic(Icons.of(Icons.PAPERCLIP, 19, "muted"));
         attach.setTooltip(new Tooltip(I18n.t("conv.attachTip", Attachments.MAX_FILE_BYTES / (1024 * 1024))));
         attach.setOnAction(e -> chooseFile());
-        HBox composer = new HBox(attach, input, send);
+        Button emoji = new Button();
+        emoji.setId("emoji-button");
+        emoji.getStyleClass().add("attach");
+        emoji.setGraphic(Icons.of(Icons.SMILE, 19, "muted"));
+        emoji.setTooltip(new Tooltip(I18n.t("emoji.pickerTip")));
+        emoji.setOnAction(e -> togglePicker(null));
+        composer.getChildren().addAll(attach, input, emoji, send);
         composer.getStyleClass().add("composer");
-        composer.setAlignment(Pos.CENTER);
+        composer.setAlignment(Pos.BOTTOM_CENTER);
 
         // "Replying to …" / "Editing message" bar above the composer
         Button cancelContext = new Button("✕");
@@ -133,9 +154,8 @@ final class ConversationView {
         contextBar.setAlignment(Pos.CENTER_LEFT);
         contextBar.setVisible(false);
         contextBar.setManaged(false);
-        input.setOnKeyPressed(e -> {
-            if (e.getCode() == javafx.scene.input.KeyCode.ESCAPE) clearContext();
-        });
+        input.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, this::composerKey);
+        input.caretPositionProperty().addListener((o, a, b) -> suggestions.update());
         input.textProperty().addListener((o, a, b) -> maybeSendTyping(b));
         typingTimeout.setOnFinished(e -> {
             typingWho = null;
@@ -146,13 +166,19 @@ final class ConversationView {
         root.setTop(top);
         root.setCenter(scroller);
         root.setBottom(new VBox(contextBar, composer));
+        layer.getChildren().add(suggestions.box);
+        StackPane.setAlignment(suggestions.box, Pos.BOTTOM_LEFT);
+        installDropTarget();
+        layer.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
+            if (picker != null && !isInside(e.getTarget(), picker) && !isInside(e.getTarget(), composer)) closePicker();
+        });
         refreshHeader();
         load();
         Platform.runLater(input::requestFocus);
     }
 
     Parent root() {
-        return root;
+        return layer;
     }
 
     String conversation() {
@@ -379,6 +405,12 @@ final class ConversationView {
     }
 
     void append(History.Message m) {
+        java.time.LocalDate day = java.time.Instant.ofEpochMilli(m.sentAt()).atZone(java.time.ZoneId.systemDefault()).toLocalDate();
+        if (!day.equals(lastDay)) {
+            messages.getChildren().add(dateSeparator(day));
+            lastDay = day;
+            lastSender = null;
+        }
         boolean continued = m.sender().equals(lastSender) && m.sentAt() - lastAt < GROUP_WINDOW_MS;
         Node row = buildRow(m, continued);
         messages.getChildren().add(row);
@@ -434,6 +466,8 @@ final class ConversationView {
             body = UiKit.label("🚫 " + I18n.t("conv.deleted"), "bubble-text", "bubble-deleted");
         } else if (m.file() != null) {
             body = fileCard(m.file());
+        } else if (Markdown.hasFormatting(m.text())) {
+            body = richText(m.text());
         } else {
             Label text = UiKit.label(m.text(), "bubble-text");
             text.setWrapText(true);
@@ -455,7 +489,8 @@ final class ConversationView {
         }
         bubble.getChildren().addAll(body, meta);
         bubble.maxWidthProperty().bind(messages.widthProperty().multiply(0.70));
-        bubble.setMinWidth(Region.USE_PREF_SIZE);
+        // plain text hugs its content; formatted text (TextFlow) wraps at the bubble's limit instead
+        bubble.setMinWidth(body instanceof Label || body instanceof HBox ? Region.USE_PREF_SIZE : 0);
         bubble.setMinHeight(Region.USE_PREF_SIZE);
         if (m.hasUid() && !m.deleted()) {
             bubble.setOnContextMenuRequested(e -> menu(m).show(bubble, e.getScreenX(), e.getScreenY()));
@@ -470,7 +505,25 @@ final class ConversationView {
         }
         Map<String, String> theirs = reactions.get(m.id());
         if (theirs != null && !theirs.isEmpty()) column.getChildren().add(reactionChips(m, theirs, own));
-        HBox row = new HBox(column);
+        HBox row = new HBox(6);
+        if (groupId != 0 && !own) {
+            // the sender's face beside the first message of a run, a matching gap beside the rest
+            Node face = continued ? new Region() : UiKit.avatar(m.sender(), "avatar-xs", false);
+            if (face instanceof Region r) {
+                r.setMinWidth(30);
+                r.setPrefWidth(30);
+            }
+            VBox faceBox = new VBox(face);
+            faceBox.setPadding(new Insets(continued ? 0 : 18, 0, 0, 0));
+            row.getChildren().add(faceBox);
+        }
+        row.getChildren().add(column);
+        if (m.hasUid() && !m.deleted()) {
+            Node tools = hoverTools(m, bubble);
+            if (own) row.getChildren().add(0, tools);
+            else row.getChildren().add(tools);
+            row.hoverProperty().addListener((o, a, hover) -> tools.setVisible(hover));
+        }
         row.setAlignment(own ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
         row.setPadding(new Insets(continued ? 3 : 12, 0, 0, 0));
         row.setUserData(m.id());
@@ -484,7 +537,7 @@ final class ConversationView {
         try {
             History.Message original = session.history().find(conversation, target);
             who = original == null ? "" : original.outgoing() ? I18n.t("conv.you") : original.sender();
-            text = original == null ? I18n.t("conv.unavailable") : original.deleted() ? I18n.t("conv.deleted") : original.text();
+            text = original == null ? I18n.t("conv.unavailable") : original.deleted() ? I18n.t("conv.deleted") : Markdown.plain(original.text());
         } catch (IOException e) {
             who = "";
             text = I18n.t("conv.unavailable");
@@ -506,6 +559,10 @@ final class ConversationView {
         byEmoji.forEach((emoji, people) -> {
             Label chip = UiKit.label(emoji + (people.size() > 1 ? " " + people.size() : ""), "reaction-chip");
             if (people.contains(me)) chip.getStyleClass().add("mine");
+            if (m.id() == popId && emoji.equals(popEmoji)) {
+                popId = 0;
+                pop(chip);
+            }
             Tooltip.install(chip, new Tooltip(String.join(", ", people.stream().map(p -> p.equals(me) ? I18n.t("conv.youLower") : p).toList())));
             chip.setOnMouseClicked(e -> react(m, people.contains(me) ? "" : emoji));
             chips.getChildren().add(chip);
@@ -570,7 +627,7 @@ final class ConversationView {
         editing = null;
         replyTo = m.uid();
         String who = m.outgoing() ? I18n.t("conv.yourself") : m.sender();
-        showContext("↩ " + I18n.t("conv.replyingTo", who) + ": " + m.text());
+        showContext("↩ " + I18n.t("conv.replyingTo", who) + ": " + Markdown.plain(m.text()));
         input.requestFocus();
     }
 
@@ -599,6 +656,8 @@ final class ConversationView {
 
     private void react(History.Message m, String emoji) {
         String me = session.client().username();
+        popId = m.id();
+        popEmoji = AccountSession.displayEmoji(emoji);
         try {
             session.history().react(conversation, m.uid(), me, emoji);
         } catch (IOException e) {
@@ -814,18 +873,21 @@ final class ConversationView {
         card.setAlignment(Pos.CENTER_LEFT);
         card.setMinWidth(220);
         if (!file.isPreviewableImage()) return card;
+        if (gallery.stream().noneMatch(f -> fileKey(f).equals(fileKey(file)))) gallery.add(file);
         VBox withPreview = new VBox(6, card);
         session.downloads().execute(() -> {
             try {
                 Image image = new Image(new ByteArrayInputStream(session.client().downloadFile(file)));
                 if (image.isError()) return;
+                Platform.runLater(() -> images.put(fileKey(file), image));
                 Platform.runLater(() -> {
                     ImageView view = new ImageView(image);
                     view.setPreserveRatio(true);
                     view.setFitWidth(Math.min(280, image.getWidth()));
                     view.setSmooth(true);
                     view.getStyleClass().add("file-preview");
-                    view.setOnMouseClicked(e -> saveFile(file));
+                    view.setOnMouseClicked(e -> openViewer(file));
+                    Tooltip.install(view, new Tooltip(I18n.t("viewer.openTip")));
                     withPreview.getChildren().add(0, view);
                 });
             } catch (Exception ignored) {
@@ -840,11 +902,25 @@ final class ConversationView {
         chooser.setTitle(I18n.t("conv.sendFile"));
         File chosen = chooser.showOpenDialog(root.getScene().getWindow());
         if (chosen == null) return;
+        sendFile(chosen);
+    }
+
+    /** Encrypts, uploads and sends one file (from the chooser, a drop or a paste). */
+    void sendFile(File chosen) {
+        if (chosen.isDirectory()) return;
         if (chosen.length() > Attachments.MAX_FILE_BYTES) {
             systemLine(I18n.t("conv.tooLarge", chosen.getName(), Attachments.MAX_FILE_BYTES / (1024 * 1024)), true);
             return;
         }
-        String name = FileMessage.safeName(chosen.getName());
+        sendBytes(FileMessage.safeName(chosen.getName()), () -> Files.readAllBytes(chosen.toPath()), mimeType(chosen.toPath()));
+    }
+
+    interface Bytes {
+        byte[] read() throws IOException;
+    }
+
+    void sendBytes(String fileName, Bytes source, String mime) {
+        String name = FileMessage.safeName(fileName);
         Label progress = UiKit.label(I18n.t("conv.sending", name), "system-line");
         HBox row = new HBox(progress);
         row.setAlignment(Pos.CENTER_RIGHT);
@@ -857,8 +933,8 @@ final class ConversationView {
             String problem = null;
             History.Message stored = null;
             try {
-                byte[] data = Files.readAllBytes(chosen.toPath());
-                String mime = mimeType(chosen.toPath());
+                byte[] data = source.read();
+                if (data.length > Attachments.MAX_FILE_BYTES) throw new IOException(I18n.t("conv.tooLarge", name, Attachments.MAX_FILE_BYTES / (1024 * 1024)));
                 String me = session.client().username();
                 ChatClient.Sent sent = session.client().sendFile(chat(), name, mime, data, expire, answering);
                 long expiresAt = AccountSession.expiresAt(System.currentTimeMillis(), expire);
@@ -942,6 +1018,545 @@ final class ConversationView {
         row.setPadding(new Insets(12, 0, 4, 0));
         messages.getChildren().add(row);
         lastSender = null;
+    }
+
+    // ------------------------------------------------------------------ composer
+
+    /** Grows the composer with its text, up to six lines (then it scrolls). */
+    private void resizeComposer() {
+        String text = input.getText();
+        double width = Math.max(120, input.getWidth() - 32);
+        double charsPerLine = Math.max(10, width / 7.4);
+        int rows = 0;
+        for (String line : text.split("\n", -1)) rows += 1 + (int) (line.length() / charsPerLine);
+        input.setPrefRowCount(Math.max(1, Math.min(6, rows)));
+        suggestions.update();
+    }
+
+    /**
+     * Enter sends, Shift+Enter starts a new line, Escape cancels a reply or edit, Up in an empty
+     * composer edits your last message, and pasting a picture or a file sends it.
+     */
+    private void composerKey(javafx.scene.input.KeyEvent e) {
+        if (suggestions.handle(e)) {
+            e.consume();
+            return;
+        }
+        switch (e.getCode()) {
+            case ENTER -> {
+                e.consume();
+                if (e.isShiftDown() || e.isAltDown()) input.replaceSelection("\n");
+                else send();
+            }
+            case ESCAPE -> {
+                if (picker != null) closePicker();
+                else clearContext();
+            }
+            case UP -> {
+                if (input.getText().isEmpty() && editing == null && editLastOwn()) e.consume();
+            }
+            case V -> {
+                if (e.isShortcutDown() && pasteAttachment()) e.consume();
+            }
+            default -> { }
+        }
+    }
+
+    private boolean editLastOwn() {
+        try {
+            List<History.Message> recent = session.history().load(conversation, 30);
+            for (int i = recent.size() - 1; i >= 0; i--) {
+                History.Message m = recent.get(i);
+                if (m.outgoing() && m.hasUid() && !m.deleted() && m.file() == null) {
+                    startEdit(m);
+                    return true;
+                }
+            }
+        } catch (IOException ignored) {
+            // nothing to edit
+        }
+        return false;
+    }
+
+    /** The ":name" suggestions above the composer: arrows move, Enter or Tab inserts. */
+    private final class EmojiSuggestions {
+        final VBox box = new VBox(2);
+        private List<Emoji.Entry> items = List.of();
+        private int selected;
+
+        EmojiSuggestions() {
+            box.getStyleClass().add("suggest-box");
+            box.setId("emoji-suggestions");
+            box.setVisible(false);
+            box.setManaged(false);
+            box.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+        }
+
+        boolean showing() {
+            return box.isVisible();
+        }
+
+        void update() {
+            String code = Emoji.typedShortcode(input.getText(), input.getCaretPosition());
+            items = code == null ? List.of() : Emoji.suggest(code, 6);
+            selected = 0;
+            if (items.isEmpty()) {
+                hide();
+                return;
+            }
+            render();
+            StackPane.setMargin(box, new Insets(0, 0, composer.getHeight() + 4, 56));
+            box.setVisible(true);
+            box.setManaged(true);
+        }
+
+        private void render() {
+            box.getChildren().clear();
+            for (int i = 0; i < items.size(); i++) {
+                Emoji.Entry entry = items.get(i);
+                HBox row = new HBox(10, UiKit.label(entry.emoji(), "suggest-emoji"), UiKit.label(":" + entry.name() + ":", "suggest-name"));
+                row.getStyleClass().add("suggest-row");
+                if (i == selected) row.getStyleClass().add("selected");
+                row.setAlignment(Pos.CENTER_LEFT);
+                int index = i;
+                row.setOnMouseClicked(e -> {
+                    selected = index;
+                    insert();
+                });
+                box.getChildren().add(row);
+            }
+        }
+
+        void hide() {
+            box.setVisible(false);
+            box.setManaged(false);
+        }
+
+        boolean handle(javafx.scene.input.KeyEvent e) {
+            if (!showing()) return false;
+            switch (e.getCode()) {
+                case UP -> selected = (selected + items.size() - 1) % items.size();
+                case DOWN -> selected = (selected + 1) % items.size();
+                case ENTER, TAB -> {
+                    insert();
+                    return true;
+                }
+                case ESCAPE -> {
+                    hide();
+                    return true;
+                }
+                default -> {
+                    return false;
+                }
+            }
+            render();
+            return true;
+        }
+
+        private void insert() {
+            int caret = input.getCaretPosition();
+            String code = Emoji.typedShortcode(input.getText(), caret);
+            if (code == null || items.isEmpty()) return;
+            int start = caret - code.length() - 1;
+            input.replaceText(start, caret, items.get(selected).emoji() + " ");
+            input.positionCaret(start + items.get(selected).emoji().length() + 1);
+            hide();
+            input.requestFocus();
+        }
+    }
+
+    // ------------------------------------------------------------------ emoji picker
+
+    /**
+     * Opens or closes the emoji picker. With a message it picks a reaction to that message;
+     * without one it inserts the emoji where the caret is.
+     */
+    private void togglePicker(History.Message reactTo) {
+        if (picker != null) {
+            closePicker();
+            if (reactTo == null) return;
+        }
+        VBox panel = new VBox(8);
+        panel.getStyleClass().add("emoji-picker");
+        panel.setId("emoji-picker");
+        panel.setMaxSize(344, 330);
+        panel.setPrefSize(344, 330);
+        TextField find = new TextField();
+        find.setPromptText(I18n.t("emoji.search"));
+        find.getStyleClass().add("search");
+        find.setId("emoji-search");
+        javafx.scene.layout.FlowPane grid = new javafx.scene.layout.FlowPane(2, 2);
+        grid.getStyleClass().add("emoji-grid");
+        ScrollPane scroll = new ScrollPane(grid);
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        VBox.setVgrow(scroll, Priority.ALWAYS);
+        HBox tabs = new HBox(2);
+        tabs.getStyleClass().add("emoji-tabs");
+        Runnable[] show = new Runnable[1];
+        java.util.function.Consumer<List<Emoji.Entry>> fill = entries -> {
+            grid.getChildren().clear();
+            for (Emoji.Entry entry : entries) {
+                Label cell = UiKit.label(entry.emoji(), "emoji-cell");
+                Tooltip.install(cell, new Tooltip(":" + entry.name() + ":"));
+                cell.setOnMouseClicked(e -> {
+                    if (reactTo != null) {
+                        react(reactTo, entry.emoji());
+                        closePicker();
+                    } else {
+                        input.replaceSelection(entry.emoji());
+                        input.requestFocus();
+                    }
+                });
+                grid.getChildren().add(cell);
+            }
+            scroll.setVvalue(0);
+        };
+        for (var category : Emoji.CATEGORIES.entrySet()) {
+            Label tab = UiKit.label(category.getValue().get(0).emoji(), "emoji-tab");
+            Tooltip.install(tab, new Tooltip(categoryName(category.getKey())));
+            tab.setOnMouseClicked(e -> {
+                find.clear();
+                tabs.getChildren().forEach(t -> t.getStyleClass().remove("selected"));
+                tab.getStyleClass().add("selected");
+                fill.accept(category.getValue());
+            });
+            tabs.getChildren().add(tab);
+        }
+        show[0] = () -> {
+            tabs.getChildren().get(0).getStyleClass().add("selected");
+            fill.accept(Emoji.CATEGORIES.values().iterator().next());
+        };
+        find.textProperty().addListener((o, a, b) -> {
+            if (b.isBlank()) show[0].run();
+            else fill.accept(Emoji.suggest(b.strip().replace(":", ""), 80));
+        });
+        find.setOnKeyPressed(e -> {
+            if (e.getCode() == javafx.scene.input.KeyCode.ESCAPE) closePicker();
+        });
+        panel.getChildren().addAll(find, tabs, scroll);
+        show[0].run();
+        picker = panel;
+        layer.getChildren().add(panel);
+        StackPane.setAlignment(panel, Pos.BOTTOM_RIGHT);
+        StackPane.setMargin(panel, new Insets(0, 14, composer.getHeight() + 6, 0));
+        if (Motion.enabled()) {
+            panel.setOpacity(0);
+            panel.setTranslateY(10);
+            javafx.animation.FadeTransition f = new javafx.animation.FadeTransition(javafx.util.Duration.millis(140), panel);
+            f.setToValue(1);
+            javafx.animation.TranslateTransition t = new javafx.animation.TranslateTransition(javafx.util.Duration.millis(140), panel);
+            t.setToY(0);
+            new javafx.animation.ParallelTransition(f, t).play();
+        }
+        Platform.runLater(find::requestFocus);
+    }
+
+    private static String categoryName(String key) {
+        return switch (key) {
+            case "smileys" -> I18n.t("emoji.smileys");
+            case "gestures" -> I18n.t("emoji.gestures");
+            case "hearts" -> I18n.t("emoji.hearts");
+            case "nature" -> I18n.t("emoji.nature");
+            case "food" -> I18n.t("emoji.food");
+            case "activities" -> I18n.t("emoji.activities");
+            case "objects" -> I18n.t("emoji.objects");
+            default -> I18n.t("emoji.symbols");
+        };
+    }
+
+    private void closePicker() {
+        if (picker == null) return;
+        layer.getChildren().remove(picker);
+        picker = null;
+        input.requestFocus();
+    }
+
+    private static boolean isInside(Object target, Node container) {
+        for (Node n = target instanceof Node node ? node : null; n != null; n = n.getParent()) {
+            if (n == container) return true;
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------------ hover tools
+
+    /** Quick reactions, reply and "more" beside a message while the pointer is over it. */
+    private Node hoverTools(History.Message m, Node bubble) {
+        HBox tools = new HBox(1);
+        tools.getStyleClass().add("msg-tools");
+        tools.setAlignment(Pos.CENTER);
+        tools.setVisible(false);
+        tools.setMaxHeight(Region.USE_PREF_SIZE);
+        String mine = AccountSession.displayEmoji(reactions.getOrDefault(m.id(), Map.of()).getOrDefault(session.client().username(), ""));
+        for (String emoji : List.of("👍", "❤️", "😂")) {
+            Button b = new Button(emoji);
+            b.getStyleClass().addAll("tool-button", "tool-emoji");
+            if (emoji.equals(mine)) b.getStyleClass().add("mine");
+            b.setOnAction(e -> react(m, emoji.equals(mine) ? "" : emoji));
+            tools.getChildren().add(b);
+        }
+        Button more = toolButton(Icons.SMILE_PLUS, I18n.t("emoji.reactTip"), () -> togglePicker(m));
+        more.setId("tool-react-" + m.id());
+        Button reply = toolButton(Icons.CORNER_UP_LEFT, I18n.t("conv.reply"), () -> startReply(m));
+        reply.setId("tool-reply-" + m.id());
+        Button menuButton = toolButton(Icons.MORE, I18n.t("conv.more"), null);
+        menuButton.setOnAction(e -> {
+            javafx.geometry.Bounds b = menuButton.localToScreen(menuButton.getBoundsInLocal());
+            menu(m).show(menuButton, b.getMinX(), b.getMaxY());
+        });
+        tools.getChildren().addAll(more, reply, menuButton);
+        tools.setVisible(true);
+        VBox holder = new VBox(tools);
+        holder.setAlignment(Pos.CENTER);
+        holder.setMinWidth(Region.USE_PREF_SIZE);
+        holder.setVisible(false); // still takes its place, so the bubble never jumps when it appears
+        return holder;
+    }
+
+    private Button toolButton(String icon, String tip, Runnable action) {
+        Button b = new Button();
+        b.setGraphic(Icons.of(icon, 15, "muted"));
+        b.getStyleClass().add("tool-button");
+        b.setTooltip(new Tooltip(tip));
+        if (action != null) b.setOnAction(e -> action.run());
+        return b;
+    }
+
+    /** A little bounce for a reaction that was just added. */
+    private static void pop(Node chip) {
+        if (!Motion.enabled()) return;
+        chip.setScaleX(0.4);
+        chip.setScaleY(0.4);
+        javafx.animation.ScaleTransition grow = new javafx.animation.ScaleTransition(javafx.util.Duration.millis(260), chip);
+        grow.setToX(1);
+        grow.setToY(1);
+        grow.setInterpolator(new javafx.animation.Interpolator() {
+            @Override protected double curve(double t) { // overshoots a little, then settles
+                double c = 1.9;
+                return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2);
+            }
+        });
+        grow.play();
+    }
+
+    // ------------------------------------------------------------------ dates
+
+    private Node dateSeparator(java.time.LocalDate day) {
+        java.time.LocalDate today = java.time.LocalDate.now();
+        String text = day.equals(today) ? I18n.t("conv.today")
+                : day.equals(today.minusDays(1)) ? I18n.t("conv.yesterday")
+                : day.format(java.time.format.DateTimeFormatter.ofPattern(
+                        day.getYear() == today.getYear() ? "d MMMM, EEEE" : "d MMMM yyyy", I18n.locale()));
+        Region left = new Region();
+        Region right = new Region();
+        left.getStyleClass().add("date-line");
+        right.getStyleClass().add("date-line");
+        HBox.setHgrow(left, Priority.ALWAYS);
+        HBox.setHgrow(right, Priority.ALWAYS);
+        HBox row = new HBox(10, left, UiKit.label(text, "date-chip"), right);
+        row.setAlignment(Pos.CENTER);
+        row.setPadding(new Insets(16, 0, 4, 0));
+        row.getStyleClass().add("date-separator");
+        return row;
+    }
+
+    // ------------------------------------------------------------------ formatted text
+
+    /** A message with Markdown: styled text, quotes and colour-coded code blocks. */
+    private Node richText(String text) {
+        VBox box = new VBox(6);
+        for (Markdown.Block block : Markdown.parse(text)) {
+            javafx.scene.text.TextFlow flow = new javafx.scene.text.TextFlow();
+            flow.getStyleClass().add("md-flow");
+            for (Markdown.Span span : block.spans()) flow.getChildren().add(spanNode(span));
+            switch (block.kind()) {
+                case CODE -> {
+                    flow.getStyleClass().add("md-code-flow");
+                    VBox code = new VBox(flow);
+                    code.getStyleClass().add("md-code-block");
+                    if (!block.language().isEmpty()) code.getChildren().add(0, UiKit.label(block.language(), "md-code-lang"));
+                    box.getChildren().add(code);
+                }
+                case QUOTE -> {
+                    HBox quote = new HBox(flow);
+                    quote.getStyleClass().add("md-quote");
+                    box.getChildren().add(quote);
+                }
+                default -> box.getChildren().add(flow);
+            }
+        }
+        return box;
+    }
+
+    private Node spanNode(Markdown.Span span) {
+        javafx.scene.text.Text t = new javafx.scene.text.Text(span.text());
+        t.getStyleClass().add("md");
+        for (Markdown.Style style : span.styles()) t.getStyleClass().add("md-" + style.name().toLowerCase(java.util.Locale.ROOT));
+        if (span.has(Markdown.Style.STRIKE)) t.setStrikethrough(true);
+        if (span.has(Markdown.Style.LINK)) {
+            t.setUnderline(true);
+            t.setCursor(javafx.scene.Cursor.HAND);
+            Tooltip.install(t, new Tooltip(span.text()));
+            t.setOnMouseClicked(e -> {
+                if (e.getButton() == javafx.scene.input.MouseButton.PRIMARY) MainView.browse(span.text());
+            });
+        }
+        return t;
+    }
+
+    // ------------------------------------------------------------------ drop and paste
+
+    /** Files dropped on the conversation are sent, one by one. */
+    private void installDropTarget() {
+        Label hint = UiKit.label(I18n.t("conv.dropHint"), "drop-hint");
+        StackPane veil = new StackPane(new VBox(10, Icons.of(Icons.PAPERCLIP, 34, "accent"), hint) {
+            {
+                setAlignment(Pos.CENTER);
+            }
+        });
+        veil.getStyleClass().add("drop-veil");
+        veil.setVisible(false);
+        veil.setMouseTransparent(true);
+        layer.getChildren().add(veil);
+        layer.setOnDragOver(e -> {
+            if (e.getDragboard().hasFiles()) {
+                e.acceptTransferModes(javafx.scene.input.TransferMode.COPY);
+                veil.setVisible(true);
+            }
+            e.consume();
+        });
+        layer.setOnDragExited(e -> veil.setVisible(false));
+        layer.setOnDragDropped(e -> {
+            veil.setVisible(false);
+            boolean ok = e.getDragboard().hasFiles();
+            if (ok) e.getDragboard().getFiles().forEach(this::sendFile);
+            e.setDropCompleted(ok);
+            e.consume();
+        });
+    }
+
+    /**
+     * Pasting copied files sends them; pasting a picture (a screenshot, say) sends it as a PNG.
+     * Plain text pastes normally.
+     */
+    private boolean pasteAttachment() {
+        javafx.scene.input.Clipboard clip = javafx.scene.input.Clipboard.getSystemClipboard();
+        if (clip.hasFiles()) {
+            clip.getFiles().forEach(this::sendFile);
+            return true;
+        }
+        if (clip.hasImage() && !clip.hasString()) {
+            Image image = clip.getImage();
+            String name = "screenshot-" + java.time.LocalDateTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".png";
+            sendBytes(name, () -> ImageFiles.png(image), "image/png");
+            return true;
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------------ image viewer
+
+    private static String fileKey(FileMessage f) {
+        return java.util.HexFormat.of().formatHex(f.attachmentId());
+    }
+
+    /** A full-window viewer for the pictures in this conversation: arrows to browse, Esc to close. */
+    private void openViewer(FileMessage file) {
+        int[] index = {Math.max(0, indexOf(file))};
+        ImageView view = new ImageView();
+        view.setPreserveRatio(true);
+        view.setSmooth(true);
+        // sized from the conversation pane (not from the viewer itself, which would grow in a loop)
+        view.fitWidthProperty().bind(root.widthProperty().subtract(150));
+        view.fitHeightProperty().bind(root.heightProperty().subtract(130));
+        Label caption = UiKit.label("", "viewer-caption");
+        Label count = UiKit.label("", "viewer-count");
+        Button prev = viewerButton(Icons.CHEVRON_LEFT, I18n.t("viewer.previous"));
+        Button next = viewerButton(Icons.CHEVRON_RIGHT, I18n.t("viewer.next"));
+        Button save = viewerButton(Icons.DOWNLOAD, I18n.t("conv.saveTip"));
+        Button close = viewerButton(Icons.X, I18n.t("common.close"));
+        close.setId("viewer-close");
+        StackPane veil = new StackPane();
+        Runnable show = () -> {
+            FileMessage f = gallery.isEmpty() ? file : gallery.get(index[0]);
+            caption.setText(f.name() + " · " + humanSize(f.size()));
+            count.setText(gallery.size() > 1 ? (index[0] + 1) + " / " + gallery.size() : "");
+            prev.setDisable(index[0] == 0);
+            next.setDisable(index[0] >= gallery.size() - 1);
+            Image cached = images.get(fileKey(f));
+            view.setImage(cached);
+            if (cached == null) {
+                session.downloads().execute(() -> {
+                    try {
+                        Image img = new Image(new ByteArrayInputStream(session.client().downloadFile(f)));
+                        Platform.runLater(() -> {
+                            images.put(fileKey(f), img);
+                            if (gallery.isEmpty() || gallery.get(index[0]) == f) view.setImage(img);
+                        });
+                    } catch (Exception ignored) {
+                        // stays empty; saving reports the problem
+                    }
+                });
+            }
+        };
+        prev.setOnAction(e -> {
+            index[0] = Math.max(0, index[0] - 1);
+            show.run();
+        });
+        next.setOnAction(e -> {
+            index[0] = Math.min(gallery.size() - 1, index[0] + 1);
+            show.run();
+        });
+        save.setOnAction(e -> saveFile(gallery.isEmpty() ? file : gallery.get(index[0])));
+        close.setOnAction(e -> layer.getChildren().remove(veil));
+        HBox bar = new HBox(10, caption, UiKit.grow(), count, save, close);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.getStyleClass().add("viewer-bar");
+        HBox middle = new HBox(14, prev, view, next);
+        middle.setAlignment(Pos.CENTER);
+        VBox content = new VBox(12, bar, middle);
+        content.setAlignment(Pos.CENTER);
+        content.setPadding(new Insets(16));
+        veil.getChildren().add(content);
+        for (Region r : new Region[] {veil, content, middle, bar}) r.setMinSize(0, 0);
+        veil.getStyleClass().add("viewer");
+        veil.setId("image-viewer");
+        veil.setFocusTraversable(true);
+        veil.setOnKeyPressed(e -> {
+            switch (e.getCode()) {
+                case ESCAPE -> close.fire();
+                case LEFT -> prev.fire();
+                case RIGHT -> next.fire();
+                default -> { }
+            }
+        });
+        veil.setOnMouseClicked(e -> {
+            if (e.getTarget() == veil || e.getTarget() == content || e.getTarget() == middle) close.fire();
+        });
+        layer.getChildren().add(veil);
+        show.run();
+        veil.requestFocus();
+        if (Motion.enabled()) {
+            veil.setOpacity(0);
+            javafx.animation.FadeTransition f = new javafx.animation.FadeTransition(javafx.util.Duration.millis(160), veil);
+            f.setToValue(1);
+            f.play();
+        }
+    }
+
+    private int indexOf(FileMessage file) {
+        for (int i = 0; i < gallery.size(); i++) if (fileKey(gallery.get(i)).equals(fileKey(file))) return i;
+        return -1;
+    }
+
+    private static Button viewerButton(String icon, String tip) {
+        Button b = new Button();
+        b.setGraphic(Icons.of(icon, 18, "on-dark"));
+        b.getStyleClass().add("viewer-button");
+        b.setTooltip(new Tooltip(tip));
+        return b;
     }
 
     Node focusTarget() {

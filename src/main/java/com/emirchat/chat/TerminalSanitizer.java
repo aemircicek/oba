@@ -22,6 +22,28 @@ public final class TerminalSanitizer {
         return out.toString();
     }
 
+    /**
+     * Like {@link #sanitize}, but keeps line breaks (LF only), for the desktop app where messages
+     * may span several lines. CR and every other control character are still replaced, and more
+     * than three blank lines in a row are squeezed, so nobody can push a message far out of view.
+     */
+    public static String sanitizeMultiline(String input) {
+        StringBuilder out = new StringBuilder(input.length());
+        int newlines = 0;
+        for (int i = 0; i < input.length(); ) {
+            int cp = input.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp == '\n') {
+                if (++newlines <= 4) out.append('\n');
+                continue;
+            }
+            newlines = 0;
+            if (isDangerous(cp)) out.append(REPLACEMENT);
+            else out.appendCodePoint(cp);
+        }
+        return out.toString();
+    }
+
     private static boolean isDangerous(int cp) {
         return cp < 0x20                         // C0 controls incl. ESC, CR, LF, BEL, BS
                 || cp == 0x7F                    // DEL
