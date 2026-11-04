@@ -139,6 +139,9 @@ public final class VoiceChannels implements AutoCloseable {
         transport.audio(group, s.seal(group, me, body));
     }
 
+    /** The error a join reports when the server is older than voice rooms. */
+    public static final String UNSUPPORTED = "voice-unsupported";
+
     /** Louder than this counts as speaking (see {@link VoiceNotes#level}). */
     private static final float SPEAKING_LEVEL = 0.18f;
     private static final long SPEAKING_HOLD_MS = 350;

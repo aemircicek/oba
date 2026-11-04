@@ -140,6 +140,7 @@ class VoiceRoomIntegrationTest {
                 for (int i = 0; i < 100 && d.client.refreshGroups().stream().noneMatch(x -> x.id() == g); i++) Thread.sleep(50);
             }
 
+            ayse.client.refreshVoiceRooms(); // as the app does after signing in: ayse knows voice rooms
             emir.client.voice().join(g);
             assertTrue(emir.client.voice().state().joined());
             efe.client.voice().join(g);
@@ -240,6 +241,27 @@ class VoiceRoomIntegrationTest {
             efe.audio.heard.clear();
             emir.audio.say(20);
             assertTrue(efe.audio.heardSpeech(3000), "close again");
+        }
+    }
+
+    @Test
+    void clientsThatDoNotKnowVoiceRoomsGetNoVoicePackets() throws Exception {
+        // A 3.3 client closes its connection on a packet type it does not know, so the server must
+        // only tell clients that showed they know voice rooms (by asking for them or joining one).
+        try (Device emir = new Device("emir"); Device efe = new Device("efe"); Device old = new Device("old")) {
+            befriend(emir, efe);
+            befriend(emir, old);
+            long g = emir.client.createGroup("karma", List.of("efe", "old")).id();
+            for (Device d : List.of(efe, old)) {
+                for (int i = 0; i < 100 && d.client.refreshGroups().stream().noneMatch(x -> x.id() == g); i++) Thread.sleep(50);
+            }
+            emir.client.voice().join(g);
+            efe.client.voice().join(g);
+            awaitRoom(emir, g, 2);
+            Thread.sleep(600);
+            assertTrue(old.client.voice().rooms().isEmpty(), "no voice room packet reached the old-style client");
+            old.client.sendGroupText(g, "hâlâ buradayım");
+            assertEquals("hâlâ buradayım", emir.nextMessage().text().text(), "and its connection is fine");
         }
     }
 }

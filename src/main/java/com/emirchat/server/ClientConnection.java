@@ -122,6 +122,13 @@ final class ClientConnection {
 
     // ------------------------------------------------------------------ voice rooms
 
+    /** Set once this client shows it knows voice rooms; 3.3 clients would drop the connection on them. */
+    private volatile boolean voiceAware;
+
+    boolean voiceAware() {
+        return voiceAware;
+    }
+
     private long voiceWindowStart;
     private int voiceInWindow;
     private long voiceCheckedAt;
@@ -209,13 +216,17 @@ final class ClientConnection {
     private Packet handle(Packet packet) throws ApiException, IOException {
         return switch (packet) {
             case Packet.Ping p -> new Packet.Pong();
-            case Packet.VoiceJoin j -> joinVoice(j.groupId());
+            case Packet.VoiceJoin j -> {
+                voiceAware = true;
+                yield joinVoice(j.groupId());
+            }
             case Packet.VoiceLeave l -> {
                 me();
                 if (services.voice().roomOf(this) == l.groupId()) leaveVoice();
                 yield new Packet.Ok();
             }
             case Packet.ListVoiceRooms l -> {
+                voiceAware = true;
                 List<Packet.VoiceRoom> rooms = new java.util.ArrayList<>();
                 for (long g : services.groups().groupIdsOf(me())) {
                     List<String> people = services.voice().participants(g);

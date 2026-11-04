@@ -1390,6 +1390,8 @@ final class MainView implements AccountSession.View {
 
             @Override public boolean inVoice(long groupId) { return voiceState.groupId() == groupId; }
 
+            @Override public boolean voiceAvailable() { return session.client().voiceSupported(); }
+
             @Override public int voiceCount(long groupId) { return voiceRooms.getOrDefault(groupId, List.of()).size(); }
         };
         if (current != null) current.dispose();
@@ -1743,7 +1745,9 @@ final class MainView implements AccountSession.View {
         long before = voiceState.groupId();
         voiceState = state;
         if (state.error() != null) {
-            notice("busy".equals(state.error()) ? I18n.t("voice.busy") : I18n.t("voice.failed", state.error()), true);
+            notice("busy".equals(state.error()) ? I18n.t("voice.busy")
+                    : com.emirchat.call.VoiceChannels.UNSUPPORTED.equals(state.error()) ? I18n.t("voice.serverTooOld")
+                    : I18n.t("voice.failed", state.error()), true);
         }
         if (!state.joined()) {
             voiceBar.setVisible(false);
