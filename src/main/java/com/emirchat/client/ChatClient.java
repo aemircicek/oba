@@ -400,6 +400,7 @@ public final class ChatClient implements AutoCloseable {
         }, () -> client.audioDevices.get(), call -> client.listener.call(call));
         client.voice = new com.emirchat.call.VoiceChannels(loggedIn.username(), new com.emirchat.call.VoiceChannels.Transport() {
             @Override public List<String> join(long groupId) throws Exception {
+                if (!client.voiceSupported()) throw new IOException(com.emirchat.call.VoiceChannels.UNSUPPORTED);
                 return ((Packet.VoiceRoom) connection.call(new Packet.VoiceJoin(groupId))).participants();
             }
 
@@ -1315,13 +1316,54 @@ public final class ChatClient implements AutoCloseable {
         return voice;
     }
 
-    /** Asks the server who is in which voice room (after logging in or reconnecting). */
+    /**
+     * Asks the server who is in which voice room (after logging in or reconnecting).
+     *
+     * <p>Servers older than 3.4 do not know voice rooms and close the connection on the request.
+     * If that happens, this server (by its key) is remembered for {@link #VOICE_RECHECK_MS} and
+     * no voice packet is sent to it again until then: the app goes on without voice rooms instead
+     * of reconnecting in a loop. After that time it asks once more, in case the server was updated.
+     */
     public void refreshVoiceRooms() throws IOException, ApiException {
-        Map<Long, List<String>> rooms = new java.util.HashMap<>();
-        for (Packet.VoiceRoom r : ((Packet.VoiceRoomList) connection.call(new Packet.ListVoiceRooms())).rooms()) {
-            rooms.put(r.groupId(), r.participants());
+        if (!voiceSupported()) {
+            voice.roomsLoaded(Map.of());
+            return;
         }
+        Packet answer;
+        try {
+            answer = connection.call(new Packet.ListVoiceRooms());
+        } catch (IOException e) {
+            markVoiceUnsupported();
+            throw e;
+        }
+        Map<Long, List<String>> rooms = new java.util.HashMap<>();
+        for (Packet.VoiceRoom r : ((Packet.VoiceRoomList) answer).rooms()) rooms.put(r.groupId(), r.participants());
         voice.roomsLoaded(rooms);
+    }
+
+    /** How long a server without voice rooms is left alone before asking again. */
+    public static final long VOICE_RECHECK_MS = 6L * 3600 * 1000;
+
+    /** False if this server turned out not to know voice rooms (see {@link #refreshVoiceRooms}). */
+    public boolean voiceSupported() {
+        try {
+            Path file = dataDir.resolve("voice-unsupported");
+            if (!Files.exists(file)) return true;
+            String[] parts = Files.readString(file).strip().split(" ");
+            return parts.length != 2 || !parts[0].equals(connection.serverFingerprint())
+                    || System.currentTimeMillis() > Long.parseLong(parts[1]);
+        } catch (IOException | RuntimeException e) {
+            return true;
+        }
+    }
+
+    private void markVoiceUnsupported() {
+        try {
+            Files.writeString(dataDir.resolve("voice-unsupported"),
+                    connection.serverFingerprint() + " " + (System.currentTimeMillis() + VOICE_RECHECK_MS));
+        } catch (IOException ignored) {
+            // then it asks again next time
+        }
     }
 
     /** Voice calls with friends. */

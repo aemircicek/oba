@@ -56,6 +56,9 @@ final class ConversationView {
         default boolean inVoice(long groupId) { return false; }
 
         default int voiceCount(long groupId) { return 0; }
+
+        /** False on a server that is too old for voice rooms. */
+        default boolean voiceAvailable() { return true; }
     }
 
     private final AccountSession session;
@@ -316,7 +319,7 @@ final class ConversationView {
             pins.setOnAction(e -> toggleSide("pins", this::showPins));
             header.getChildren().add(pins);
         }
-        if (groupId != 0 && !actions.inVoice(groupId)) {
+        if (groupId != 0 && !actions.inVoice(groupId) && actions.voiceAvailable()) {
             int inRoom = actions.voiceCount(groupId);
             Button voice = new Button(inRoom > 0 ? I18n.t("voice.joinCount", inRoom) : I18n.t("voice.join"));
             voice.setGraphic(Icons.of(Icons.HEADPHONES, 15, "accent"));

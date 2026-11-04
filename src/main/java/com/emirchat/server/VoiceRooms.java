@@ -29,7 +29,8 @@ final class VoiceRooms {
     /** Tells every online member of the group who is in its room now. */
     com.emirchat.api.Packet.VoiceRoom announce(long groupId) {
         com.emirchat.api.Packet.VoiceRoom room = new com.emirchat.api.Packet.VoiceRoom(groupId, participants(groupId));
-        for (long member : groups.memberIds(groupId)) presence.push(member, room);
+        // only to clients that know voice rooms: an older client would close its connection on this packet
+        for (long member : groups.memberIds(groupId)) presence.pushIf(member, room, ClientConnection::voiceAware);
         return room;
     }
 

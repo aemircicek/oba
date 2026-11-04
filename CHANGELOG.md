@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.4.1 (2026-11-04)
+
+### Fixed
+- **Oba 3.4.0 could not stay connected to a 3.3 server**: right after signing in it asked for
+  the voice rooms, a request the older server does not know, so the server closed the
+  connection and the app reconnected in a loop ("offline"). The app now remembers such a server
+  (by its key) for six hours, sends it no voice packets and works without voice rooms, then asks
+  again in case the server was updated. On such a server the voice room button is hidden.
+- **A 3.4 server could disconnect 3.3 clients**: it told every member of a group who was in its
+  voice room, a packet 3.3 clients do not know. It now tells only clients that asked for voice
+  rooms or joined one.
+
 ## 3.4.0 (2026-11-04)
 
 **Scorpion is now Oba**: a nomad camp of tents around a fire. New name and icon (two tents and

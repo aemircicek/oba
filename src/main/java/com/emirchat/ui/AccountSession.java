@@ -95,9 +95,13 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
             try {
                 c.refreshVoiceRooms();
             } catch (Exception ignored) {
-                // the rooms show up with the next change
+                // an old server closed the connection (it is remembered: no voice there for a while),
+                // or the network blinked; either way the app reconnects and carries on
             }
-            fx(v -> v.voice(c.voice().state()));
+            fx(v -> {
+                v.voice(c.voice().state());
+                v.groupsChanged(); // the voice button depends on what the server supports
+            });
         });
     }
 
