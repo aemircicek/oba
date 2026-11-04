@@ -62,9 +62,13 @@ public final class Conversation {
         return message;
     }
 
+    /** Set before saying goodbye: the peer may close the connection before we finish leaving. */
+    private volatile boolean leaving;
+
     /** Tells the peer we are leaving (best effort) and closes the connection. */
     public void leave() {
         if (!isOpen()) return;
+        leaving = true;
         try {
             session.channel().send(ChatMessage.bye().encode());
         } catch (IOException | SecurityException ignored) {
@@ -87,7 +91,8 @@ public final class Conversation {
         } catch (SecurityException e) {
             end(EndReason.SECURITY_ERROR, e.getMessage());
         } catch (IOException e) {
-            end(EndReason.CONNECTION_LOST, e.getMessage());
+            // after our goodbye the peer hangs up, possibly before leave() gets here: that is us leaving
+            end(leaving ? EndReason.LOCAL_LEFT : EndReason.CONNECTION_LOST, e.getMessage());
         }
     }
 

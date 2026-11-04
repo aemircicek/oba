@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.4.0 (unreleased)
+## 3.4.0 (2026-11-04)
 
 **Scorpion is now Oba**: a nomad camp of tents around a fire. New name and icon (two tents and
 a campfire under a night sky); the flame replaces the scorpion's tail in the app. On first start
@@ -46,6 +46,10 @@ as messages it could not read.
   suggestions.
 - **Messages turn to sand** when deleted or when they disappear.
 
+### Fixed
+- Leaving a direct (no-server) conversation could be reported as a lost connection when the peer
+  hung up first, right after the goodbye.
+
 ### Changed
 - Conversations load 80 messages at a time (older ones when scrolling up) and decrypt pictures only
   when they come into view; the view follows new messages unless you have scrolled up.
@@ -59,7 +63,7 @@ as messages it could not read.
 - Voice messages are never sent without the user: switching chats discards a recording, and at
   the length limit the recording waits for Send. Oversized voice files are not decoded.
 
-## 3.3.0 (unreleased)
+## 3.3.0 (not released on its own; included in 3.4.0)
 
 ### Added
 - **Communities with channels**: a "Communities" tab; each community has a "# general" channel and
