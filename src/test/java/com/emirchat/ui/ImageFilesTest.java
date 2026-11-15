@@ -38,6 +38,36 @@ class ImageFilesTest {
         assertNull(ImageFiles.decode(pngHeader(Integer.MAX_VALUE, Integer.MAX_VALUE)));
     }
 
+    /** A GIF whose canvas is {@code screen} pixels square but whose frames are 1 by 1. */
+    private static byte[] gif(int screen, int frames) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.writeBytes("GIF89a".getBytes(StandardCharsets.US_ASCII));
+        out.writeBytes(new byte[] {(byte) screen, (byte) (screen >> 8), (byte) screen, (byte) (screen >> 8),
+                (byte) 0x80, 0, 0, 0, 0, 0, (byte) 255, (byte) 255, (byte) 255}); // 2-colour global table
+        for (int i = 0; i < frames; i++) {
+            out.writeBytes(new byte[] {0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x4C, 0x01, 0});
+        }
+        out.write(0x3B);
+        return out.toByteArray();
+    }
+
+    @Test
+    void aGifIsMeasuredByItsCanvasNotItsFirstFrame() {
+        assertArrayEquals(new long[] {60_000, 60_000, 1}, ImageFiles.dimensions(gif(60_000, 1)));
+        assertNull(ImageFiles.decode(gif(60_000, 1)), "tiny frame, enormous canvas");
+        assertArrayEquals(new long[] {2_000, 2_000, 50}, ImageFiles.dimensions(gif(2_000, 50)));
+        assertNull(ImageFiles.decode(gif(2_000, 50)), "200 million pixels over all frames");
+    }
+
+    @Test
+    void aLargePictureIsReadSmallerNotWhole() throws Exception {
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(6_000, 5_000, BufferedImage.TYPE_BYTE_GRAY), "png", png);
+        BufferedImage small = ImageFiles.reduced(png.toByteArray(), 30_000_000L);
+        org.junit.jupiter.api.Assertions.assertEquals(3_000, small.getWidth());
+        org.junit.jupiter.api.Assertions.assertEquals(2_500, small.getHeight());
+    }
+
     @Test
     void whatIsNotAPictureIsRefused() {
         assertNull(ImageFiles.dimensions("just some text, whatever its name says".getBytes(StandardCharsets.UTF_8)));

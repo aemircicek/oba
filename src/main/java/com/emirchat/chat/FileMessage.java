@@ -99,10 +99,11 @@ public record FileMessage(byte[] attachmentId, byte[] key, byte[] digest, long s
         cleaned = truncate(cleaned, MAX_NAME_BYTES);
         // Windows drops trailing dots and spaces ("photo.exe." opens as "photo.exe") and treats
         // some names as devices whatever their extension ("CON.txt", "nul"): allow neither.
-        while (cleaned.endsWith(".") || cleaned.endsWith(" ")) cleaned = cleaned.substring(0, cleaned.length() - 1);
         int dot = cleaned.indexOf('.');
         if (RESERVED.matcher(dot < 0 ? cleaned : cleaned.substring(0, dot)).matches()) cleaned = "_" + cleaned;
         cleaned = truncate(cleaned, MAX_NAME_BYTES);
+        // Last, after every step that can shorten the name: cutting it may uncover a new trailing dot.
+        while (cleaned.endsWith(".") || cleaned.endsWith(" ")) cleaned = cleaned.substring(0, cleaned.length() - 1);
         return cleaned.isBlank() ? "file" : cleaned;
     }
 
