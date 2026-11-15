@@ -65,6 +65,16 @@ class FileMessageTest {
     }
 
     @Test
+    void namesWindowsWouldMisreadAreChanged() {
+        assertEquals("photo.exe", FileMessage.safeName("photo.exe. . ."), "Windows drops trailing dots and spaces");
+        assertEquals("_CON.txt", FileMessage.safeName("CON.txt"));
+        assertEquals("_nul", FileMessage.safeName("nul"));
+        assertEquals("_com1.tar.gz", FileMessage.safeName("com1.tar.gz"));
+        assertEquals("console.txt", FileMessage.safeName("console.txt"), "only the exact device names");
+        assertEquals("file", FileMessage.safeName(" . . "));
+    }
+
+    @Test
     void onlyRealImagesArePreviewed() {
         assertTrue(file("foto.jpg", "image/jpeg", 1000).isPreviewableImage());
         assertFalse(file("foto.jpg", "application/octet-stream", 1000).isPreviewableImage());

@@ -204,7 +204,15 @@ final class MainView implements AccountSession.View {
     static void browse(String url) {
         new Thread(() -> {
             try {
-                java.awt.Desktop.getDesktop().browse(java.net.URI.create(url));
+                java.net.URI uri = java.net.URI.create(url);
+                // Links come from messages: only ever hand web addresses to the system, never
+                // file:, a custom app scheme or anything else that could start a program.
+                String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(java.util.Locale.ROOT);
+                if (!(scheme.equals("https") || scheme.equals("http")) || uri.getHost() == null) {
+                    AppLog.info("Refused to open a link that is not a web address");
+                    return;
+                }
+                java.awt.Desktop.getDesktop().browse(uri);
             } catch (Exception e) {
                 AppLog.warn("Could not open " + url, e);
             }

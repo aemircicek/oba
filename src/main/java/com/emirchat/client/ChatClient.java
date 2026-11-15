@@ -1138,6 +1138,9 @@ public final class ChatClient implements AutoCloseable {
                     byte[] callId = call.exactBytes(com.emirchat.call.CallCrypto.CALL_ID_LENGTH);
                     byte[] callKey = call.bytes(64);
                     call.expectEnd();
+                    // Members of a shared group can reach us over the pairwise channel (for group keys),
+                    // but only friends may ring: the server relays call audio between friends only.
+                    if (!friendKeys.containsKey(envelope.sender())) throw new SecurityException("Call from someone who is not a friend");
                     calls.signal(envelope.sender(), kind, callId, callKey, envelope.sentAt());
                 }
                 default -> throw new ProtocolException("Unknown content type " + contentType);

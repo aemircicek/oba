@@ -216,7 +216,9 @@ must not be able to read or forge messages. User devices are trusted.
 | Removed members | Everyone rotates to a fresh sender key that departed members never receive; new members cannot read earlier messages |
 | Replay | Ratchet and chain keys only move forward; decryption is transactional, so a forged or replayed message cannot corrupt state |
 | Password storage | PBKDF2-HMAC-SHA256, 600,000 iterations, 16-byte random salt per user |
-| Online guessing | 5 failed logins per username and 20 per IP address in 15 minutes |
+| Online guessing | 5 failed logins per username and 20 per address in 15 minutes (IPv6 is counted per /64 network) |
+| Locking someone out on purpose | The username limit does not apply to the device the account already belongs to: it proved its key in the handshake, which a guesser cannot do |
+| Mass registration | 10 new accounts per address and hour |
 | Username enumeration on login | Same error and same hashing cost for unknown usernames |
 | Stolen disk | Message history encrypted with AES-256-GCM under a key from the account password (PBKDF2, 600k) |
 | File confidentiality | Each file is encrypted with a fresh AES-256-GCM key; the server stores only the ciphertext, and the key travels in an end-to-end encrypted message |
@@ -226,7 +228,9 @@ must not be able to read or forge messages. User devices are trusted.
 | Contact verification | A safety number (60 digits or a QR code) derived from both identity keys; both sides compute the same value, so a substituted key shows up as a mismatch |
 | Backups | Zip of the key directory encrypted with AES-256-GCM under PBKDF2-HMAC-SHA256 (600k) of a separate passphrase; restore refuses paths outside the target folder |
 | Disappearing messages | The timer travels inside the encrypted message; expired rows are deleted with SQLite `secure_delete` and cached files are removed |
-| Resource exhaustion | Frame and message size limits, offline queue and prekey caps, prekey-fetch rate limits, 25 MB per file, 250 MB of stored files per user |
+| Resource exhaustion | Frame and message size limits, offline queue and prekey caps, prekey-fetch rate limits, 25 MB per file, 250 MB of stored files per user; 64 connections per address and 8192 in all; password hashing uses at most half of the processors; a client that floods requests is slowed down; connections to computers that vanished are closed by TCP keep-alive |
+| Other users of the same computer | The data folder (and the server's) is readable by its owner only, and is closed again at every start if something opened it |
+| Hostile files and links | Received pictures are measured before decoding and refused or shrunk if enormous; file names are reduced to plain names; only `http(s)` links are handed to the browser |
 
 ### Direct messages: X3DH and the Double Ratchet
 
@@ -473,6 +477,16 @@ Honest notes on what this project does **not** do:
 - **TOFU trusts first contact.** Until friends compare fingerprints, a malicious server could
   present a fake key on the very first exchange.
 - **One device per account.** Logging in on a new device replaces the old key.
+- **The password is the account.** Whoever knows it can log in from their own device and take the
+  account over (friends then see a key-change warning). There is no second factor, and the
+  password cannot be changed yet.
+- **Limits count addresses.** People behind one address (a campus, a mobile carrier) share its
+  limits, and a server placed behind a proxy sees only the proxy's address: run it directly on its
+  port, as the Docker and systemd set-ups do. Connections from the server's own computer are not
+  limited.
+- **Voice room audio is authenticated with keys the whole room knows.** The server names the
+  speaker of each packet, so a room member working together with the server could speak under
+  another member's name. Text messages do not have this weakness (they are signed).
 - **Keys at rest are not encrypted**: identity keys and ratchet sessions are protected only by
   owner-only file permissions (message history is encrypted).
 - **Disappearing messages rely on the other side's app.** They protect against a device being

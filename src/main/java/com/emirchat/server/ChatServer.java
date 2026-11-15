@@ -9,6 +9,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -41,9 +43,17 @@ public final class ChatServer implements AutoCloseable {
         return t;
     });
     private volatile boolean closed;
+    /** Open connections per address key (see {@link Addresses}); local connections are not counted. */
+    private final Map<String, Integer> perAddress = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicInteger open = new java.util.concurrent.atomic.AtomicInteger();
+    /** One network (a home, a campus behind one address) may hold this many connections. */
+    static final int MAX_CONNECTIONS_PER_ADDRESS = 64;
+    /** All connections together; each costs a little memory even when idle. */
+    static final int MAX_CONNECTIONS = 8192;
 
     public ChatServer(Config config) throws IOException {
         Files.createDirectories(config.dataDir());
+        ownerOnly(config.dataDir()); // password hashes, queued envelopes and the server key live here
         this.identity = Identity.loadOrCreate(config.dataDir().resolve("identity"));
         try {
             this.db = new Database(config.dataDir().resolve("server.db"));
@@ -101,10 +111,65 @@ public final class ChatServer implements AutoCloseable {
         while (!closed) {
             try {
                 Socket socket = listener.accept();
-                connections.submit(new ClientConnection(socket, services)::run);
+                String key = Addresses.local(socket.getInetAddress()) ? null : Addresses.key(socket.getInetAddress());
+                if (!admit(key)) {
+                    socket.close(); // over a limit: refuse before spending a handshake on it
+                    continue;
+                }
+                try {
+                    connections.submit(() -> {
+                        try {
+                            new ClientConnection(socket, services).run();
+                        } finally {
+                            release(key);
+                        }
+                    });
+                } catch (java.util.concurrent.RejectedExecutionException e) {
+                    release(key);
+                    socket.close(); // shutting down
+                }
             } catch (IOException e) {
                 if (!closed) System.err.println("accept failed: " + e.getMessage());
             }
+        }
+    }
+
+    private boolean admit(String key) {
+        if (open.incrementAndGet() > MAX_CONNECTIONS) {
+            open.decrementAndGet();
+            return false;
+        }
+        if (key == null) return true;
+        boolean[] ok = {true};
+        perAddress.compute(key, (k, n) -> {
+            int now = n == null ? 0 : n;
+            if (now >= MAX_CONNECTIONS_PER_ADDRESS) {
+                ok[0] = false;
+                return n;
+            }
+            return now + 1;
+        });
+        if (!ok[0]) open.decrementAndGet();
+        return ok[0];
+    }
+
+    private void release(String key) {
+        open.decrementAndGet();
+        if (key != null) perAddress.computeIfPresent(key, (k, n) -> n <= 1 ? null : n - 1);
+    }
+
+    /** Open connections right now (for tests). */
+    int openConnections() {
+        return open.get();
+    }
+
+    private static void ownerOnly(Path dir) {
+        try {
+            if (dir.getFileSystem().supportedFileAttributeViews().contains("posix")) {
+                Files.setPosixFilePermissions(dir, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+            }
+        } catch (IOException | UnsupportedOperationException e) {
+            System.err.println("warning: could not make " + dir + " private to this user: " + e.getMessage());
         }
     }
 
