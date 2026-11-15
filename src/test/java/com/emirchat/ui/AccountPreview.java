@@ -490,7 +490,7 @@ public final class AccountPreview {
         ayse.client.sendText("emir", "Akşam görüşelim mi?");
         Thread.sleep(900);
         fx(() -> {
-            ((MainView) find(".main-view").getUserData()).showCatchUp((3 * 60 + 12) * 60_000L, true);
+            ((MainView) find(".main-view").getUserData()).catchUp.showCatchUp((3 * 60 + 12) * 60_000L, true);
             return null;
         });
         waitFor("#catchup");
