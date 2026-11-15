@@ -82,6 +82,13 @@ final class ImageFiles {
         return out;
     }
 
+    /** More frames than any real animation; also bounds the work of measuring one. */
+    static final int MAX_FRAMES = 2_000;
+
+    private static long number(org.w3c.dom.NamedNodeMap attributes, String name) {
+        return Long.parseLong(attributes.getNamedItem(name).getNodeValue());
+    }
+
     /** A GIF's canvas ("logical screen"), which every frame is drawn on; its frames can be smaller. */
     private static long[] gifScreen(byte[] d) {
         if (d.length < 10 || d[0] != 'G' || d[1] != 'I' || d[2] != 'F') return null;
@@ -102,11 +109,24 @@ final class ImageFiles {
                     return new long[] {reader.getWidth(0), reader.getHeight(0), 1};
                 }
                 // What gets allocated is the canvas, once per frame, not the size of the first frame
-                // (which the file can make tiny). Take the larger of the two in each direction.
+                // (which the file can make tiny). And every frame must lie inside the canvas: a
+                // file that draws outside it, in any frame, is not measured by its header and is refused.
                 long[] screen = gifScreen(data);
                 if (screen == null) return null;
-                long frames = reader.getNumImages(true); // walks the blocks, decodes nothing
-                return new long[] {Math.max(screen[0], reader.getWidth(0)), Math.max(screen[1], reader.getHeight(0)), frames};
+                int frames = reader.getNumImages(true); // walks the blocks, decodes nothing
+                if (frames <= 0 || frames > MAX_FRAMES) return null;
+                for (int i = 0; i < frames; i++) {
+                    org.w3c.dom.Node root = reader.getImageMetadata(i).getAsTree("javax_imageio_gif_image_1.0");
+                    org.w3c.dom.NamedNodeMap at = null;
+                    for (org.w3c.dom.Node n = root.getFirstChild(); n != null; n = n.getNextSibling()) {
+                        if (n.getNodeName().equals("ImageDescriptor")) at = n.getAttributes();
+                    }
+                    if (at == null) return null;
+                    long right = number(at, "imageLeftPosition") + number(at, "imageWidth");
+                    long bottom = number(at, "imageTopPosition") + number(at, "imageHeight");
+                    if (right > screen[0] || bottom > screen[1]) return null;
+                }
+                return new long[] {screen[0], screen[1], frames};
             } finally {
                 reader.dispose();
             }

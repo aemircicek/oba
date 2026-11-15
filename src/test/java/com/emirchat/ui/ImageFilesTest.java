@@ -40,12 +40,19 @@ class ImageFilesTest {
 
     /** A GIF whose canvas is {@code screen} pixels square but whose frames are 1 by 1. */
     private static byte[] gif(int screen, int frames) {
+        return gif(screen, frames, 1);
+    }
+
+    /** @param lastFrame the width and height of the last frame (the others are 1 by 1) */
+    private static byte[] gif(int screen, int frames, int lastFrame) {
         java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
         out.writeBytes("GIF89a".getBytes(StandardCharsets.US_ASCII));
         out.writeBytes(new byte[] {(byte) screen, (byte) (screen >> 8), (byte) screen, (byte) (screen >> 8),
                 (byte) 0x80, 0, 0, 0, 0, 0, (byte) 255, (byte) 255, (byte) 255}); // 2-colour global table
         for (int i = 0; i < frames; i++) {
-            out.writeBytes(new byte[] {0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x4C, 0x01, 0});
+            int side = i == frames - 1 ? lastFrame : 1;
+            out.writeBytes(new byte[] {0x2C, 0, 0, 0, 0, (byte) side, (byte) (side >> 8), (byte) side, (byte) (side >> 8),
+                    0, 2, 2, 0x4C, 0x01, 0});
         }
         out.write(0x3B);
         return out.toByteArray();
@@ -57,6 +64,14 @@ class ImageFilesTest {
         assertNull(ImageFiles.decode(gif(60_000, 1)), "tiny frame, enormous canvas");
         assertArrayEquals(new long[] {2_000, 2_000, 50}, ImageFiles.dimensions(gif(2_000, 50)));
         assertNull(ImageFiles.decode(gif(2_000, 50)), "200 million pixels over all frames");
+    }
+
+    @Test
+    void aGifWithAnyFrameLargerThanItsCanvasIsRefused() {
+        assertArrayEquals(new long[] {100, 100, 3}, ImageFiles.dimensions(gif(100, 3, 100)), "a frame that fills the canvas is fine");
+        assertNull(ImageFiles.dimensions(gif(100, 3, 60_000)), "the third frame is far larger than the canvas");
+        assertNull(ImageFiles.decode(gif(100, 3, 60_000)));
+        assertNull(ImageFiles.dimensions(gif(10, ImageFiles.MAX_FRAMES + 1)), "too many frames to be a real animation");
     }
 
     @Test
