@@ -211,7 +211,7 @@ class FriendsIntegrationTest {
         }
         int port = server.port();
         server.close();
-        server = new ChatServer(new ChatServer.Config(dir.resolve("server"), "127.0.0.1", port, 1_000)).start();
+        server = Restart.on(dir.resolve("server"), port, 1_000);
         try (ServerConnection c = ServerConnection.open("127.0.0.1", port, Identity.generate(), knownServers)) {
             c.login("emir", PASSWORD);
             assertEquals("efe", c.listFriends().friends().get(0).username());
