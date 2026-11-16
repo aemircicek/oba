@@ -115,7 +115,10 @@ final class LoginScreen {
         password.textProperty().addListener((o, a, b) -> showRules.run());
         repeat.textProperty().addListener((o, a, b) -> showRules.run());
         showRules.run();
-        tagline.visibleProperty().bind(create.selectedProperty().not()); // the longer form needs the room
+        // the longer form needs the room: the links below it must stay in view in a small window
+        tagline.visibleProperty().bind(create.selectedProperty().not());
+        badge.managedProperty().bind(badge.visibleProperty());
+        badge.visibleProperty().bind(create.selectedProperty().not());
 
         // Server: always visible without a default; otherwise behind "Advanced"
         VBox serverBox = field(I18n.t("login.server"), server);
@@ -260,6 +263,9 @@ final class LoginScreen {
     }
 
     private static VBox field(String label, javafx.scene.Node input) {
-        return new VBox(6, UiKit.label(label, "field-label"), input);
+        Label name = UiKit.label(label, "field-label");
+        name.setLabelFor(input); // a screen reader says the label when the field is reached
+        if (input instanceof StackPane both) both.getChildren().forEach(n -> n.setAccessibleText(label));
+        return new VBox(6, name, input);
     }
 }

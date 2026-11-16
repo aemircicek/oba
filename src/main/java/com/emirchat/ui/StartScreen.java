@@ -213,6 +213,7 @@ final class StartScreen {
     private static VBox labelled(String label, Node field) {
         Label l = new Label(label);
         l.getStyleClass().add("field-label");
+        l.setLabelFor(field);
         return new VBox(6, l, field);
     }
 }

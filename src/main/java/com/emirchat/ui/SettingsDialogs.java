@@ -172,13 +172,14 @@ final class SettingsDialogs {
             swatches.getChildren().clear();
             for (String name : Appearance.ACCENTS.keySet()) {
                 String[][] palette = Appearance.ACCENTS.get(name);
-                String hex = palette == null ? (Theme.isDark() ? "#f2a43a" : "#c0650c") : palette[Theme.isDark() ? 1 : 0][0];
+                String hex = palette == null ? (Theme.isDark() ? "#f2a43a" : "#b45f0b") : palette[Theme.isDark() ? 1 : 0][0];
                 javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(13, javafx.scene.paint.Color.web(hex));
                 StackPane swatch = new StackPane(dot);
                 swatch.getStyleClass().add("swatch");
                 if (name.equals(AppPrefs.accent())) swatch.getStyleClass().add("selected");
                 swatch.setId("accent-" + name);
                 Tooltip.install(swatch, new Tooltip(accentName(name)));
+                A11y.clickable(swatch, null);
                 swatch.setOnMouseClicked(e -> {
                     AppPrefs.setAccent(name);
                     Theme.refreshAll();

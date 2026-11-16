@@ -37,7 +37,7 @@ final class Appearance {
     /** The current accent as a colour, for things drawn on a canvas (waveforms, meters). */
     static javafx.scene.paint.Color accentColor(boolean dark) {
         String[][] palette = ACCENTS.get(AppPrefs.accent());
-        String hex = palette == null ? (dark ? "#f2a43a" : "#c0650c") : palette[dark ? 1 : 0][0];
+        String hex = palette == null ? (dark ? "#f2a43a" : "#b45f0b") : palette[dark ? 1 : 0][0];
         return javafx.scene.paint.Color.web(hex);
     }
 

@@ -47,6 +47,7 @@ final class ConversationHeader {
                     ? UiKit.label("✓ " + I18n.t("conv.verified"), "badge-verified")
                     : UiKit.label(I18n.t("conv.notVerified"), "badge-unverified");
             badge.setId("verify-badge");
+            A11y.clickable(badge, null);
             badge.setOnMouseClicked(e -> chat.actions.openContact(chat.peer));
             titles.getChildren().addAll(UiKit.label(chat.peer, "h2"), new HBox(8, status, UiKit.label("·", "row-sub"), badge));
         } else {
@@ -62,6 +63,7 @@ final class ConversationHeader {
                     : I18n.t("conv.members", g.members().size()), "badge-verified");
             members.setId("group-info-link");
             members.setStyle("-fx-cursor: hand;");
+            A11y.clickable(members, null);
             members.setOnMouseClicked(e -> chat.actions.openGroupInfo(chat.groupId));
             chat.presence.getStyleClass().setAll("label", "row-sub", "typing");
             refreshPresence();
@@ -163,6 +165,7 @@ final class ConversationHeader {
         if (!chat.topic.isEmpty()) Tooltip.install(line, new Tooltip(chat.topic));
         if (manager) {
             line.setStyle("-fx-cursor: hand;");
+            A11y.clickable(line, null);
             line.setOnMouseClicked(e -> editTopic());
         }
         return line;

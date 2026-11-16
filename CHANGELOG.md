@@ -6,6 +6,29 @@ A security review of the whole app. The encryption (handshake, X3DH, Double Ratc
 files, calls) needed no change; the fixes are around it. Nothing in the protocol changes: every
 version from 3.2 on keeps working with this one.
 
+### Added
+- **Creating an account shows the rules** for names and passwords and ticks them off while you
+  type; both password fields can be shown as plain text.
+- **First steps** on the empty screen: add a friend, compare keys with one, back up the account.
+  Each is one click away and ticks itself off when done.
+- The server verification screen says where the other copy of the fingerprint is.
+
+### Accessibility
+- **Screen readers**: buttons that show only an icon now have a name (their tooltip), text boxes
+  without a label take their prompt, and the fields of the sign-in form are tied to their labels.
+- **Keyboard**: chat rows, the community rail, the verification badge, pictures, reactions, poll
+  options and links were reachable only with the mouse. Tab now stops on them, and Enter or Space
+  activates them.
+- **Contrast**: muted text in both themes, and the amber accent, green, red and warning colours
+  of the light theme, now reach 4.5 to 1 (WCAG AA) against their backgrounds; a test keeps both
+  themes and all five accents there. The light theme's amber is a little darker for it.
+- The focus ring is shown when the keyboard moved the focus, not after a click, and no longer
+  shifts what is around it.
+
+### Changed
+- `ConversationView` and `MainView` (2680 and 2343 lines) are split into fifteen parts by what
+  they do. No change in behaviour.
+
 ### Security: server
 - **Anyone could keep a person out of their account** by failing five logins on their username
   every 15 minutes. The device the account belongs to is no longer locked out by that.

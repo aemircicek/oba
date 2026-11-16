@@ -20,6 +20,7 @@ final class ServerTrustScreen {
         Label title = UiKit.label(I18n.t("serverTrust.title"), "h1");
         Label body = UiKit.label(I18n.t("serverTrust.body", server), "body");
         body.setWrapText(true);
+        body.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE); // never shortened to "…": it is the explanation
         body.setStyle("-fx-text-alignment: center;");
         VBox header = new VBox(10, badge, title, body);
         header.setAlignment(Pos.CENTER);

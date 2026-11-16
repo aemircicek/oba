@@ -96,6 +96,7 @@ final class Sidebar {
         item.getStyleClass().add("rail-item");
         item.setId(id);
         Tooltip.install(item, new Tooltip(tip));
+        A11y.clickable(item, null);
         item.setOnMouseClicked(e -> action.run());
         return item;
     }
@@ -139,6 +140,7 @@ final class Sidebar {
             row.getStyleClass().add("list-row");
             row.setAlignment(Pos.CENTER_LEFT);
             row.setId("result-" + m.id());
+            A11y.clickable(row, null);
             row.setOnMouseClicked(e -> {
                 main.open(m.conversation());
                 if (main.current != null) main.current.reveal(m.id());
@@ -214,6 +216,7 @@ final class Sidebar {
                 row.getStyleClass().add("list-row");
                 row.setAlignment(Pos.CENTER_LEFT);
                 row.setId("community-" + root.id());
+                A11y.clickable(row, null);
                 row.setOnMouseClicked(e -> {
                     main.selectedCommunity = root.id();
                     main.open(AccountSession.group(root.id()));
@@ -277,6 +280,7 @@ final class Sidebar {
             if (open) row.getStyleClass().add("selected");
             row.setAlignment(Pos.CENTER_LEFT);
             row.setId("channel-" + ch.id());
+            A11y.clickable(row, null);
             row.setOnMouseClicked(e -> main.open(conversation));
             main.list.getChildren().add(row);
             addVoiceParticipants(ch.id());
@@ -393,6 +397,7 @@ final class Sidebar {
         if (open) row.getStyleClass().add("selected");
         row.setAlignment(Pos.CENTER_LEFT);
         row.setId("chat-" + conversation.replace(':', '-'));
+        A11y.clickable(row, null);
         row.setOnMouseClicked(e -> main.open(conversation));
         return row;
     }
@@ -473,6 +478,7 @@ final class Sidebar {
             Node r = row(UiKit.avatarWithPresence(f.username(), f.online()),
                     new VBox(2, UiKit.label(f.username(), "row-title"), sub), new HBox());
             r.setId("friend-" + f.username());
+            A11y.clickable(r, null);
             r.setOnMouseClicked(e -> main.open(AccountSession.dm(f.username())));
             main.list.getChildren().add(r);
         }

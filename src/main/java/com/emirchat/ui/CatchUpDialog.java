@@ -180,6 +180,7 @@ final class CatchUpDialog {
         HBox row = new HBox(10, faceBox, words);
         row.setAlignment(Pos.CENTER_LEFT);
         row.getStyleClass().add("catchup-row");
+        A11y.clickable(row, null);
         row.setOnMouseClicked(e -> {
             main.overlay.close();
             action.run();

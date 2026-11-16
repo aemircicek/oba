@@ -39,6 +39,7 @@ final class MessageRows {
         row.setAlignment(Pos.CENTER);
         row.setPadding(new Insets(10, 0, 0, 0));
         row.setId("older-hint");
+        A11y.clickable(hint, null);
         hint.setOnMouseClicked(e -> chat.loadOlder());
         hint.setStyle("-fx-cursor: hand;");
         return row;
@@ -163,6 +164,7 @@ final class MessageRows {
                 pop(chip);
             }
             Tooltip.install(chip, new Tooltip(String.join(", ", people.stream().map(p -> p.equals(me) ? I18n.t("conv.youLower") : p).toList())));
+            A11y.clickable(chip, null);
             chip.setOnMouseClicked(e -> chat.sender.react(m, people.contains(me) ? "" : emoji));
             chips.getChildren().add(chip);
         });
@@ -271,6 +273,7 @@ final class MessageRows {
                     view.setFitWidth(Math.min(280, image.getWidth()));
                     view.setSmooth(true);
                     view.getStyleClass().add("file-preview");
+                    A11y.clickable(view, null);
                     view.setOnMouseClicked(e -> chat.viewer.openViewer(file));
                     Tooltip.install(view, new Tooltip(I18n.t("viewer.openTip")));
                     withPreview.getChildren().add(0, view);
@@ -296,6 +299,7 @@ final class MessageRows {
         for (String emoji : List.of("👍", "❤️", "😂")) {
             Button b = new Button(emoji);
             b.getStyleClass().addAll("tool-button", "tool-emoji");
+            b.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
             if (emoji.equals(mine)) b.getStyleClass().add("mine");
             b.setOnAction(e -> chat.sender.react(m, emoji.equals(mine) ? "" : emoji));
             tools.getChildren().add(b);
@@ -322,6 +326,7 @@ final class MessageRows {
         Button b = new Button();
         b.setGraphic(Icons.of(icon, 15, "muted"));
         b.getStyleClass().add("tool-button");
+        b.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE); // a narrow chat must not squeeze it to "…"
         b.setTooltip(new Tooltip(tip));
         if (action != null) b.setOnAction(e -> action.run());
         return b;
@@ -408,6 +413,7 @@ final class MessageRows {
             t.setUnderline(true);
             t.setCursor(javafx.scene.Cursor.HAND);
             Tooltip.install(t, new Tooltip(span.text()));
+            A11y.clickable(t, null);
             t.setOnMouseClicked(e -> {
                 if (e.getButton() == javafx.scene.input.MouseButton.PRIMARY) MainView.browse(span.text());
             });
@@ -454,6 +460,7 @@ final class MessageRows {
             List<String> who = byVoter.entrySet().stream().filter(e -> e.getValue() == index)
                     .map(e -> e.getKey().equals(me) ? I18n.t("conv.youLower") : e.getKey()).toList();
             if (!who.isEmpty()) Tooltip.install(option, new Tooltip(String.join(", ", who)));
+            if (!m.deleted()) A11y.clickable(option, null);
             if (!m.deleted()) option.setOnMouseClicked(e -> chat.sender.vote(m, index));
             card.getChildren().add(option);
         }
@@ -477,6 +484,7 @@ final class MessageRows {
         link.setAlignment(Pos.CENTER_LEFT);
         link.getStyleClass().add("thread-summary");
         link.setId("thread-link-" + m.id());
+        A11y.clickable(link, null);
         link.setOnMouseClicked(e -> chat.side.openThread(m));
         return link;
     }

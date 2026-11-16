@@ -13,20 +13,20 @@
     -sc-border: #e3d7c5;
     -sc-text: #1f1913;
     -sc-text-2: #5f5446;
-    -sc-text-3: #8e8273;
-    -sc-accent: #c0650c;
-    -sc-accent-hover: #a65609;
+    -sc-text-3: #696055;
+    -sc-accent: #b45f0b;
+    -sc-accent-hover: #9c5208;
     -sc-on-accent: #ffffff;
     -sc-accent-weak: #f8e7d1;
     -sc-accent-text: #9a5007;
-    -sc-own-bubble: #c0650c;
+    -sc-own-bubble: #b45f0b;
     -sc-on-own-bubble: #ffffff;
-    -sc-own-time: rgba(255, 255, 255, 0.76);
+    -sc-own-time: rgba(255, 255, 255, 0.94);
     -sc-peer-bubble: #fffcf7;
-    -sc-danger: #c2392d;
+    -sc-danger: #b9352a;
     -sc-danger-weak: #fae6e2;
-    -sc-warning: #b4481c;
-    -sc-success: #2e8a4c;
+    -sc-warning: #ab441a;
+    -sc-success: #287842;
     -sc-read: #e3f6ff;
     -sc-venom: #2e8a4c;
     -sc-shadow: rgba(60, 38, 14, 0.10);
@@ -43,7 +43,7 @@
     -sc-border: #312a23;
     -sc-text: #f3ece3;
     -sc-text-2: #b6aa9a;
-    -sc-text-3: #7f7466;
+    -sc-text-3: #958c80;
     -sc-accent: #f2a43a;
     -sc-accent-hover: #f7b65c;
     -sc-on-accent: #1d1205;
@@ -51,7 +51,7 @@
     -sc-accent-text: #f5b45a;
     -sc-own-bubble: #9a5512;
     -sc-on-own-bubble: #fff6ea;
-    -sc-own-time: rgba(255, 246, 234, 0.70);
+    -sc-own-time: rgba(255, 246, 234, 0.88);
     -sc-peer-bubble: #211d18;
     -sc-danger: #ff6b5c;
     -sc-danger-weak: #2e1613;
@@ -152,12 +152,14 @@
     -fx-background-insets: 0;
 }
 .button:hover { -fx-background-color: -sc-surface-3; }
-.button:focused { -fx-border-color: -sc-accent; -fx-border-radius: 10; -fx-border-width: 1.5; }
+/* The focus ring is shown when the keyboard brought the focus here, not after a click. It takes
+   exactly the room of the button's own (transparent, 1px) border, so nothing moves. */
+.button:focus-visible { -fx-border-color: -sc-accent; -fx-border-radius: 10.5; -fx-border-width: 1.5; -fx-border-insets: -0.5; }
 .button:disabled { -fx-opacity: 0.45; }
 
 .button.primary { -fx-background-color: -sc-accent; -fx-text-fill: -sc-on-accent; -fx-padding: 12 18; -fx-font-size: 13.5px; }
 .button.primary:hover { -fx-background-color: -sc-accent-hover; }
-.button.primary:focused { -fx-border-color: -sc-text; }
+.button.primary:focus-visible { -fx-border-color: -sc-text; }
 
 .button.danger-ghost { -fx-background-color: transparent; -fx-text-fill: -sc-danger; -fx-border-color: -sc-border; -fx-border-radius: 10; }
 .button.danger-ghost:hover { -fx-background-color: -sc-danger-weak; }
@@ -884,3 +886,9 @@
 .first-step.done .first-step-title { -fx-text-fill: -sc-text-3; -fx-font-weight: normal; }
 .first-steps-close { -fx-font-size: 14px; -fx-padding: 2 8; -fx-text-fill: -sc-text-2; }
 .help-text { -fx-font-size: 12.5px; -fx-text-fill: -sc-text-2; }
+
+/* Keyboard focus on things that are not buttons (rows, badges, pictures, links): a ring that takes no room */
+.keyboard-click:focus-visible { -fx-border-color: -sc-accent; -fx-border-width: 1.5; -fx-border-insets: -1.5; -fx-border-radius: 8; }
+.md.keyboard-click:focus-visible { -fx-effect: dropshadow(gaussian, -sc-accent, 5, 0.7, 0, 0); }
+.toggle-button:focus-visible { -fx-border-color: -sc-accent; -fx-border-width: 1.5; -fx-border-insets: -0.5; -fx-border-radius: 8.5; }
+.check-box:focus-visible .box { -fx-border-color: -sc-accent; -fx-border-width: 1.5; }

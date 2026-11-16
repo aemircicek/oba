@@ -72,6 +72,7 @@ final class SidePanels {
                 card.getChildren().add(unpin);
             }
             card.getStyleClass().add("pin-card");
+            A11y.clickable(card, null);
             card.setOnMouseClicked(e -> chat.reveal(m.id()));
             list.getChildren().add(card);
         }
@@ -116,6 +117,7 @@ final class SidePanels {
                 row.getStyleClass().addAll("list-row", "member-row");
                 if (!online) row.getStyleClass().add("offline");
                 row.setId("member-" + u);
+                if (!u.equals(me)) A11y.clickable(row, null);
                 if (!u.equals(me)) row.setOnMouseClicked(e -> chat.actions.openContact(u));
                 list.getChildren().add(row);
             }
