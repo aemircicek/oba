@@ -68,6 +68,7 @@ final class ContactDialogs {
             main.overlay.close();
             if (main.current != null) main.current.refreshHeader();
             main.sidebarUi.refreshSidebar();
+            main.firstSteps.refresh();
         }));
         if (current != null) box.getChildren().add(safetyNumber(user, current, confirm));
         HBox buttons = new HBox(10, UiKit.grow(), close, confirm);

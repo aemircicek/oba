@@ -37,7 +37,7 @@ final class MainView implements AccountSession.View {
     final VBox list = new VBox();
     final StackPane content = new StackPane();
     final ToggleButton chatsTab = new ToggleButton(I18n.t("main.chats"));
-    private final ToggleButton friendsTab = new ToggleButton(I18n.t("main.friends"));
+    final ToggleButton friendsTab = new ToggleButton(I18n.t("main.friends"));
     final ToggleButton communitiesTab = new ToggleButton(I18n.t("community.tab"));
     long selectedCommunity; // 0: the list of communities
     final Label friendsBadge = UiKit.label("", "unread-badge");
@@ -70,6 +70,7 @@ final class MainView implements AccountSession.View {
     final CallBars callBars = new CallBars(this);
     final CatchUpDialog catchUp = new CatchUpDialog(this);
     final VoicePlaces places = new VoicePlaces(this);
+    final FirstSteps firstSteps = new FirstSteps(this);
 
     MainView(AccountSession session, Runnable onLogout) {
         this.session = session;
@@ -250,7 +251,7 @@ final class MainView implements AccountSession.View {
         Label shortcut = UiKit.label(I18n.t("palette.hint", isMac() ? "⌘K" : "Ctrl+K"), "shortcut-hint");
         VBox empty = new VBox(12, Illustrations.desert(300),
                 UiKit.label(I18n.t("main.select"), "h2"),
-                UiKit.label(I18n.t("main.selectHint"), "caption"), shortcut);
+                UiKit.label(I18n.t("main.selectHint"), "caption"), shortcut, firstSteps.node());
         empty.setAlignment(Pos.CENTER);
         empty.getStyleClass().add("content-empty");
         content.getChildren().setAll(empty);
@@ -331,6 +332,7 @@ final class MainView implements AccountSession.View {
     @Override
     public void friendsChanged() {
         sidebarUi.refreshSidebar();
+        firstSteps.refresh();
         if (current != null) current.refreshHeader();
     }
 

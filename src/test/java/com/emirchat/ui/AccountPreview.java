@@ -154,8 +154,19 @@ public final class AccountPreview {
             ((ToggleButton) find("#mode-register")).setSelected(true);
             ((TextField) find("#server")).setText("127.0.0.1:" + server.port());
             ((TextField) find("#username")).setText("emir");
+            ((TextField) find("#password")).setText("emir123"); // too short, and it holds the name
+            return null;
+        });
+        pause();
+        snap("01b-register-rules");
+        fx(() -> {
             ((TextField) find("#password")).setText(PASSWORD);
             ((TextField) find("#password-repeat")).setText(PASSWORD);
+            return null;
+        });
+        pause();
+        snap("01c-register-ready");
+        fx(() -> {
             ((Button) find("#login")).fire();
             return null;
         });

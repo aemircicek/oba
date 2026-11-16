@@ -262,7 +262,7 @@ final class SettingsDialogs {
     }
 
     /** An encrypted backup of keys, sessions and history, protected by its own passphrase. */
-    private void openBackup() {
+    void openBackup() {
         javafx.scene.control.PasswordField pass = new javafx.scene.control.PasswordField();
         pass.setPromptText(I18n.t("backup.passPrompt", com.emirchat.client.Backup.MIN_PASSPHRASE));
         pass.setId("backup-pass");
@@ -307,6 +307,10 @@ final class SettingsDialogs {
                 boolean danger = failed;
                 Platform.runLater(() -> {
                     main.overlay.close();
+                    if (!danger) {
+                        AppPrefs.setFlag("backed-up", main.session.client().username());
+                        main.firstSteps.refresh();
+                    }
                     main.notice(text, danger);
                     if (!danger && main.current == null) main.showInfo(I18n.t("backup.title"), text);
                 });

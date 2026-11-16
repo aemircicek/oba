@@ -867,3 +867,20 @@
 .map-legend-active { -fx-fill: #ebe1d2; }
 .map-legend-voice { -fx-fill: #ff9a3c; }
 .map-legend-quiet { -fx-fill: #c9ab7c; }
+
+/* Creating an account: the rules, ticked off while typing */
+.signup-rules { -fx-padding: 2 2 0 2; }
+.signup-rule { -fx-font-size: 12px; }
+.signup-rule.waiting { -fx-text-fill: -sc-text-3; }
+.signup-rule.unmet { -fx-text-fill: -sc-danger; }
+.signup-rule.met { -fx-text-fill: -sc-success; }
+
+/* First steps on the empty screen */
+.first-steps { -fx-padding: 14 16; }
+.first-step { -fx-padding: 6 0; }
+.first-step-mark { -fx-font-size: 17px; -fx-text-fill: -sc-text-2; -fx-min-width: 20; }
+.first-step.done .first-step-mark { -fx-text-fill: -sc-success; }
+.first-step-title { -fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
+.first-step.done .first-step-title { -fx-text-fill: -sc-text-3; -fx-font-weight: normal; }
+.first-steps-close { -fx-font-size: 14px; -fx-padding: 2 8; -fx-text-fill: -sc-text-2; }
+.help-text { -fx-font-size: 12.5px; -fx-text-fill: -sc-text-2; }
