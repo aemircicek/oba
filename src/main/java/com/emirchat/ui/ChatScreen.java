@@ -97,6 +97,7 @@ final class ChatScreen {
         details.setVisible(false);
         details.managedProperty().bind(details.visibleProperty());
         details.setId("details");
+        A11y.clickable(badge, null);
         badge.setOnMouseClicked(e -> {
             details.setVisible(!details.isVisible());
             badge.getChildren().set(2, Icons.of(details.isVisible() ? Icons.CHEVRON_UP : Icons.CHEVRON_DOWN, 13, "accent"));

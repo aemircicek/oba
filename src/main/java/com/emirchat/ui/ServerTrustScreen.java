@@ -20,6 +20,7 @@ final class ServerTrustScreen {
         Label title = UiKit.label(I18n.t("serverTrust.title"), "h1");
         Label body = UiKit.label(I18n.t("serverTrust.body", server), "body");
         body.setWrapText(true);
+        body.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE); // never shortened to "…": it is the explanation
         body.setStyle("-fx-text-alignment: center;");
         VBox header = new VBox(10, badge, title, body);
         header.setAlignment(Pos.CENTER);
@@ -42,7 +43,15 @@ final class ServerTrustScreen {
         HBox.setHgrow(reject, Priority.ALWAYS);
         HBox.setHgrow(trust, Priority.ALWAYS);
 
-        VBox column = new VBox(20, header, card, new HBox(10, reject, trust),
+        // Most people meet this screen once and do not run the server themselves: say where the
+        // other copy of the fingerprint is, and what to do when it is different.
+        Label where = UiKit.label(I18n.t("serverTrust.where"), "help-text");
+        where.setWrapText(true);
+        where.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        where.setId("server-trust-where");
+        VBox help = new VBox(where);
+        help.getStyleClass().add("card-flat");
+        VBox column = new VBox(20, header, card, help, new HBox(10, reject, trust),
                 UiKit.label(Identity.pretty(fingerprint).replace('\n', ' '), "caption"));
         column.setMaxWidth(420);
         column.setAlignment(Pos.TOP_CENTER);

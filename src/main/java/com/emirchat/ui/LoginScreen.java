@@ -54,6 +54,7 @@ final class LoginScreen {
         tagline.setWrapText(true);
         tagline.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
         tagline.setStyle("-fx-text-alignment: center;");
+        tagline.managedProperty().bind(tagline.visibleProperty());
         VBox brand = new VBox(10, badge, title, tagline);
         brand.setAlignment(Pos.CENTER);
 
@@ -87,9 +88,37 @@ final class LoginScreen {
         repeat.setPromptText(I18n.t("login.repeat"));
         repeat.setId("password-repeat");
 
-        VBox repeatBox = field(I18n.t("login.repeat"), repeat);
+        // Both password fields can be shown as plain text, to check what was typed
+        CheckBox show = new CheckBox(I18n.t("login.showPassword"));
+        show.setId("show-password");
+        javafx.scene.Node passwordInput = revealable(password, show);
+        VBox repeatBox = field(I18n.t("login.repeat"), revealable(repeat, show));
         repeatBox.managedProperty().bind(repeatBox.visibleProperty());
         repeatBox.visibleProperty().bind(create.selectedProperty());
+
+        // The rules of a new account, ticked off while typing (only when creating one)
+        VBox rules = new VBox(4);
+        rules.setId("signup-rules");
+        rules.getStyleClass().add("signup-rules");
+        rules.managedProperty().bind(rules.visibleProperty());
+        rules.visibleProperty().bind(create.selectedProperty());
+        Runnable showRules = () -> {
+            rules.getChildren().clear();
+            for (SignUpRules.Check c : SignUpRules.checks(user.getText(), password.getText(), repeat.getText())) {
+                Label line = UiKit.label((c.ok() ? "✓  " : "•  ") + c.text(), "signup-rule");
+                line.getStyleClass().add(c.ok() ? "met" : c.typed() ? "unmet" : "waiting");
+                line.setWrapText(true);
+                rules.getChildren().add(line);
+            }
+        };
+        user.textProperty().addListener((o, a, b) -> showRules.run());
+        password.textProperty().addListener((o, a, b) -> showRules.run());
+        repeat.textProperty().addListener((o, a, b) -> showRules.run());
+        showRules.run();
+        // the longer form needs the room: the links below it must stay in view in a small window
+        tagline.visibleProperty().bind(create.selectedProperty().not());
+        badge.managedProperty().bind(badge.visibleProperty());
+        badge.visibleProperty().bind(create.selectedProperty().not());
 
         // Server: always visible without a default; otherwise behind "Advanced"
         VBox serverBox = field(I18n.t("login.server"), server);
@@ -137,8 +166,10 @@ final class LoginScreen {
                 .then(I18n.t("login.create")).otherwise(I18n.t("login.signIn")));
         go.disableProperty().bind(Bindings.createBooleanBinding(
                 () -> (!defaults.configured() && server.getText().isBlank()) || user.getText().isBlank()
-                        || password.getText().isEmpty(),
-                server.textProperty(), user.textProperty(), password.textProperty()));
+                        || password.getText().isEmpty()
+                        || (create.isSelected() && !SignUpRules.allMet(user.getText(), password.getText(), repeat.getText())),
+                server.textProperty(), user.textProperty(), password.textProperty(), repeat.textProperty(),
+                create.selectedProperty()));
         go.setOnAction(e -> {
             if (create.isSelected() && !password.getText().equals(repeat.getText())) {
                 showError(I18n.t("login.mismatch"));
@@ -150,7 +181,7 @@ final class LoginScreen {
         });
 
         VBox form = new VBox(14, segmented, serverBox, serverNote, field(I18n.t("login.username"), user),
-                field(I18n.t("login.password"), password), repeatBox, remember, error, go, advanced);
+                field(I18n.t("login.password"), passwordInput), repeatBox, rules, new HBox(18, show, remember), error, go, advanced);
         form.getStyleClass().add("card");
 
         Button direct = new Button(I18n.t("login.direct"));
@@ -208,7 +239,33 @@ final class LoginScreen {
         root.setDisable(busy);
     }
 
+    /**
+     * The password field with a plain-text twin on top of it; {@code show} decides which of the
+     * two is visible. They share their text, so everything else keeps reading the password field.
+     */
+    private static javafx.scene.Node revealable(PasswordField hidden, CheckBox show) {
+        TextField plain = new TextField();
+        plain.setPromptText(hidden.getPromptText());
+        plain.setId(hidden.getId() + "-plain");
+        plain.textProperty().bindBidirectional(hidden.textProperty());
+        plain.visibleProperty().bind(show.selectedProperty());
+        plain.managedProperty().bind(plain.visibleProperty());
+        hidden.visibleProperty().bind(show.selectedProperty().not());
+        hidden.managedProperty().bind(hidden.visibleProperty());
+        show.selectedProperty().addListener((o, was, now) -> {
+            if (hidden.isFocused() || plain.isFocused()) {
+                TextField to = now ? plain : hidden;
+                to.requestFocus();
+                to.positionCaret(to.getText().length());
+            }
+        });
+        return new StackPane(hidden, plain);
+    }
+
     private static VBox field(String label, javafx.scene.Node input) {
-        return new VBox(6, UiKit.label(label, "field-label"), input);
+        Label name = UiKit.label(label, "field-label");
+        name.setLabelFor(input); // a screen reader says the label when the field is reached
+        if (input instanceof StackPane both) both.getChildren().forEach(n -> n.setAccessibleText(label));
+        return new VBox(6, name, input);
     }
 }

@@ -39,6 +39,15 @@ final class AppPrefs {
         NODE.putBoolean("check-updates", on);
     }
 
+    /** A yes/no fact about one account on this computer (for example that it has made a backup). */
+    static boolean flag(String name, String account) {
+        return NODE.getBoolean(name + ":" + account, false);
+    }
+
+    static void setFlag(String name, String account) {
+        NODE.putBoolean(name + ":" + account, true);
+    }
+
     static boolean welcomeShown() {
         return NODE.getBoolean("welcome-shown", false);
     }

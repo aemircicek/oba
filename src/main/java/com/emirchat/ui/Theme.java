@@ -14,6 +14,7 @@ final class Theme {
 
     static void install(Parent root) {
         root.getStylesheets().add(STYLESHEET);
+        A11y.install(root);
         String forced = System.getProperty("securechat.theme"); // "dark" or "light", for screenshots/testing
         if (forced != null) {
             apply(root, forced.equalsIgnoreCase("dark"));
