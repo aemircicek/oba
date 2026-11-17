@@ -34,7 +34,11 @@ final class AddressDiscovery implements AutoCloseable {
 
     private final DatagramSocket socket;
     private final Thread thread;
-    private final Map<InetAddress, int[]> recent = new HashMap<>(); // address -> {second, count}
+    /** Answers given this second, per address (IPv6 per /64); emptied when the second changes. */
+    private final Map<String, Integer> thisSecond = new HashMap<>();
+    private long second;
+    /** Addresses tracked in one second at most; beyond it new ones get no answer until the next. */
+    static final int MAX_TRACKED = 50_000;
 
     AddressDiscovery(String bindAddress, int port) throws SocketException {
         socket = new DatagramSocket(new InetSocketAddress(bindAddress, port));
@@ -69,15 +73,18 @@ final class AddressDiscovery implements AutoCloseable {
                 .put((byte) (address.length == 4 ? 4 : 6)).putShort((short) port).put(address).array();
     }
 
-    private synchronized boolean allowed(InetAddress from) {
-        int second = (int) (System.currentTimeMillis() / 1000);
-        if (recent.size() > 50_000) recent.values().removeIf(r -> r[0] != second); // forget the past
-        int[] r = recent.computeIfAbsent(from, k -> new int[] {second, 0});
-        if (r[0] != second) {
-            r[0] = second;
-            r[1] = 0;
+    synchronized boolean allowed(InetAddress from) {
+        long now = System.currentTimeMillis() / 1000;
+        if (now != second) { // counts are per second: the past is simply dropped
+            second = now;
+            thisSecond.clear();
         }
-        return ++r[1] <= PER_SECOND;
+        String key = Addresses.key(from);
+        Integer count = thisSecond.get(key);
+        if (count == null && thisSecond.size() >= MAX_TRACKED) return false;
+        int next = count == null ? 1 : count + 1;
+        thisSecond.put(key, next);
+        return next <= PER_SECOND;
     }
 
     @Override

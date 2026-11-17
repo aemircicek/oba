@@ -50,6 +50,12 @@ public final class DirectPath implements AutoCloseable {
     static final byte ALIVE = 4;
 
     static final int MAX_CANDIDATES = 8;
+    /** Their addresses we keep at most: their list, and a few more seen on probes from outside. */
+    static final int MAX_THEIRS = MAX_CANDIDATES + 4;
+    /** Candidate lists we take from them per call (they send three; a few more after a change). */
+    static final int MAX_CANDIDATE_UPDATES = 6;
+    /** Probes we send per call at most, to every address together. */
+    static final int MAX_PROBES = 1500;
     static final long PROBE_EVERY_MS = 100;
     /** Probing goes on this long after the last news about candidates. */
     static final long PROBE_FOR_MS = 10_000;
@@ -81,6 +87,8 @@ public final class DirectPath implements AutoCloseable {
     private volatile long probeUntil;
     private volatile boolean closed;
     private final byte[] discoveryId = new byte[16];
+    private int candidateUpdates;
+    private int probesSent;
     private volatile InetSocketAddress reflexive;
 
     /**
@@ -140,10 +148,13 @@ public final class DirectPath implements AutoCloseable {
         byte[] body = signalling.open(packet);
         if (body == null) return false;
         if (body.length >= 2 && body[0] == CANDIDATES) {
-            List<InetSocketAddress> list = decodeCandidates(body);
-            if (list != null) {
-                theirs.addAll(list);
-                probeUntil = System.currentTimeMillis() + PROBE_FOR_MS;
+            List<InetSocketAddress> list = decodeCandidates(body, loopbackAllowed());
+            synchronized (theirs) {
+                if (list != null && candidateUpdates < MAX_CANDIDATE_UPDATES) {
+                    candidateUpdates++;
+                    for (InetSocketAddress a : list) if (theirs.size() < MAX_THEIRS) theirs.add(a);
+                    probeUntil = System.currentTimeMillis() + PROBE_FOR_MS;
+                }
             }
         }
         return true;
@@ -169,7 +180,11 @@ public final class DirectPath implements AutoCloseable {
                 InetSocketAddress path = selected;
                 if (path == null && now < probeUntil) {
                     synchronized (theirs) {
-                        for (InetSocketAddress to : theirs) sendControl(PROBE, to);
+                        for (InetSocketAddress to : theirs) {
+                            if (probesSent >= MAX_PROBES) break; // the other side may be steering us: stop
+                            sendControl(PROBE, to);
+                            probesSent++;
+                        }
                     }
                 }
                 if (path != null && now - lastAlive >= ALIVE_EVERY_MS) {
@@ -251,8 +266,32 @@ public final class DirectPath implements AutoCloseable {
         return Arrays.copyOf(b.array(), b.position());
     }
 
+    /**
+     * Loopback candidates are taken only when the server itself is on this computer (development
+     * and tests); otherwise the other side could make us probe our own computer's services.
+     */
+    private boolean loopbackAllowed() {
+        return server != null && server.getAddress().isLoopbackAddress();
+    }
+
     /** @return the candidates, or null if the body is malformed */
     static List<InetSocketAddress> decodeCandidates(byte[] body) {
+        return decodeCandidates(body, false);
+    }
+
+    /**
+     * True for an address the other side has no business pointing us at: this computer, link-local,
+     * broadcast and multicast, "any", and the low ports of system services (NAT mappings never use them).
+     */
+    static boolean unfit(InetAddress a, int port, boolean loopbackAllowed) {
+        if (port < 1024 || a.isAnyLocalAddress() || a.isMulticastAddress() || a.isLinkLocalAddress()) return true;
+        if (a.isLoopbackAddress()) return !loopbackAllowed;
+        byte[] b = a.getAddress();
+        return b.length == 4 && (b[3] & 0xff) == 255; // 255.255.255.255 and the usual subnet broadcasts
+    }
+
+    /** @return the candidates, or null if the body is malformed */
+    static List<InetSocketAddress> decodeCandidates(byte[] body, boolean loopbackAllowed) {
         try {
             ByteBuffer b = ByteBuffer.wrap(body);
             if (b.get() != CANDIDATES) return null;
@@ -265,7 +304,7 @@ public final class DirectPath implements AutoCloseable {
                 byte[] a = new byte[family == 4 ? 4 : family == 6 ? 16 : -1];
                 b.get(a);
                 InetAddress addr = InetAddress.getByAddress(a);
-                if (port == 0 || addr.isAnyLocalAddress() || addr.isMulticastAddress()) continue; // never aim at these
+                if (unfit(addr, port, loopbackAllowed)) continue; // never aim at these
                 out.add(new InetSocketAddress(addr, port));
             }
             return b.hasRemaining() ? null : out;
@@ -335,7 +374,9 @@ public final class DirectPath implements AutoCloseable {
         switch (body[0]) {
             case PROBE -> {
                 sendControl(PROBE_ACK, from); // the path from them to us works: say so on the way back
-                if (theirs.add(from)) probeUntil = System.currentTimeMillis() + PROBE_FOR_MS; // seen from outside
+                synchronized (theirs) { // seen from outside: their router's mapping towards us
+                    if (theirs.size() < MAX_THEIRS && theirs.add(from)) probeUntil = System.currentTimeMillis() + PROBE_FOR_MS;
+                }
             }
             case PROBE_ACK -> {
                 if (selected == null) {

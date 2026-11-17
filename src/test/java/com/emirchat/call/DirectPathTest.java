@@ -25,10 +25,13 @@ class DirectPathTest {
         List<InetSocketAddress> list = List.of(new InetSocketAddress("192.168.1.20", 50000),
                 new InetSocketAddress("2001:db8::7", 50001), new InetSocketAddress("203.0.113.9", 61000));
         assertEquals(list, DirectPath.decodeCandidates(DirectPath.encodeCandidates(list)));
-        byte[] broadcastish = DirectPath.encodeCandidates(List.of(new InetSocketAddress("224.0.0.1", 5),
-                new InetSocketAddress("0.0.0.0", 5), new InetSocketAddress("10.0.0.2", 7)));
-        assertEquals(List.of(new InetSocketAddress("10.0.0.2", 7)), DirectPath.decodeCandidates(broadcastish),
-                "multicast and 'any' addresses are dropped");
+        byte[] steering = DirectPath.encodeCandidates(List.of(new InetSocketAddress("224.0.0.1", 5000),
+                new InetSocketAddress("0.0.0.0", 5000), new InetSocketAddress("127.0.0.1", 5000),
+                new InetSocketAddress("169.254.1.1", 5000), new InetSocketAddress("192.168.1.255", 5000),
+                new InetSocketAddress("10.0.0.3", 53), new InetSocketAddress("10.0.0.2", 50007)));
+        assertEquals(List.of(new InetSocketAddress("10.0.0.2", 50007)), DirectPath.decodeCandidates(steering),
+                "multicast, any, loopback, link-local, broadcast and system ports are dropped");
+        assertEquals(2, DirectPath.decodeCandidates(steering, true).size(), "loopback only with a server on this computer");
         assertNull(DirectPath.decodeCandidates(new byte[] {DirectPath.CANDIDATES, 99}), "more than allowed");
         assertNull(DirectPath.decodeCandidates(new byte[] {DirectPath.CANDIDATES, 1, 4, 0}), "truncated");
         for (InetAddress a : DirectPath.localAddresses()) {

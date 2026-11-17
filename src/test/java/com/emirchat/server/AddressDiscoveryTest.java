@@ -52,6 +52,20 @@ class AddressDiscoveryTest {
     }
 
     @Test
+    void theRateTableNeverGrowsPastItsLimit() throws Exception {
+        try (AddressDiscovery service = new AddressDiscovery("127.0.0.1", 0)) {
+            int allowed = 0;
+            for (int i = 0; i < AddressDiscovery.MAX_TRACKED + 1000; i++) {
+                byte[] a = {10, (byte) (i >> 16), (byte) (i >> 8), (byte) i};
+                if (service.allowed(InetAddress.getByAddress(a))) allowed++;
+            }
+            // within one second (or two, if the test crosses a boundary) at most the limit is tracked
+            assertTrue(allowed <= 2 * AddressDiscovery.MAX_TRACKED, "allowed " + allowed);
+            assertTrue(allowed >= AddressDiscovery.MAX_TRACKED - 1, "but real addresses are answered: " + allowed);
+        }
+    }
+
+    @Test
     void aRealServerAnswersOnItsPortAndLimitsEachAddress() throws Exception {
         try (AddressDiscovery service = new AddressDiscovery("127.0.0.1", 0);
              DatagramSocket client = new DatagramSocket(0, InetAddress.getLoopbackAddress())) {
