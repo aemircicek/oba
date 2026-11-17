@@ -31,6 +31,7 @@ public final class CallCrypto {
     /** The app's former name: part of the protocol (calls with older versions), so it never changes. */
     private static final byte[] INFO = "scorpion call v1".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] OPUS_INFO = "oba call opus v1".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] VIDEO_INFO = "oba call video v1".getBytes(StandardCharsets.US_ASCII);
     private static final int TAG_BYTES = 16;
 
     private final byte[] callId;
@@ -66,6 +67,11 @@ public final class CallCrypto {
      */
     public static CallCrypto deriveOpus(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller) {
         return derive(callId, mine, theirPublic, caller, OPUS_INFO);
+    }
+
+    /** The keys for video in the same call, independent of both audio key pairs (see {@link #deriveOpus}). */
+    public static CallCrypto deriveVideo(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller) {
+        return derive(callId, mine, theirPublic, caller, VIDEO_INFO);
     }
 
     private static CallCrypto derive(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller, byte[] info) {

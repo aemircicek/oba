@@ -83,6 +83,61 @@ final class CallBars {
         main.callBar.setVisible(true);
     }
 
+    /**
+     * The camera or screen-sharing button of a connected call: turns that source on, or off
+     * if it is the one being sent. Opening a camera takes a moment, so it happens in the background.
+     */
+    Button videoButton(com.emirchat.call.Calls calls, boolean screen) {
+        Button b = new Button();
+        b.getStyleClass().add("small");
+        b.setMinWidth(Region.USE_PREF_SIZE);
+        b.setId(screen ? "call-share-screen" : "call-camera");
+        b.setOnAction(e -> {
+            com.emirchat.call.CallVideo v = calls.video();
+            boolean thisOne = v != null && v.sending() && v.sendingScreen() == screen;
+            b.setDisable(true);
+            main.session.background().execute(() -> {
+                String problem = null;
+                try {
+                    if (thisOne) {
+                        calls.stopVideo();
+                    } else {
+                        calls.startVideo(screen ? main.session.client().screen() : main.session.client().camera());
+                    }
+                } catch (IllegalStateException ex) {
+                    problem = ex.getMessage();
+                }
+                String error = problem;
+                javafx.application.Platform.runLater(() -> {
+                    refreshVideoButtons(calls, screen ? null : b, screen ? b : null);
+                    if (error != null) main.notice(I18n.t(screen ? "video.screenFailed" : "video.cameraFailed", error), true);
+                });
+            });
+        });
+        return b;
+    }
+
+    /** Sets the texts and whether the buttons can be used (video needs a current version on both sides). */
+    void refreshVideoButtons(com.emirchat.call.Calls calls, Button camera, Button share) {
+        com.emirchat.call.CallVideo v = calls.video();
+        boolean possible = calls.videoPossible();
+        boolean sendingCamera = v != null && v.sending() && !v.sendingScreen();
+        boolean sendingScreen = v != null && v.sending() && v.sendingScreen();
+        String unavailable = I18n.t("video.needsNewVersion");
+        if (camera != null) {
+            camera.setText(sendingCamera ? I18n.t("call.cameraOff") : I18n.t("call.camera"));
+            camera.setGraphic(Icons.of(Icons.VIDEO, 14, sendingCamera ? "accent" : "muted"));
+            camera.setDisable(!possible);
+            camera.setTooltip(new Tooltip(possible ? I18n.t("call.cameraTip") : unavailable));
+        }
+        if (share != null) {
+            share.setText(sendingScreen ? I18n.t("call.stopSharing") : I18n.t("call.shareScreen"));
+            share.setGraphic(Icons.of(Icons.MONITOR, 14, sendingScreen ? "accent" : "muted"));
+            share.setDisable(!possible);
+            share.setTooltip(new Tooltip(possible ? I18n.t("call.shareTip") : unavailable));
+        }
+    }
+
     static Button hangUpButton(String text, Runnable action) {
         Button b = new Button(text);
         b.setGraphic(Icons.of(Icons.PHONE, 14, "danger"));

@@ -160,6 +160,91 @@ class CallIntegrationTest {
         }
     }
 
+    /** Pictures as the test's screen sees them. */
+    static final class FakeScreen implements com.emirchat.call.CallVideo.View {
+        final BlockingQueue<com.emirchat.video.VideoFrame> remote = new LinkedBlockingQueue<>();
+        final BlockingQueue<Boolean> screens = new LinkedBlockingQueue<>();
+        final BlockingQueue<String> stops = new LinkedBlockingQueue<>();
+
+        @Override public void remote(com.emirchat.video.VideoFrame frame, boolean screen) {
+            remote.add(frame);
+            screens.add(screen);
+        }
+
+        @Override public void remoteStopped() { stops.add("stopped"); }
+    }
+
+    @Test
+    void videoFlowsAlongsideTheVoiceAndStops() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe")) {
+            befriend(emir, efe, "efe", "emir");
+            FakeScreen efeScreen = new FakeScreen();
+            efe.client.calls().videoView(efeScreen);
+            emir.client.calls().call("efe");
+            efe.await(c -> c.state() == Calls.State.RINGING);
+            efe.client.calls().accept();
+            emir.await(c -> c.state() == Calls.State.CONNECTED);
+            efe.await(c -> c.state() == Calls.State.CONNECTED);
+
+            // voice runs all the time, as in a real call: 50 packets a second each way
+            java.util.concurrent.atomic.AtomicBoolean talking = new java.util.concurrent.atomic.AtomicBoolean(true);
+            java.util.concurrent.atomic.AtomicInteger said = new java.util.concurrent.atomic.AtomicInteger();
+            Thread voices = Thread.ofPlatform().daemon().start(() -> {
+                for (int f = 0; talking.get(); f++) {
+                    emir.audio.say(tone(f * 320));
+                    said.incrementAndGet();
+                    efe.audio.say(tone(f * 320));
+                    try {
+                        Thread.sleep(20);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            });
+            try {
+                for (int i = 0; i < 100 && !emir.client.calls().videoPossible(); i++) Thread.sleep(20);
+                assertTrue(emir.client.calls().videoPossible(), "both sides are current versions");
+
+                emir.client.calls().startVideo(new com.emirchat.video.PatternSource(480, 360, 15, false));
+                com.emirchat.video.VideoFrame first = efeScreen.remote.poll(10, TimeUnit.SECONDS);
+                assertNotNull(first, "efe sees emir");
+                assertEquals(480, first.width());
+                assertEquals(360, first.height());
+                assertFalse(efeScreen.screens.poll(), "a camera, not a screen");
+
+                // three seconds of video next to the voice: nearly every frame arrives, so the relay's limit is kept
+                efeScreen.remote.clear();
+                efe.audio.speaker.clear();
+                int saidBefore = said.get();
+                Thread.sleep(3000);
+                int frames = efeScreen.remote.size();
+                int spoken = said.get() - saidBefore;
+                Thread.sleep(300); // the last frames still on their way
+                int heard = efe.audio.speaker.size();
+                assertTrue(frames >= 36, "about 15 frames a second came through: " + frames + " in 3 s");
+                assertTrue(heard >= spoken * 0.95, "and the voice was not crowded out: " + heard + " of " + spoken + " heard");
+                com.emirchat.video.VideoFrame latest = null;
+                for (com.emirchat.video.VideoFrame f : efeScreen.remote) latest = f;
+                assertNotNull(latest);
+
+                emir.client.calls().startVideo(new com.emirchat.video.PatternSource(1280, 800, 5, true));
+                efeScreen.screens.clear();
+                boolean sawScreen = false;
+                long until = System.currentTimeMillis() + 10_000;
+                while (!sawScreen && System.currentTimeMillis() < until) {
+                    sawScreen = Boolean.TRUE.equals(efeScreen.screens.poll(1, TimeUnit.SECONDS));
+                }
+                assertTrue(sawScreen, "switching to the screen is seen as a screen");
+
+                emir.client.calls().stopVideo();
+                assertNotNull(efeScreen.stops.poll(5, TimeUnit.SECONDS), "and efe learns it stopped");
+            } finally {
+                talking.set(false);
+                voices.join();
+            }
+        }
+    }
+
     @Test
     void rejectedAndBusyCalls() throws Exception {
         try (Device emir = new Device("emir"); Device efe = new Device("efe"); Device ayse = new Device("ayse")) {

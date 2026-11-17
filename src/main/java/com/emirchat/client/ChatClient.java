@@ -1408,9 +1408,24 @@ public final class ChatClient implements AutoCloseable {
         }
     }
 
-    /** Voice calls with friends. */
+    /** Voice and video calls with friends. */
     public com.emirchat.call.Calls calls() {
         return calls;
+    }
+
+    /**
+     * The camera to send in a call; with {@code -Dsecurechat.video=pattern} a moving test picture
+     * instead (tests and screenshots must not open the real camera).
+     */
+    public com.emirchat.video.VideoSource camera() {
+        return "pattern".equals(System.getProperty("securechat.video"))
+                ? new com.emirchat.video.PatternSource(480, 360, 15, false) : new com.emirchat.video.CameraSource();
+    }
+
+    /** The screen to share in a call (a test picture with {@code -Dsecurechat.video=pattern}). */
+    public com.emirchat.video.VideoSource screen() {
+        return "pattern".equals(System.getProperty("securechat.video"))
+                ? new com.emirchat.video.PatternSource(1280, 800, 5, true) : new com.emirchat.video.ScreenSource();
     }
 
     /** Replaces the microphone and speaker (tests, or a device chosen in settings). */

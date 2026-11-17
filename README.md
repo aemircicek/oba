@@ -317,7 +317,25 @@ codec list, so the choice is made inside the audio. A call starts in μ-law; eac
 once a second, a one-byte "I play Opus" packet under a second pair of keys derived from the same
 exchange (label `oba call opus v1`). An older version cannot authenticate those packets and drops
 them as damaged. Whoever receives one switches to sending Opus under those keys; a call with an
-older version simply stays in μ-law, converted between 16 and 8 kHz on our side. The server relays audio only
+older version simply stays in μ-law, converted between 16 and 8 kHz on our side.
+
+**Video and screen sharing** use a third key pair from the same exchange (label
+`oba call video v1`). The camera (480x360 at 15 frames a second) or the screen (up to 1280x800 at
+5) is encoded in VP8, cut into chunks of at most 960 bytes and sent through the same relay as the
+audio, so servers from 3.4 on carry it unchanged. The relay passes 100 packets a second from one
+device and Opus takes 50, so video is paced to 40: about 300 kbit/s. A receiver that loses a
+chunk asks for a key frame instead of showing a broken picture.
+
+```
+video packet = callId ‖ u64 seq ‖ AES-256-GCM(video key, nonce = 0⁴ ‖ seq, aad = callId, body)
+body         = u8 1 ‖ u32 frame ‖ u8 index ‖ u8 count ‖ u8 flags (key, screen) ‖ VP8 data
+             | u8 2   (please send a key frame)
+             | u8 3   (video stopped)
+```
+
+Video is offered only once the other side has shown it runs a version with Opus (the two came
+together); older versions cannot open video packets and drop them. Camera and screen are opened
+only when you press the button, and closed when you press it again or the call ends. The server relays audio only
 between friends, at most 100 packets a second, and drops packets for a device that falls behind
 instead of queueing them. Calls are one-to-one; an offer that arrives more than a minute late is
 shown as a missed call.
@@ -475,7 +493,14 @@ Honest notes on what this project does **not** do:
   the member list). Check the member list of sensitive communities.
 - **Calls go through the server** (no direct peer-to-peer connection), so they add a little delay.
   With someone on a version before Opus, or in a room with one, voice quality is that of a
-  telephone (8 kHz μ-law). There are no video calls yet.
+  telephone (8 kHz μ-law).
+- **Video takes room**: in a small window the picture leaves space for only a few messages.
+- **Video is small**: the relay's limit leaves about 300 kbit/s, enough for a 480x360 camera or a
+  readable screen at a few frames a second, not for full-screen HD. Video is for one-to-one calls
+  only, not voice rooms. The server sees how much a call sends, so it can tell video from voice.
+- **Video uses native code** (FFmpeg, through JavaCPP), unlike the rest of the app; the installers
+  are about 25 MB larger for it. On macOS sharing the screen needs the "Screen Recording"
+  permission, without which only the desktop picture is shared.
 - **Voice rooms**: the server sees who is in which room and when; at most 12 people per room. Room
   keys are handed to every member of the channel (anyone who can read the channel may also
   listen), and nobody else can join.
@@ -523,7 +548,7 @@ Honest notes on what this project does **not** do:
 - Fuzzing the decoders (Jazzer) and a written security report
 - Sealed sender and message-size padding (less metadata for the server)
 - A formal model of the handshake and X3DH (ProVerif or Tamarin)
-- Multiple devices per account; video calls and screen sharing
+- Multiple devices per account; video in voice rooms; direct (peer-to-peer) calls
 
 ## Security
 

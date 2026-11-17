@@ -71,6 +71,9 @@ public final class Calls implements AutoCloseable {
     private byte[] theirKey;
     /** The audio of the connected call, or null. */
     private volatile Link link;
+    /** The video of the connected call, or null. */
+    private volatile CallVideo video;
+    private volatile CallVideo.View videoView;
     private AudioDevice device;
     private volatile boolean muted;
     private long connectedAt;
@@ -257,6 +260,46 @@ public final class Calls implements AutoCloseable {
         if (pcm != null) d.play(pcm);
     }
 
+    // ------------------------------------------------------------------ video
+
+    /** Where the call's pictures go (set once; kept for every call). */
+    public void videoView(CallVideo.View view) {
+        videoView = view;
+        CallVideo v = video;
+        if (v != null) v.view(view);
+    }
+
+    /**
+     * True if video can be sent now: a call is connected and the other side runs a version with
+     * video (which it shows by playing Opus: the two came together).
+     */
+    public boolean videoPossible() {
+        Link l = link;
+        return l != null && l.peerOpus && video != null;
+    }
+
+    /**
+     * Starts sending pictures from {@code source} (the camera or the screen), replacing what was
+     * sent. Opening a camera can take a moment: call it off the UI thread.
+     *
+     * @throws IllegalStateException if there is no call with video, or the source cannot start
+     */
+    public void startVideo(com.emirchat.video.VideoSource source) {
+        CallVideo v = video;
+        if (v == null || !videoPossible()) throw new IllegalStateException("No call with video");
+        v.start(source);
+    }
+
+    public void stopVideo() {
+        CallVideo v = video;
+        if (v != null) v.stop();
+    }
+
+    /** The video of the current call, or null. */
+    public CallVideo video() {
+        return video;
+    }
+
     /**
      * What we send: "opus" once the other side has shown it plays Opus, "mulaw" before that and
      * with an older version; null without a connected call.
@@ -289,6 +332,8 @@ public final class Calls implements AutoCloseable {
         // receiving side: used from the network thread only
         private final OpusCodec.Decoder decoder = new OpusCodec.Decoder();
         private final Resample up = Resample.up();
+        /** Video packets arrive mixed with the audio ones; null in tests of audio alone. */
+        volatile CallVideo video;
 
         Link(CallCrypto ulaw, CallCrypto opus) {
             this.ulaw = ulaw;
@@ -317,6 +362,8 @@ public final class Calls implements AutoCloseable {
                 if (body.length < 2 || body[0] != OPUS_FRAME) return null;
                 return decoder.decode(Arrays.copyOfRange(body, 1, body.length));
             }
+            CallVideo v = video;
+            if (v != null && v.receive(packet)) return null;
             byte[] coded = ulaw.open(packet);
             return coded == null ? null : up.process(Mulaw.decode(coded));
         }
@@ -332,6 +379,16 @@ public final class Calls implements AutoCloseable {
             if (state == State.ENDED) return;
             link = new Link(CallCrypto.derive(callId, myKey, theirKey, outgoing),
                     CallCrypto.deriveOpus(callId, myKey, theirKey, outgoing));
+            String videoTo = peer;
+            byte[] videoId = callId.clone();
+            video = new CallVideo(CallCrypto.deriveVideo(callId, myKey, theirKey, outgoing), sealed -> {
+                byte[] packet = new byte[videoId.length + sealed.length];
+                System.arraycopy(videoId, 0, packet, 0, videoId.length);
+                System.arraycopy(sealed, 0, packet, videoId.length, sealed.length);
+                transport.audio(videoTo, packet);
+            });
+            video.view(videoView);
+            link.video = video;
             myKey = null;
             state = State.CONNECTED;
             connectedAt = System.currentTimeMillis();
@@ -375,6 +432,7 @@ public final class Calls implements AutoCloseable {
 
     private void end(EndReason reason, String error) {
         AudioDevice d;
+        CallVideo v;
         Call last;
         synchronized (this) {
             if (state == State.ENDED) return;
@@ -383,11 +441,14 @@ public final class Calls implements AutoCloseable {
             d = device;
             device = null;
             link = null; // forget the call keys
+            v = video;
+            video = null;
             myKey = null;
             theirKey = null;
             if (ringTimeout != null) ringTimeout.cancel(false);
         }
         if (d != null) d.stop();
+        if (v != null) v.close(); // stops the camera too
         listener.changed(last);
     }
 

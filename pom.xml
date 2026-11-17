@@ -24,6 +24,11 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <junit.version>5.11.4</junit.version>
     <javafx.version>23.0.2</javafx.version>
+    <javacpp.version>1.5.14</javacpp.version>
+    <ffmpeg.version>8.1.2-${javacpp.version}</ffmpeg.version>
+    <!-- The native libraries bundled are those of the system the jar is built on (see the profiles
+         below), as for JavaFX: each release installer is built on its own system. -->
+    <native.platform>linux-x86_64</native.platform>
   </properties>
 
   <dependencies>
@@ -55,6 +60,29 @@
       <artifactId>concentus</artifactId>
       <version>1.0.2</version>
     </dependency>
+    <!-- Video calls: camera capture and the VP8 codec, through FFmpeg (LGPL v3, native libraries) -->
+    <dependency>
+      <groupId>org.bytedeco</groupId>
+      <artifactId>javacpp</artifactId>
+      <version>${javacpp.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.bytedeco</groupId>
+      <artifactId>javacpp</artifactId>
+      <version>${javacpp.version}</version>
+      <classifier>${native.platform}</classifier>
+    </dependency>
+    <dependency>
+      <groupId>org.bytedeco</groupId>
+      <artifactId>ffmpeg</artifactId>
+      <version>${ffmpeg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.bytedeco</groupId>
+      <artifactId>ffmpeg</artifactId>
+      <version>${ffmpeg.version}</version>
+      <classifier>${native.platform}</classifier>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -62,6 +90,29 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <profiles>
+    <profile>
+      <id>macos-arm64</id>
+      <activation><os><family>mac</family><arch>aarch64</arch></os></activation>
+      <properties><native.platform>macosx-arm64</native.platform></properties>
+    </profile>
+    <profile>
+      <id>macos-x64</id>
+      <activation><os><family>mac</family><arch>x86_64</arch></os></activation>
+      <properties><native.platform>macosx-x86_64</native.platform></properties>
+    </profile>
+    <profile>
+      <id>windows-x64</id>
+      <activation><os><family>windows</family><arch>amd64</arch></os></activation>
+      <properties><native.platform>windows-x86_64</native.platform></properties>
+    </profile>
+    <profile>
+      <id>linux-arm64</id>
+      <activation><os><name>linux</name><arch>aarch64</arch></os></activation>
+      <properties><native.platform>linux-arm64</native.platform></properties>
+    </profile>
+  </profiles>
 
   <build>
     <finalName>secure-chat</finalName>

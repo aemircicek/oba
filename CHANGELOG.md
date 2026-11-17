@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-A security review of the whole app. The encryption (handshake, X3DH, Double Ratchet, sender keys,
-files, calls) needed no change; the fixes are around it. Nothing in the protocol changes: every
-version from 3.2 on keeps working with this one.
+Video calls and screen sharing, Opus for calls and voice rooms, a gentler first start, an
+accessibility pass and a security review of the whole app. The server needs no update, and every
+version from 3.2 on keeps working with this one: new features switch on only between apps that
+have them. The security review found no fault in the encryption itself (handshake, X3DH, Double
+Ratchet, sender keys, files, calls); the fixes are around it.
 
 ### Added
 - **Creating an account shows the rules** for names and passwords and ticks them off while you
@@ -12,6 +14,16 @@ version from 3.2 on keeps working with this one.
 - **First steps** on the empty screen: add a friend, compare keys with one, back up the account.
   Each is one click away and ticks itself off when done.
 - The server verification screen says where the other copy of the fingerprint is.
+
+### Video calls and screen sharing
+- **Turn on your camera or share your screen** in a call: the other side's picture above the
+  conversation, yours small in a corner. VP8 through FFmpeg, end-to-end encrypted under keys of
+  their own; about 300 kbit/s, a 480x360 camera at 15 frames a second or a screen at 5.
+- **No server update needed**: video travels in the same relayed packets as call audio, paced to
+  stay inside the relay's limit, so servers from 3.4 on carry it. Older apps cannot open it and
+  drop it; the buttons appear once the other side is on a version with video.
+- The installers include FFmpeg's native libraries for their system (about 25 MB, LGPL v3); see
+  THIRD-PARTY-NOTICES. The macOS app asks for camera access the first time.
 
 ### Calls and voice rooms in Opus
 - **Calls and voice rooms sound twice as clear**: Opus at 16 kHz (wideband speech) instead of

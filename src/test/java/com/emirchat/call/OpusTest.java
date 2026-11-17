@@ -141,6 +141,21 @@ class OpusTest {
     }
 
     @Test
+    void videoPacketsAreNoiseToAnOlderVersionAndNeverPlayedAsSound() {
+        byte[] id = new byte[CallCrypto.CALL_ID_LENGTH];
+        new SecureRandom().nextBytes(id);
+        KeyPair a = CallCrypto.newCallKey();
+        KeyPair b = CallCrypto.newCallKey();
+        byte[] pa = com.emirchat.crypto.X25519.encode(a.getPublic());
+        byte[] pb = com.emirchat.crypto.X25519.encode(b.getPublic());
+        CallCrypto video = CallCrypto.deriveVideo(id, a, pb, true);
+        byte[] packet = video.seal(com.emirchat.video.VideoPackets.split(0, new byte[500], 1).get(0));
+        assertNull(CallCrypto.derive(id, b, pa, false).open(packet), "a version before video cannot open it: it drops it");
+        Calls.Link current = new Calls.Link(CallCrypto.derive(id, b, pa, false), CallCrypto.deriveOpus(id, b, pa, false));
+        assertNull(current.receive(packet), "and a current version never takes it for audio");
+    }
+
+    @Test
     void anOlderVersionOnlyEverGetsMuLawItCanPlay() {
         Pair p = pair();
         int heard = 0;
