@@ -125,7 +125,7 @@ class ServerIntegrationTest {
         int port = server.port();
         server.close();
         // An attacker takes over the address with a different key.
-        server = new ChatServer(new ChatServer.Config(dir.resolve("evil"), "127.0.0.1", port, FAST_ITERATIONS)).start();
+        server = Restart.on(dir.resolve("evil"), port, FAST_ITERATIONS);
         assertThrows(KeyChangedException.class, () -> connect(Identity.generate()));
     }
 
@@ -136,7 +136,7 @@ class ServerIntegrationTest {
         }
         int port = server.port();
         server.close();
-        server = new ChatServer(new ChatServer.Config(dir.resolve("server"), "127.0.0.1", port, FAST_ITERATIONS)).start();
+        server = Restart.on(dir.resolve("server"), port, FAST_ITERATIONS);
         try (ServerConnection c = connect(Identity.generate())) {
             assertEquals("emir", c.login("emir", "correct horse battery").username());
         }

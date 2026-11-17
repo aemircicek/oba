@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+A security review of the whole app. The encryption (handshake, X3DH, Double Ratchet, sender keys,
+files, calls) needed no change; the fixes are around it. Nothing in the protocol changes: every
+version from 3.2 on keeps working with this one.
+
+### Security: server
+- **Anyone could keep a person out of their account** by failing five logins on their username
+  every 15 minutes. The device the account belongs to is no longer locked out by that.
+- **No limit on new accounts or connections.** Now 10 registrations per address and hour, 64
+  connections per address and 8192 in all. IPv6 addresses are counted by /64 network, where one
+  customer otherwise had 2^64 separate limits.
+- **Password hashing could take every processor**, so a flood of logins or registrations froze the
+  server for everyone. At most half of the processors hash at once, and a taken username is
+  refused before anything is hashed.
+- **A computer that vanished stayed "online" for ever** (pulled cable, sleep) and kept its
+  connection. TCP keep-alive now closes it after about two minutes.
+- A client that floods requests is slowed down instead of keeping the database busy.
+- The failed-login table could grow without limit; expired entries are now swept out.
+- The data folder (password hashes, queued messages, the server key) is made owner-only at start.
+
+### Fixed
+- **A group message sent right after adding someone could stay unreadable for them for ever.**
+  The news of the new member was still waiting to be handled, so the message went out without
+  the sender key for them. Sending now waits until that news is handled. This was also the cause
+  of a test that failed now and then.
+
+### Security: app
+- **On Linux the data folder could be readable by other users of the computer** (it was created
+  with the system's default permissions when the log or lock file came first), exposing pinned
+  contacts and who-wrote-when in the history. It is now created owner-only and closed again at
+  every start. Private keys and message texts were not readable.
+- **A picture could crash the app for everyone in a chat**: a small file can declare billions of
+  pixels. Pictures are now measured before decoding; enormous ones are refused, large ones shrunk.
+- macOS "remember me": a password with a line break in it could have run a second Keychain
+  command; such a password is no longer stored.
+- Links are handed to the browser only if they are `http(s)` web addresses.
+- File names that Windows would misread (`photo.exe.`, `CON.txt`) are changed.
+- Call offers are accepted from friends only, not from every member of a shared community.
+- The temporary copy of the history made during a backup is created in a private folder.
+
 ## 3.4.1 (2026-11-04)
 
 ### Fixed

@@ -1151,8 +1151,8 @@ final class ConversationView {
         Image known = images.get(fileKey(file));
         Runnable fetch = () -> session.downloads().execute(() -> {
             try {
-                Image image = known != null ? known : new Image(new ByteArrayInputStream(session.client().downloadFile(file)));
-                if (image.isError()) return;
+                Image image = known != null ? known : ImageFiles.decode(session.client().downloadFile(file));
+                if (image == null || image.isError()) return;
                 Platform.runLater(() -> images.put(fileKey(file), image));
                 Platform.runLater(() -> {
                     ImageView view = new ImageView(image);
@@ -2114,7 +2114,8 @@ final class ConversationView {
             if (cached == null) {
                 session.downloads().execute(() -> {
                     try {
-                        Image img = new Image(new ByteArrayInputStream(session.client().downloadFile(f)));
+                        Image img = ImageFiles.decode(session.client().downloadFile(f));
+                        if (img == null) return;
                         Platform.runLater(() -> {
                             images.put(fileKey(f), img);
                             if (gallery.isEmpty() || gallery.get(index[0]) == f) view.setImage(img);

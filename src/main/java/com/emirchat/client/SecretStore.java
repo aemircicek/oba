@@ -106,6 +106,11 @@ public interface SecretStore {
 
         @Override public void save(String account, char[] password) throws IOException {
             // "security -i" reads commands from standard input: nothing secret on the command line.
+            // It reads one command per line, so a line break inside the password would start a
+            // second command of the password's choosing: such a password is not stored at all.
+            for (char c : password) {
+                if (Character.isISOControl(c)) throw new IOException("This password cannot be kept in the Keychain.");
+            }
             String command = "add-generic-password -U -s " + quote(SERVICE) + " -a " + quote(account) + " -w "
                     + quote(new String(password)) + "\n";
             run(List.of("/usr/bin/security", "-i"), command, false);

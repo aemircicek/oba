@@ -54,10 +54,10 @@ public final class Identity {
     public static Identity loadOrCreate(Path dir) throws IOException {
         Path privatePath = dir.resolve(PRIVATE_FILE);
         Path publicPath = dir.resolve(PUBLIC_FILE);
+        makePrivate(dir);
         if (Files.exists(privatePath)) {
             return load(privatePath, publicPath);
         }
-        createPrivateDirectory(dir);
         Identity identity = generate();
         writeOwnerOnly(privatePath, identity.keyPair.getPrivate().getEncoded());
         Files.write(publicPath, identity.publicKeyBytes());
@@ -134,9 +134,27 @@ public final class Identity {
         return path.getFileSystem().supportedFileAttributeViews().contains("posix");
     }
 
-    private static void createPrivateDirectory(Path dir) throws IOException {
-        if (Files.isDirectory(dir)) return;
+    /**
+     * Makes {@code dir} a folder only its owner can enter: created that way if it is missing,
+     * tightened if it exists with access for the group or for others (a folder made earlier with
+     * the system's default permissions). Everything the app keeps is below its data folder
+     * (keys, sessions, pinned contacts, history and logs), so this one folder decides who else
+     * on the computer can read them. Does nothing on file systems without POSIX permissions
+     * (Windows: the profile folder is already private to the user).
+     */
+    public static void makePrivate(Path dir) throws IOException {
         Path absolute = dir.toAbsolutePath();
+        if (Files.isDirectory(absolute)) {
+            if (!posix(absolute)) return;
+            Set<PosixFilePermission> owner = EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE,
+                    PosixFilePermission.OWNER_EXECUTE);
+            try {
+                if (!owner.containsAll(Files.getPosixFilePermissions(absolute))) Files.setPosixFilePermissions(absolute, owner);
+            } catch (IOException | UnsupportedOperationException e) {
+                // not ours to change (a folder an administrator prepared): keep working as before
+            }
+            return;
+        }
         if (posix(absolute)) {
             Files.createDirectories(absolute, PosixFilePermissions.asFileAttribute(
                     EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE,

@@ -65,6 +65,22 @@ class FileMessageTest {
     }
 
     @Test
+    void namesWindowsWouldMisreadAreChanged() {
+        assertEquals("photo.exe", FileMessage.safeName("photo.exe. . ."), "Windows drops trailing dots and spaces");
+        assertEquals("_CON.txt", FileMessage.safeName("CON.txt"));
+        assertEquals("_nul", FileMessage.safeName("nul"));
+        assertEquals("_com1.tar.gz", FileMessage.safeName("com1.tar.gz"));
+        assertEquals("console.txt", FileMessage.safeName("console.txt"), "only the exact device names");
+        assertEquals("file", FileMessage.safeName(" . . "));
+        // cutting to the byte limit must not leave a dot at the end again
+        String cut = FileMessage.safeName("a".repeat(FileMessage.MAX_NAME_BYTES - 1) + ".txt");
+        assertFalse(cut.endsWith(".") || cut.endsWith(" "), cut);
+        String reserved = FileMessage.safeName("con." + "a".repeat(FileMessage.MAX_NAME_BYTES - 5) + ".x");
+        assertTrue(reserved.startsWith("_con.") && !reserved.endsWith("."), reserved);
+        assertTrue(reserved.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= FileMessage.MAX_NAME_BYTES);
+    }
+
+    @Test
     void onlyRealImagesArePreviewed() {
         assertTrue(file("foto.jpg", "image/jpeg", 1000).isPreviewableImage());
         assertFalse(file("foto.jpg", "application/octet-stream", 1000).isPreviewableImage());

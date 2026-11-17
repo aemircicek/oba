@@ -72,13 +72,16 @@ public final class Backup {
                 byte[] data;
                 History h = open.get(file);
                 if (h != null) {
-                    Path tmp = Files.createTempFile("history", ".db");
-                    Files.delete(tmp); // VACUUM INTO needs a new file
+                    // VACUUM INTO needs a file that does not exist yet. A folder of our own (owner-only)
+                    // keeps anyone else on the computer from putting something at that name first.
+                    Path tmpDir = Files.createTempDirectory("oba-backup");
+                    Path tmp = tmpDir.resolve("history.db");
                     try {
                         h.copyTo(tmp);
                         data = Files.readAllBytes(tmp);
                     } finally {
                         Files.deleteIfExists(tmp);
+                        Files.deleteIfExists(tmpDir);
                     }
                 } else {
                     data = Files.readAllBytes(file);

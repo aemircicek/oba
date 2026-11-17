@@ -33,7 +33,9 @@ final class ClientConnection {
 
     private final Socket socket;
     private final Services services;
+    /** The key this client's address is limited under, see {@link Addresses}. */
     private final String address;
+    private final boolean local;
     private final BlockingQueue<byte[]> outbound = new ArrayBlockingQueue<>(OUTBOUND_CAPACITY);
     private Session session;
     private volatile Database.User user;
@@ -41,7 +43,8 @@ final class ClientConnection {
     ClientConnection(Socket socket, Services services) {
         this.socket = socket;
         this.services = services;
-        this.address = socket.getInetAddress().getHostAddress();
+        this.address = Addresses.key(socket.getInetAddress());
+        this.local = Addresses.local(socket.getInetAddress());
     }
 
     void run() {
@@ -49,6 +52,7 @@ final class ClientConnection {
         try (socket) {
             socket.setSoTimeout(PRE_AUTH_TIMEOUT_MS);
             socket.setTcpNoDelay(true);
+            keepAlive(socket);
             FrameIO io = new FrameIO(socket.getInputStream(), socket.getOutputStream());
             // Clients are authenticated by password after the handshake; any device key may connect.
             session = Handshake.asServer(io, services.identity(), SERVER_NAME, (name, fp) -> {});
@@ -63,6 +67,7 @@ final class ClientConnection {
                     relayVoice(audio);
                     continue;
                 }
+                throttle();
                 Packet response;
                 try {
                     response = handle(frame.packet());
@@ -85,6 +90,56 @@ final class ClientConnection {
                 services.friends().onlineChanged(u, false);
             }
         }
+    }
+
+    /**
+     * Logged-in clients may stay silent for days (the app sends nothing while nobody writes), so
+     * a read timeout would cut off healthy ones. TCP keep-alive finds the dead ones instead: a
+     * computer that vanished without closing the connection (pulled cable, sleep, a dropped
+     * mobile link) stops answering probes and is closed after about two minutes, so it does not
+     * stay "online" and hold a connection forever.
+     */
+    private static void keepAlive(Socket socket) {
+        try {
+            socket.setKeepAlive(true);
+            setIfSupported(socket, jdk.net.ExtendedSocketOptions.TCP_KEEPIDLE, 60);
+            setIfSupported(socket, jdk.net.ExtendedSocketOptions.TCP_KEEPINTERVAL, 20);
+            setIfSupported(socket, jdk.net.ExtendedSocketOptions.TCP_KEEPCOUNT, 3);
+        } catch (IOException | LinkageError e) {
+            // the connection works without it (LinkageError: a runtime built without the jdk.net module)
+        }
+    }
+
+    private static void setIfSupported(Socket socket, java.net.SocketOption<Integer> option, int value) throws IOException {
+        if (socket.supportedOptions().contains(option)) socket.setOption(option, value);
+    }
+
+    /** Requests a second in the long run, and how many may come at once (file transfers send in bursts). */
+    private static final int REQUESTS_PER_SECOND = 400;
+    private static final int REQUEST_BURST = 800;
+    private double requestTokens = REQUEST_BURST;
+    private long requestTokensAt = System.nanoTime();
+
+    /**
+     * Slows a client that sends requests faster than any real use needs, by reading its next
+     * request later. Nothing is refused, so a fast file transfer only waits a little, while a
+     * flood from one client cannot keep the database busy for everyone else.
+     */
+    private void throttle() throws IOException {
+        long now = System.nanoTime();
+        requestTokens = Math.min(REQUEST_BURST, requestTokens + (now - requestTokensAt) / 1e9 * REQUESTS_PER_SECOND);
+        requestTokensAt = now;
+        if (requestTokens < 1) {
+            try {
+                Thread.sleep((long) Math.ceil((1 - requestTokens) * 1000 / REQUESTS_PER_SECOND));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted", e);
+            }
+            requestTokens = 1;
+            requestTokensAt = System.nanoTime();
+        }
+        requestTokens -= 1;
     }
 
     private static final int AUDIO_PER_SECOND = 100; // 50 packets a second is a normal call
@@ -236,7 +291,8 @@ final class ClientConnection {
             }
             case Packet.Register r -> {
                 requireLoggedOut();
-                Database.User created = services.accounts().register(r.username(), r.password(), session.peerIdentityKey());
+                Database.User created = services.accounts().register(r.username(), r.password(), session.peerIdentityKey(),
+                        local ? null : address);
                 loggedIn(created, false);
                 yield new Packet.LoggedIn(created.username(), false);
             }

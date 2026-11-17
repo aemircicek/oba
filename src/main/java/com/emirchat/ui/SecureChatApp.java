@@ -42,6 +42,11 @@ public final class SecureChatApp extends Application {
     public void start(Stage stage) {
         this.stage = stage;
         Path dataDir = home != null ? home : com.emirchat.AppInfo.defaultHome();
+        try {
+            com.emirchat.crypto.Identity.makePrivate(dataDir); // before anything is written into it
+        } catch (java.io.IOException e) {
+            // reported when the identity is loaded
+        }
         AppLog.init(dataDir);
         Thread.ofPlatform().daemon().name("autostart-rename").start(Autostart::adoptFormer); // Scorpion → Oba, once
         boolean handedOver;

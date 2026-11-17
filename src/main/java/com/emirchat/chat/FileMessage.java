@@ -21,6 +21,8 @@ public record FileMessage(byte[] attachmentId, byte[] key, byte[] digest, long s
     public static final int MAX_NAME_BYTES = 255;
     public static final int MAX_MIME_BYTES = 100;
     private static final int VERSION = 1;
+    private static final java.util.regex.Pattern RESERVED = java.util.regex.Pattern.compile(
+            "(?i)(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])\\s*");
 
     public FileMessage {
         if (attachmentId.length != Attachments.ID_LENGTH || key.length != Attachments.KEY_LENGTH
@@ -95,6 +97,13 @@ public record FileMessage(byte[] attachmentId, byte[] key, byte[] digest, long s
         String cleaned = sb.toString().strip();
         while (cleaned.startsWith(".")) cleaned = cleaned.substring(1);
         cleaned = truncate(cleaned, MAX_NAME_BYTES);
+        // Windows drops trailing dots and spaces ("photo.exe." opens as "photo.exe") and treats
+        // some names as devices whatever their extension ("CON.txt", "nul"): allow neither.
+        int dot = cleaned.indexOf('.');
+        if (RESERVED.matcher(dot < 0 ? cleaned : cleaned.substring(0, dot)).matches()) cleaned = "_" + cleaned;
+        cleaned = truncate(cleaned, MAX_NAME_BYTES);
+        // Last, after every step that can shorten the name: cutting it may uncover a new trailing dot.
+        while (cleaned.endsWith(".") || cleaned.endsWith(" ")) cleaned = cleaned.substring(0, cleaned.length() - 1);
         return cleaned.isBlank() ? "file" : cleaned;
     }
 

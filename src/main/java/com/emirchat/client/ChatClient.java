@@ -310,6 +310,11 @@ public final class ChatClient implements AutoCloseable {
     private final KnownPeers contacts;
     private final String username;
     private final Map<String, byte[]> friendKeys = new ConcurrentHashMap<>();
+    /**
+     * Who is a friend right now, as the server last said. Kept apart from {@link #friendKeys},
+     * which is a cache of keys and also remembers people who are friends no longer.
+     */
+    private final java.util.Set<String> friends = ConcurrentHashMap.newKeySet();
     private final Map<Long, Boolean> seen = Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, false) {
         @Override protected boolean removeEldestEntry(Map.Entry<Long, Boolean> e) { return size() > 10_000; }
     });
@@ -351,11 +356,31 @@ public final class ChatClient implements AutoCloseable {
         }
     }
 
+    private volatile Thread inboxThread;
     private final ExecutorService inbox = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "inbox");
         t.setDaemon(true);
+        inboxThread = t;
         return t;
     });
+
+    /**
+     * Waits until every server push received so far has been handled. The server sends what a
+     * request changed (a new member, say) before it answers the request, but pushes are handled
+     * on the inbox thread, so when the answer arrives our picture of a group can still be the old
+     * one. Anything that acts on that picture right after calls this first.
+     */
+    private void catchUpWithPushes() {
+        if (Thread.currentThread() == inboxThread || inbox.isShutdown()) return; // already in order
+        try {
+            inbox.submit(() -> { }).get(ServerConnection.CALL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException
+                 | java.util.concurrent.RejectedExecutionException e) {
+            // closing, or the inbox is stuck: go on with what we know
+        }
+    }
     private volatile Listener listener = new Listener() {};
     private volatile boolean closing;
 
@@ -472,10 +497,14 @@ public final class ChatClient implements AutoCloseable {
 
     public Packet.FriendList refreshFriends() throws IOException, ApiException {
         Packet.FriendList list = connection.listFriends();
+        java.util.Set<String> current = new java.util.HashSet<>();
         for (Packet.Friend f : list.friends()) {
             friendKeys.put(f.username(), f.identityKey());
             online.put(f.username(), f.online());
+            current.add(f.username());
         }
+        friends.addAll(current);
+        friends.retainAll(current);
         lastFriends = list;
         return list;
     }
@@ -971,6 +1000,8 @@ public final class ChatClient implements AutoCloseable {
     private List<String> sendGroupContent(long groupId, Content content) throws IOException, ApiException {
         int contentType = content.type();
         byte[] payload = content.payload();
+        // A member added a moment ago must get our sender key with this message, or they can never read it.
+        catchUpWithPushes();
         Packet.GroupInfo group = groups.get(groupId);
         if (group == null) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
         List<String> members = group.members().stream().map(Packet.Member::username).toList();
@@ -1078,6 +1109,7 @@ public final class ChatClient implements AutoCloseable {
             case Packet.EnvelopeDelivered d -> listener.delivered(d.id());
             case Packet.FriendAdded a -> {
                 friendKeys.put(a.friend().username(), a.friend().identityKey());
+                friends.add(a.friend().username());
                 online.put(a.friend().username(), a.friend().online());
                 listener.push(packet);
             }
@@ -1088,6 +1120,10 @@ public final class ChatClient implements AutoCloseable {
             }
             case Packet.PresenceChanged p -> {
                 online.put(p.username(), p.online());
+                listener.push(packet);
+            }
+            case Packet.FriendRemoved f -> {
+                friends.remove(f.username());
                 listener.push(packet);
             }
             case Packet.GroupUpdated g -> groupChanged(g.group());
@@ -1138,6 +1174,12 @@ public final class ChatClient implements AutoCloseable {
                     byte[] callId = call.exactBytes(com.emirchat.call.CallCrypto.CALL_ID_LENGTH);
                     byte[] callKey = call.bytes(64);
                     call.expectEnd();
+                    // Members of a shared group can reach us over the pairwise channel (for group keys),
+                    // but only friends may ring: the server relays call audio between friends only.
+                    // Asked afresh for every call signal (there are a handful per call): the list here
+                    // can be behind, for instance right after we removed someone ourselves.
+                    refreshFriends();
+                    if (!friends.contains(envelope.sender())) throw new SecurityException("Call from someone who is not a friend");
                     calls.signal(envelope.sender(), kind, callId, callKey, envelope.sentAt());
                 }
                 default -> throw new ProtocolException("Unknown content type " + contentType);
