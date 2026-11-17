@@ -44,6 +44,8 @@ class GroupIntegrationTest {
         final BlockingQueue<String> groupMessages = new LinkedBlockingQueue<>();
         final BlockingQueue<String> problems = new LinkedBlockingQueue<>();
         final BlockingQueue<Long> removedFrom = new LinkedBlockingQueue<>();
+        /** Makes the inbox thread busy for this long when a friend request comes in (to hold later pushes back). */
+        volatile long slowOnFriendRequest;
         ChatClient client;
 
         Device(String user) throws Exception {
@@ -63,6 +65,16 @@ class GroupIntegrationTest {
                 @Override public void undecryptable(String from, String reason) { problems.add(from + ": " + reason); }
 
                 @Override public void groupRemoved(long g) { removedFrom.add(g); }
+
+                @Override public void push(Packet p) {
+                    if (p instanceof Packet.FriendRequestReceived && slowOnFriendRequest > 0) {
+                        try {
+                            Thread.sleep(slowOnFriendRequest);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                }
             });
             return this;
         }
@@ -213,6 +225,26 @@ class GroupIntegrationTest {
             awaitMembers(ayse, g, 2);
             efe.client.sendGroupText(g, "welcome ayse");
             assertEquals(g + "/efe: welcome ayse", ayse.next());
+        }
+    }
+
+    /**
+     * The server tells the adder about the new member before it answers the request, but the client
+     * handles that news on its inbox thread. If that thread is busy, a message sent right after
+     * adding someone used to go out without a sender key for them, and they could never read it.
+     */
+    @Test
+    void aMessageRightAfterAddingSomeoneReachesThemEvenWhenTheInboxIsBusy() throws Exception {
+        try (Device emir = new Device("emir").start(true); Device efe = new Device("efe").start(true);
+             Device can = new Device("can").start(true)) {
+            befriend(emir, efe);
+            long g = emir.client.createGroup("acele", List.of()).id();
+            awaitMembers(emir, g, 1);
+            emir.slowOnFriendRequest = 1_500;
+            can.client.connection().sendFriendRequest("emir"); // keeps emir's inbox busy for a moment...
+            emir.client.addGroupMember(g, "efe");               // ...so the news of efe joining waits behind it
+            emir.client.sendGroupText(g, "right away");
+            assertEquals(g + "/emir: right away", efe.next());
         }
     }
 

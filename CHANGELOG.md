@@ -21,6 +21,12 @@ version from 3.2 on keeps working with this one.
 - The failed-login table could grow without limit; expired entries are now swept out.
 - The data folder (password hashes, queued messages, the server key) is made owner-only at start.
 
+### Fixed
+- **A group message sent right after adding someone could stay unreadable for them for ever.**
+  The news of the new member was still waiting to be handled, so the message went out without
+  the sender key for them. Sending now waits until that news is handled. This was also the cause
+  of a test that failed now and then.
+
 ### Security: app
 - **On Linux the data folder could be readable by other users of the computer** (it was created
   with the system's default permissions when the log or lock file came first), exposing pinned

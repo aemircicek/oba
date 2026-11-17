@@ -356,11 +356,31 @@ public final class ChatClient implements AutoCloseable {
         }
     }
 
+    private volatile Thread inboxThread;
     private final ExecutorService inbox = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "inbox");
         t.setDaemon(true);
+        inboxThread = t;
         return t;
     });
+
+    /**
+     * Waits until every server push received so far has been handled. The server sends what a
+     * request changed (a new member, say) before it answers the request, but pushes are handled
+     * on the inbox thread, so when the answer arrives our picture of a group can still be the old
+     * one. Anything that acts on that picture right after calls this first.
+     */
+    private void catchUpWithPushes() {
+        if (Thread.currentThread() == inboxThread || inbox.isShutdown()) return; // already in order
+        try {
+            inbox.submit(() -> { }).get(ServerConnection.CALL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException
+                 | java.util.concurrent.RejectedExecutionException e) {
+            // closing, or the inbox is stuck: go on with what we know
+        }
+    }
     private volatile Listener listener = new Listener() {};
     private volatile boolean closing;
 
@@ -980,6 +1000,8 @@ public final class ChatClient implements AutoCloseable {
     private List<String> sendGroupContent(long groupId, Content content) throws IOException, ApiException {
         int contentType = content.type();
         byte[] payload = content.payload();
+        // A member added a moment ago must get our sender key with this message, or they can never read it.
+        catchUpWithPushes();
         Packet.GroupInfo group = groups.get(groupId);
         if (group == null) throw new ApiException(ErrorCode.GROUP_NOT_FOUND, "You are not in that group.");
         List<String> members = group.members().stream().map(Packet.Member::username).toList();
