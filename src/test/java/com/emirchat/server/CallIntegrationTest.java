@@ -42,7 +42,20 @@ class CallIntegrationTest {
 
         @Override public void stop() { stopped = true; }
 
-        void say(byte[] frame) { microphone.accept(frame); }
+        /**
+         * Speaks one frame. The call reports "connected" a moment before it opens the microphone,
+         * so wait for that rather than fail on a slow machine.
+         */
+        void say(byte[] frame) {
+            long until = System.currentTimeMillis() + 5000;
+            Consumer<byte[]> m = microphone;
+            while (m == null && System.currentTimeMillis() < until) {
+                Thread.onSpinWait();
+                m = microphone;
+            }
+            if (m == null) throw new AssertionError("the call never opened the microphone");
+            m.accept(frame);
+        }
     }
 
     private final class Device implements AutoCloseable {
