@@ -8,8 +8,6 @@ import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * Tells a client the address it is seen from on the internet, so two clients can try to reach
@@ -34,11 +32,16 @@ final class AddressDiscovery implements AutoCloseable {
 
     private final DatagramSocket socket;
     private final Thread thread;
-    /** Answers given this second, per address (IPv6 per /64); emptied when the second changes. */
-    private final Map<String, Integer> thisSecond = new HashMap<>();
+    /**
+     * Answers given this second, counted in a fixed table indexed by a keyed hash of the address
+     * (IPv6 by /64). Its size never changes, whatever arrives; addresses that share a slot share
+     * its limit, and as the key is secret, nobody can aim at someone else's slot. Faked source
+     * addresses can only fill the slots they land in, never shut the service for everyone.
+     */
+    static final int SLOTS = 1 << 16;
+    private final int[] thisSecond = new int[SLOTS];
+    private final long salt = new java.security.SecureRandom().nextLong();
     private long second;
-    /** Addresses tracked in one second at most; beyond it new ones get no answer until the next. */
-    static final int MAX_TRACKED = 50_000;
 
     AddressDiscovery(String bindAddress, int port) throws SocketException {
         socket = new DatagramSocket(new InetSocketAddress(bindAddress, port));
@@ -77,14 +80,21 @@ final class AddressDiscovery implements AutoCloseable {
         long now = System.currentTimeMillis() / 1000;
         if (now != second) { // counts are per second: the past is simply dropped
             second = now;
-            thisSecond.clear();
+            java.util.Arrays.fill(thisSecond, 0);
         }
-        String key = Addresses.key(from);
-        Integer count = thisSecond.get(key);
-        if (count == null && thisSecond.size() >= MAX_TRACKED) return false;
-        int next = count == null ? 1 : count + 1;
-        thisSecond.put(key, next);
-        return next <= PER_SECOND;
+        int slot = slot(Addresses.key(from));
+        if (thisSecond[slot] >= PER_SECOND) return false;
+        thisSecond[slot]++;
+        return true;
+    }
+
+    /** SplitMix64 over the address key and the secret salt: an even spread nobody can predict. */
+    private int slot(String key) {
+        long z = key.hashCode() * 0x9E3779B97F4A7C15L ^ salt;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        z ^= z >>> 31;
+        return (int) (z & (SLOTS - 1));
     }
 
     @Override

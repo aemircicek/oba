@@ -52,16 +52,23 @@ class AddressDiscoveryTest {
     }
 
     @Test
-    void theRateTableNeverGrowsPastItsLimit() throws Exception {
+    void aFloodOfFakeAddressesDoesNotShutOutARealOne() throws Exception {
         try (AddressDiscovery service = new AddressDiscovery("127.0.0.1", 0)) {
-            int allowed = 0;
-            for (int i = 0; i < AddressDiscovery.MAX_TRACKED + 1000; i++) {
-                byte[] a = {10, (byte) (i >> 16), (byte) (i >> 8), (byte) i};
-                if (service.allowed(InetAddress.getByAddress(a))) allowed++;
+            for (int attempt = 0; attempt < 3; attempt++) { // the flood and the asking must fall in the same second
+                long second = System.currentTimeMillis() / 1000;
+                for (int n = 0; n < 100_000; n++) { // faked sources, each once
+                    service.allowed(InetAddress.getByAddress(new byte[] {10, (byte) (n >> 16), (byte) (n >> 8), (byte) n}));
+                }
+                // a real address that arrives only now, in the middle of the flood
+                InetAddress real = InetAddress.getByAddress(new byte[] {(byte) 198, 51, 100, (byte) attempt});
+                int refused = 0;
+                for (int i = 0; i < 5; i++) if (!service.allowed(real)) refused++;
+                if (System.currentTimeMillis() / 1000 != second) continue;
+                // it shares its slot with about 1.5 faked sources (100,000 / 65,536), not with all of them
+                assertEquals(0, refused, "the real address was refused " + refused + " times of 5");
+                return;
             }
-            // within one second (or two, if the test crosses a boundary) at most the limit is tracked
-            assertTrue(allowed <= 2 * AddressDiscovery.MAX_TRACKED, "allowed " + allowed);
-            assertTrue(allowed >= AddressDiscovery.MAX_TRACKED - 1, "but real addresses are answered: " + allowed);
+            throw new AssertionError("the machine is too slow to test this within a second");
         }
     }
 

@@ -180,8 +180,8 @@ class CallIntegrationTest {
         final BlockingQueue<String> stops = new LinkedBlockingQueue<>();
 
         @Override public void remote(com.emirchat.video.VideoFrame frame, boolean screen) {
+            screens.add(screen); // first: a test that saw the frame finds its kind already there
             remote.add(frame);
-            screens.add(screen);
         }
 
         @Override public void remoteStopped() { stops.add("stopped"); }
@@ -223,7 +223,7 @@ class CallIntegrationTest {
                 assertNotNull(first, "efe sees emir");
                 assertEquals(480, first.width());
                 assertEquals(360, first.height());
-                assertFalse(efeScreen.screens.poll(), "a camera, not a screen");
+                assertEquals(Boolean.FALSE, efeScreen.screens.poll(5, TimeUnit.SECONDS), "a camera, not a screen");
 
                 // three seconds of video next to the voice: nearly every frame arrives, so the relay's limit is kept
                 efeScreen.remote.clear();
