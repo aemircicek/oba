@@ -132,6 +132,21 @@ final class SettingsDialogs {
         HBox languageRow = new HBox(10, UiKit.label(I18n.t("settings.language"), "field-label"), language, restartNote);
         languageRow.setAlignment(Pos.CENTER_LEFT);
         toggles.getChildren().add(0, languageRow);
+        // Direct calls: who may see our address (and we theirs) for a better call
+        ComboBox<String> direct = new ComboBox<>();
+        direct.setId("setting-direct-calls");
+        direct.getItems().addAll(I18n.t("settings.directVerified"), I18n.t("settings.directFriends"), I18n.t("settings.directOff"));
+        direct.getSelectionModel().select(java.util.Arrays.asList(AppPrefs.DIRECT_CHOICES).indexOf(AppPrefs.directCalls()));
+        direct.setOnAction(e -> {
+            AppPrefs.setDirectCalls(AppPrefs.DIRECT_CHOICES[direct.getSelectionModel().getSelectedIndex()]);
+            main.applyDirectCalls();
+        });
+        Label directHint = UiKit.label(I18n.t("settings.directHint"), "caption");
+        directHint.setWrapText(true);
+        directHint.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        HBox directRow = new HBox(10, UiKit.label(I18n.t("settings.direct"), "field-label"), direct);
+        directRow.setAlignment(Pos.CENTER_LEFT);
+        toggles.getChildren().add(new VBox(4, directRow, directHint));
         Button about = new Button(I18n.t("about.title"));
         about.getStyleClass().add("link");
         about.setId("about");

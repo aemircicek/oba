@@ -176,6 +176,7 @@ final class MainView implements AccountSession.View {
         videoStage.root().prefHeightProperty().bind(frame.heightProperty().multiply(0.45));
         videoStage.root().setMinHeight(0);
         session.client().calls().videoView(videoStage);
+        applyDirectCalls();
         frame.setCenter(new VBox(callBar, voiceBar, videoStage.root(), content));
         stack.getChildren().add(frame);
         stack.getStyleClass().add("main-view");
@@ -249,6 +250,19 @@ final class MainView implements AccountSession.View {
     }
 
     // ------------------------------------------------------------------ content
+
+    /**
+     * Who calls may go to directly (each side then sees the other's address): verified contacts
+     * by default, every friend, or nobody.
+     */
+    void applyDirectCalls() {
+        com.emirchat.client.ChatClient c = session.client();
+        switch (AppPrefs.directCalls()) {
+            case "friends" -> c.calls().directAllowed(u -> !c.keyChanged(u));
+            case "off" -> c.calls().directAllowed(u -> false);
+            default -> c.calls().directAllowed(u -> c.isVerified(u) && !c.keyChanged(u));
+        }
+    }
 
     void showEmpty() {
         if (current != null) current.dispose();
@@ -537,6 +551,7 @@ final class MainView implements AccountSession.View {
                 Button share = callBars.videoButton(calls, true);
                 Runnable tick = () -> {
                     status.setText("🔒 " + I18n.t("call.encrypted") + " · "
+                            + (calls.direct() ? I18n.t("call.direct") + " · " : "")
                             + CallBars.duration(System.currentTimeMillis() - c.connectedAt()));
                     callBars.refreshVideoButtons(calls, camera, share);
                 };

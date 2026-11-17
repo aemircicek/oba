@@ -77,6 +77,11 @@ public final class ServerConnection implements AutoCloseable {
         }
     }
 
+    /** The server's address as connected to (its UDP address service listens on the same port). */
+    public java.net.InetSocketAddress remoteAddress() {
+        return (java.net.InetSocketAddress) socket.getRemoteSocketAddress();
+    }
+
     public String serverFingerprint() {
         return serverFingerprint;
     }

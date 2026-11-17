@@ -334,7 +334,22 @@ body         = u8 1 ‖ u32 frame ‖ u8 index ‖ u8 count ‖ u8 flags (key, s
 ```
 
 Video is offered only once the other side has shown it runs a version with Opus (the two came
-together); older versions cannot open video packets and drop them. Camera and screen are opened
+together); older versions cannot open video packets and drop them.
+
+**Direct calls.** Next to the relay, a call tries a direct UDP path between the two computers,
+in the manner of ICE (RFC 8445), much smaller. Each side collects its own addresses and the one
+the server's address service (UDP, same port number) sees it from, and sends them to the other
+through the relay under the call's "direct signal" keys. Both then send probes, authenticated
+under "direct control" keys, to every address of the other; the first answered probe opens the
+path, and probing from both sides at once opens most home routers. Audio and video then travel in
+the same sealed packets, directly; without relay limits the video bit rate triples. Keep-alives
+every second watch the path: after 3.5 seconds without one, the call is back on the relay within
+the same second and tries again later. The service answers each request with fewer bytes than it
+received and only a few times a second per address, so it cannot be used to flood others.
+
+A direct path shows each side the other's internet address. A side creates one only if its
+user allows it for that person (Settings: verified contacts, the default; all friends; never), so
+a side that does not allow it never sends its addresses nor probes: its address stays hidden. Camera and screen are opened
 only when you press the button, and closed when you press it again or the call ends. The server relays audio only
 between friends, at most 100 packets a second, and drops packets for a device that falls behind
 instead of queueing them. Calls are one-to-one; an offer that arrives more than a minute late is
@@ -491,8 +506,9 @@ Honest notes on what this project does **not** do:
 - **The server decides who is in a community.** Channel names and messages are encrypted for the
   members the server lists, so a malicious server could add a member (who would then appear in
   the member list). Check the member list of sensitive communities.
-- **Calls go through the server** (no direct peer-to-peer connection), so they add a little delay.
-  With someone on a version before Opus, or in a room with one, voice quality is that of a
+- **Calls go through the server** unless both sides allow a direct call and a direct path can be
+  opened (strict company and mobile networks often block it), so they may add a little delay.
+  A direct call shows each side the other's address. With someone on a version before Opus, or in a room with one, voice quality is that of a
   telephone (8 kHz μ-law).
 - **Video takes room**: in a small window the picture leaves space for only a few messages.
 - **Video is small**: the relay's limit leaves about 300 kbit/s, enough for a 480x360 camera or a
@@ -548,7 +564,7 @@ Honest notes on what this project does **not** do:
 - Fuzzing the decoders (Jazzer) and a written security report
 - Sealed sender and message-size padding (less metadata for the server)
 - A formal model of the handshake and X3DH (ProVerif or Tamarin)
-- Multiple devices per account; video in voice rooms; direct (peer-to-peer) calls
+- Multiple devices per account; video in voice rooms
 
 ## Security
 

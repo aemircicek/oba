@@ -7,7 +7,7 @@ package com.emirchat.video;
  * caller then starts again from a key frame.
  */
 public final class Pacer {
-    private final double perSecond;
+    private volatile double perSecond;
     private final int maxWaiting;
     private long nextAt;
 
@@ -37,6 +37,11 @@ public final class Pacer {
         for (int i = 0; i < packets; i++) delays[i] = start + i * gap - now;
         nextAt = start + packets * gap;
         return delays;
+    }
+
+    /** Changes the rate (a direct path has room for more than the relay). */
+    public void rate(double packetsPerSecond) {
+        perSecond = packetsPerSecond;
     }
 
     /** Forgets what is booked (the video stopped). */

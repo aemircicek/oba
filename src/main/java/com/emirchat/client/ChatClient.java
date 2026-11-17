@@ -422,7 +422,14 @@ public final class ChatClient implements AutoCloseable {
             @Override public void audio(String peer, byte[] data) {
                 connection.sendAudio(peer, data);
             }
+
+            @Override public java.net.InetSocketAddress directServer() {
+                return connection.remoteAddress();
+            }
         }, () -> client.audioDevices.get(), call -> client.listener.call(call));
+        // Direct calls show each side's address to the other: by default only with people whose
+        // key the user has verified (the app's settings can widen or close this).
+        client.calls.directAllowed(friend -> client.isVerified(friend) && !client.keyChanged(friend));
         client.voice = new com.emirchat.call.VoiceChannels(loggedIn.username(), new com.emirchat.call.VoiceChannels.Transport() {
             @Override public List<String> join(long groupId) throws Exception {
                 if (!client.voiceSupported()) throw new IOException(com.emirchat.call.VoiceChannels.UNSUPPORTED);

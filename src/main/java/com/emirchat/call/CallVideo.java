@@ -26,6 +26,9 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class CallVideo implements AutoCloseable {
     static final int PACKETS_PER_SECOND = 40;
+    /** Over a direct path there is no relay limit: more packets and a sharper picture. */
+    static final int DIRECT_PACKETS_PER_SECOND = 200;
+    static final int DIRECT_FACTOR = 3;
     static final int CAMERA_BITRATE = 260_000;
     static final int SCREEN_BITRATE = 280_000;
     /** The other side stopped sending if nothing came for this long (VIDEO_OFF may be lost). */
@@ -68,6 +71,8 @@ public final class CallVideo implements AutoCloseable {
     private Vp8.Encoder encoder;
     private int frameNumber;
     private volatile boolean closed;
+    private volatile boolean direct;
+    private volatile boolean rebuild;
 
     // receiving (decoder thread)
     private final VideoPackets.Assembler assembler = new VideoPackets.Assembler();
@@ -124,6 +129,14 @@ public final class CallVideo implements AutoCloseable {
         stopSource(true);
     }
 
+    /** The call moved to a direct path (true) or back to the relay: use the room there is. */
+    void direct(boolean on) {
+        if (direct == on) return;
+        direct = on;
+        pacer.rate(on ? DIRECT_PACKETS_PER_SECOND : PACKETS_PER_SECOND);
+        rebuild = true; // a new encoder at the new bit rate, starting with a key frame
+    }
+
     /** True while our camera or screen is being sent. */
     public boolean sending() {
         return source != null;
@@ -151,9 +164,11 @@ public final class CallVideo implements AutoCloseable {
         VideoFrame frame = nextFrame.getAndSet(null);
         if (frame == null || closed || source != s) return;
         try {
-            if (encoder == null || encoder.width() != frame.width() || encoder.height() != frame.height()) {
+            if (encoder == null || rebuild || encoder.width() != frame.width() || encoder.height() != frame.height()) {
+                rebuild = false;
                 closeEncoder();
-                encoder = new Vp8.Encoder(frame.width(), frame.height(), s.fps(), s.screen() ? SCREEN_BITRATE : CAMERA_BITRATE);
+                int bitrate = (s.screen() ? SCREEN_BITRATE : CAMERA_BITRATE) * (direct ? DIRECT_FACTOR : 1);
+                encoder = new Vp8.Encoder(frame.width(), frame.height(), s.fps(), bitrate);
             }
             if (keyWanted.getAndSet(false)) encoder.keyFrame();
             Vp8.Packet packet = encoder.encode(frame);

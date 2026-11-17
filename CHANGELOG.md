@@ -25,6 +25,18 @@ Ratchet, sender keys, files, calls); the fixes are around it.
 - The installers include FFmpeg's native libraries for their system (about 25 MB, LGPL v3); see
   THIRD-PARTY-NOTICES. The macOS app asks for camera access the first time.
 
+### Direct calls
+- **Calls go straight between the two computers** when both allow it: lower delay, and three
+  times the video quality without the relay's limits. The server tells each app its outside
+  address over UDP (same port number; open 5056/udp in the firewall, see docs/deploy.md); paths
+  are found with authenticated probes from both sides, and a call falls back to the server within
+  seconds if the path is lost.
+- **Your address stays yours**: a direct path shows each side the other's internet address, so by
+  default it is only tried with contacts you have verified. Settings → Direct calls: verified
+  contacts, all friends or never. A side that does not allow it never sends its address.
+- Servers without the UDP service (3.4, or with the port closed) keep working: calls then use
+  only addresses the apps know themselves, or the relay.
+
 ### Calls and voice rooms in Opus
 - **Calls and voice rooms sound twice as clear**: Opus at 16 kHz (wideband speech) instead of
   the telephone's 8 kHz μ-law, at about a third of the data (24 instead of 64 kbit/s), with error

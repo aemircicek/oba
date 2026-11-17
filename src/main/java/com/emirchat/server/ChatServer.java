@@ -43,6 +43,8 @@ public final class ChatServer implements AutoCloseable {
         return t;
     });
     private volatile boolean closed;
+    /** The UDP address service for direct calls, or null if its port could not be opened. */
+    private AddressDiscovery discovery;
     /** Open connections per address key (see {@link Addresses}); local connections are not counted. */
     private final Map<String, Integer> perAddress = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger open = new java.util.concurrent.atomic.AtomicInteger();
@@ -89,10 +91,22 @@ public final class ChatServer implements AutoCloseable {
             close();
             throw new IOException("Could not listen on port " + config.port() + ": " + e.getMessage(), e);
         }
+        try {
+            discovery = new AddressDiscovery(config.bindAddress(), listener.getLocalPort());
+        } catch (java.net.SocketException e) {
+            // calls still work, only through the server
+            System.err.println("warning: UDP port " + listener.getLocalPort() + " is not available, so calls cannot"
+                    + " go directly between users: " + e.getMessage());
+        }
     }
 
     public int port() {
         return listener.getLocalPort();
+    }
+
+    /** The UDP port of the address service (the TCP port), or -1 if it is not running. */
+    int discoveryPort() {
+        return discovery == null ? -1 : discovery.port();
     }
 
     public String fingerprint() {
@@ -183,6 +197,7 @@ public final class ChatServer implements AutoCloseable {
         }
         connections.shutdownNow();
         maintenance.shutdownNow();
+        if (discovery != null) discovery.close();
         try {
             db.close();
         } catch (SQLException | NullPointerException ignored) {

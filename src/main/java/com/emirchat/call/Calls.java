@@ -36,6 +36,11 @@ public final class Calls implements AutoCloseable {
 
         /** Sends an audio packet through the server, without waiting. */
         void audio(String peer, byte[] data);
+
+        /** Where the server's address service listens (for direct calls), or null if unknown. */
+        default java.net.InetSocketAddress directServer() {
+            return null;
+        }
     }
 
     /** Runs on a calls thread. */
@@ -73,6 +78,10 @@ public final class Calls implements AutoCloseable {
     private volatile Link link;
     /** The video of the connected call, or null. */
     private volatile CallVideo video;
+    /** The direct path of the connected call, or null (not allowed with this person). */
+    private volatile DirectPath direct;
+    /** Whether we may show our address to this person by calling them directly. */
+    private volatile java.util.function.Predicate<String> directAllowed = p -> false;
     private volatile CallVideo.View videoView;
     private AudioDevice device;
     private volatile boolean muted;
@@ -260,6 +269,48 @@ public final class Calls implements AutoCloseable {
         if (pcm != null) d.play(pcm);
     }
 
+    // ------------------------------------------------------------------ direct path
+
+    /**
+     * Who may be called directly, which shows them our address (and us theirs). Asked when a
+     * call connects; a side that says no never sends its address nor probes the other.
+     */
+    public void directAllowed(java.util.function.Predicate<String> allowed) {
+        directAllowed = allowed == null ? p -> false : allowed;
+    }
+
+    /** True while the current call's audio and video go directly, not through the server. */
+    public boolean direct() {
+        DirectPath p = direct;
+        return p != null && p.active();
+    }
+
+    private final java.util.concurrent.atomic.AtomicLong sentDirect = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong sentRelayed = new java.util.concurrent.atomic.AtomicLong();
+
+    /** @return {packets sent directly, packets sent through the relay}, over every call so far */
+    public long[] packetsSent() {
+        return new long[] {sentDirect.get(), sentRelayed.get()};
+    }
+
+    /** Sends a call packet over the direct path if it is open, else through the relay. */
+    private void deliver(String to, byte[] packet) {
+        DirectPath p = direct;
+        if (p != null && p.send(packet)) {
+            sentDirect.incrementAndGet();
+            return;
+        }
+        sentRelayed.incrementAndGet();
+        transport.audio(to, packet);
+    }
+
+    private static byte[] withId(byte[] id, byte[] sealed) {
+        byte[] packet = new byte[id.length + sealed.length];
+        System.arraycopy(id, 0, packet, 0, id.length);
+        System.arraycopy(sealed, 0, packet, id.length, sealed.length);
+        return packet;
+    }
+
     // ------------------------------------------------------------------ video
 
     /** Where the call's pictures go (set once; kept for every call). */
@@ -334,6 +385,8 @@ public final class Calls implements AutoCloseable {
         private final Resample up = Resample.up();
         /** Video packets arrive mixed with the audio ones; null in tests of audio alone. */
         volatile CallVideo video;
+        /** So do the direct path's candidates; null when it is not allowed. */
+        volatile DirectPath direct;
 
         Link(CallCrypto ulaw, CallCrypto opus) {
             this.ulaw = ulaw;
@@ -354,8 +407,11 @@ public final class Calls implements AutoCloseable {
             return java.util.List.of(packet);
         }
 
-        /** @return audio to play, or null (an "I can" packet, or anything late, replayed or damaged) */
-        byte[] receive(byte[] packet) {
+        /**
+         * @return audio to play, or null (an "I can" packet, or anything late, replayed or damaged).
+         *         Synchronized: packets come from the relay and, during a switch, from the direct path too.
+         */
+        synchronized byte[] receive(byte[] packet) {
             byte[] body = opus.open(packet);
             if (body != null) {
                 peerOpus = true;
@@ -364,6 +420,8 @@ public final class Calls implements AutoCloseable {
             }
             CallVideo v = video;
             if (v != null && v.receive(packet)) return null;
+            DirectPath p = direct;
+            if (p != null && p.receiveRelayed(packet)) return null;
             byte[] coded = ulaw.open(packet);
             return coded == null ? null : up.process(Mulaw.decode(coded));
         }
@@ -381,14 +439,23 @@ public final class Calls implements AutoCloseable {
                     CallCrypto.deriveOpus(callId, myKey, theirKey, outgoing));
             String videoTo = peer;
             byte[] videoId = callId.clone();
-            video = new CallVideo(CallCrypto.deriveVideo(callId, myKey, theirKey, outgoing), sealed -> {
-                byte[] packet = new byte[videoId.length + sealed.length];
-                System.arraycopy(videoId, 0, packet, 0, videoId.length);
-                System.arraycopy(sealed, 0, packet, videoId.length, sealed.length);
-                transport.audio(videoTo, packet);
-            });
+            video = new CallVideo(CallCrypto.deriveVideo(callId, myKey, theirKey, outgoing),
+                    sealed -> deliver(videoTo, withId(videoId, sealed)));
             video.view(videoView);
             link.video = video;
+            java.net.InetSocketAddress server = transport.directServer();
+            if (directAllowed.test(peer)) {
+                CallVideo callVideo = video;
+                direct = new DirectPath(callId, CallCrypto.deriveDirectSignal(callId, myKey, theirKey, outgoing),
+                        CallCrypto.deriveDirectControl(callId, myKey, theirKey, outgoing), server,
+                        sealed -> transport.audio(videoTo, withId(videoId, sealed)), // candidates always go through the relay
+                        packet -> audio(videoTo, packet),
+                        on -> {
+                            callVideo.direct(on);
+                            changed();
+                        });
+                link.direct = direct;
+            }
             myKey = null;
             state = State.CONNECTED;
             connectedAt = System.currentTimeMillis();
@@ -398,14 +465,13 @@ public final class Calls implements AutoCloseable {
             id = callId.clone();
         }
         changed();
+        DirectPath path = direct;
+        if (path != null) path.start(); // opens its socket and works in the background
         d.start(frame -> {
             Link l = link;
             if (l == null) return;
             for (byte[] sealed : l.send(muted ? new byte[frame.length] : frame)) { // silence goes on while muted
-                byte[] packet = new byte[id.length + sealed.length];
-                System.arraycopy(id, 0, packet, 0, id.length);
-                System.arraycopy(sealed, 0, packet, id.length, sealed.length);
-                transport.audio(to, packet);
+                deliver(to, withId(id, sealed));
             }
         });
     }
@@ -433,6 +499,7 @@ public final class Calls implements AutoCloseable {
     private void end(EndReason reason, String error) {
         AudioDevice d;
         CallVideo v;
+        DirectPath p;
         Call last;
         synchronized (this) {
             if (state == State.ENDED) return;
@@ -443,12 +510,15 @@ public final class Calls implements AutoCloseable {
             link = null; // forget the call keys
             v = video;
             video = null;
+            p = direct;
+            direct = null;
             myKey = null;
             theirKey = null;
             if (ringTimeout != null) ringTimeout.cancel(false);
         }
         if (d != null) d.stop();
         if (v != null) v.close(); // stops the camera too
+        if (p != null) p.close();
         listener.changed(last);
     }
 

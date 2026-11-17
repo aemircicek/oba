@@ -32,6 +32,8 @@ public final class CallCrypto {
     private static final byte[] INFO = "scorpion call v1".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] OPUS_INFO = "oba call opus v1".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] VIDEO_INFO = "oba call video v1".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] DIRECT_SIGNAL_INFO = "oba call direct signal v1".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] DIRECT_CONTROL_INFO = "oba call direct control v1".getBytes(StandardCharsets.US_ASCII);
     private static final int TAG_BYTES = 16;
 
     private final byte[] callId;
@@ -72,6 +74,16 @@ public final class CallCrypto {
     /** The keys for video in the same call, independent of both audio key pairs (see {@link #deriveOpus}). */
     public static CallCrypto deriveVideo(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller) {
         return derive(callId, mine, theirPublic, caller, VIDEO_INFO);
+    }
+
+    /** The keys for direct-path candidates, sent through the relay (see {@link DirectPath}). */
+    public static CallCrypto deriveDirectSignal(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller) {
+        return derive(callId, mine, theirPublic, caller, DIRECT_SIGNAL_INFO);
+    }
+
+    /** The keys for probes and keep-alives over the direct path itself. */
+    public static CallCrypto deriveDirectControl(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller) {
+        return derive(callId, mine, theirPublic, caller, DIRECT_CONTROL_INFO);
     }
 
     private static CallCrypto derive(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller, byte[] info) {

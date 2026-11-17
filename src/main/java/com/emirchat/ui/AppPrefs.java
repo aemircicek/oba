@@ -48,6 +48,18 @@ final class AppPrefs {
         NODE.putBoolean(name + ":" + account, true);
     }
 
+    /** Direct calls: "verified" (the default), "friends" or "off". See {@link #DIRECT_CHOICES}. */
+    static final String[] DIRECT_CHOICES = {"verified", "friends", "off"};
+
+    static String directCalls() {
+        String v = NODE.get("direct-calls", "verified");
+        return java.util.Arrays.asList(DIRECT_CHOICES).contains(v) ? v : "verified";
+    }
+
+    static void setDirectCalls(String choice) {
+        NODE.put("direct-calls", choice);
+    }
+
     static boolean welcomeShown() {
         return NODE.getBoolean("welcome-shown", false);
     }

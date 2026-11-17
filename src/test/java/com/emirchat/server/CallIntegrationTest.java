@@ -245,6 +245,79 @@ class CallIntegrationTest {
         }
     }
 
+    /** Connects a call from emir to efe with a stream of silence both ways, as a real call has. */
+    private static Thread connectTalking(Device emir, Device efe, java.util.concurrent.atomic.AtomicBoolean talking)
+            throws Exception {
+        emir.client.calls().call("efe");
+        efe.await(c -> c.state() == Calls.State.RINGING);
+        efe.client.calls().accept();
+        emir.await(c -> c.state() == Calls.State.CONNECTED);
+        efe.await(c -> c.state() == Calls.State.CONNECTED);
+        return Thread.ofPlatform().daemon().start(() -> {
+            for (int f = 0; talking.get(); f++) {
+                emir.audio.say(tone(f * 320));
+                efe.audio.say(tone(f * 320));
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        });
+    }
+
+    private static boolean awaitDirect(Device d, long millis) throws InterruptedException {
+        long until = System.currentTimeMillis() + millis;
+        while (System.currentTimeMillis() < until) {
+            if (d.client.calls().direct()) return true;
+            Thread.sleep(50);
+        }
+        return false;
+    }
+
+    @Test
+    void whenBothAllowItTheCallGoesDirectlyAndLeavesTheRelay() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe")) {
+            befriend(emir, efe, "efe", "emir");
+            emir.client.calls().directAllowed(u -> true);
+            efe.client.calls().directAllowed(u -> true);
+            java.util.concurrent.atomic.AtomicBoolean talking = new java.util.concurrent.atomic.AtomicBoolean(true);
+            Thread voices = connectTalking(emir, efe, talking);
+            try {
+                assertTrue(awaitDirect(emir, 10_000), "emir's side found a direct path");
+                assertTrue(awaitDirect(efe, 10_000), "and so did efe's");
+                long[] before = emir.client.calls().packetsSent();
+                efe.audio.speaker.clear();
+                Thread.sleep(1500);
+                long[] after = emir.client.calls().packetsSent();
+                assertTrue(after[0] - before[0] > 30, "audio goes directly: " + (after[0] - before[0]));
+                assertTrue(after[1] - before[1] <= 2, "and no longer through the server: " + (after[1] - before[1]));
+                assertTrue(efe.audio.speaker.size() > 30, "efe still hears emir: " + efe.audio.speaker.size());
+            } finally {
+                talking.set(false);
+                voices.join();
+            }
+        }
+    }
+
+    @Test
+    void byDefaultAnUnverifiedFriendIsNeverCalledDirectly() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe")) {
+            befriend(emir, efe, "efe", "emir");
+            efe.client.calls().directAllowed(u -> true); // efe would; emir keeps the default (verified only)
+            java.util.concurrent.atomic.AtomicBoolean talking = new java.util.concurrent.atomic.AtomicBoolean(true);
+            Thread voices = connectTalking(emir, efe, talking);
+            try {
+                assertFalse(awaitDirect(emir, 4000), "emir has not verified efe: no direct path");
+                assertFalse(efe.client.calls().direct(), "nor from efe's side: emir never answers or probes");
+                assertTrue(emir.client.calls().packetsSent()[0] == 0, "emir sent nothing directly");
+            } finally {
+                talking.set(false);
+                voices.join();
+            }
+        }
+    }
+
     @Test
     void rejectedAndBusyCalls() throws Exception {
         try (Device emir = new Device("emir"); Device efe = new Device("efe"); Device ayse = new Device("ayse")) {
