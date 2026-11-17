@@ -308,8 +308,16 @@ sequenceDiagram
 Call offers and answers are ordinary end-to-end encrypted messages, so they are authenticated by
 the same keys as chat messages: the server cannot place or answer a call in someone's name, and
 an offer from a friend whose key changed waits until the key is verified. Each call has its own
-X25519 keys, forgotten when it ends. Audio is 8 kHz G.711 μ-law (64 kbit/s) in 20 ms packets with
-a sequence number; old, repeated and modified packets are dropped. The server relays audio only
+X25519 keys, forgotten when it ends. Audio is Opus at 16 kHz (wideband speech, 24 kbit/s with
+in-band error correction) in 20 ms packets with a sequence number; old, repeated and modified
+packets are dropped.
+
+Versions before Opus send and expect 8 kHz G.711 μ-law, and their signalling has no room for a
+codec list, so the choice is made inside the audio. A call starts in μ-law; each side also sends,
+once a second, a one-byte "I play Opus" packet under a second pair of keys derived from the same
+exchange (label `oba call opus v1`). An older version cannot authenticate those packets and drops
+them as damaged. Whoever receives one switches to sending Opus under those keys; a call with an
+older version simply stays in μ-law, converted between 16 and 8 kHz on our side. The server relays audio only
 between friends, at most 100 packets a second, and drops packets for a device that falls behind
 instead of queueing them. Calls are one-to-one; an offer that arrives more than a minute late is
 shown as a missed call.
@@ -422,7 +430,8 @@ seconds, so someone removed from the group is taken out even if they stay silent
 key      = 32 random bytes and a random 32-bit id, new each time anyone joins or leaves
 handover = an action inside the group's Sender Keys encryption (the server cannot read it)
 packet   = u32 keyId ‖ u64 seq ‖ AES-256-GCM(key, nonce = keyId ‖ seq,
-                                  aad = "scorpion voice v1" ‖ groupId ‖ sender, μ-law audio)
+                                  aad = "scorpion voice v1" ‖ groupId ‖ sender, kind ‖ body)
+kind     = 0 μ-law (8 kHz) · 1 place · 2 Opus (16 kHz) · 3 "I play Opus" (once a second)
 (the labels keep the app's former name: they are part of the protocol)
 ```
 
@@ -433,6 +442,10 @@ movement from speech; each client sets every voice's volume by distance and pans
 said after; clients also replace their key as soon as the member list shows a removal. Packets
 are bound to the room and the sender (one cannot pass off another's audio), and a receiver takes
 each sequence number once and never an older one.
+
+A room speaks Opus only while everyone else in it has said they play it; versions before Opus
+skip packet kinds they do not know, so one person on an older version turns everyone's sending
+back to μ-law within a frame, and the room returns to Opus when they leave.
 
 ### Time zones
 
@@ -460,8 +473,9 @@ Honest notes on what this project does **not** do:
 - **The server decides who is in a community.** Channel names and messages are encrypted for the
   members the server lists, so a malicious server could add a member (who would then appear in
   the member list). Check the member list of sensitive communities.
-- **Calls go through the server** (no direct peer-to-peer connection), so they add a little delay;
-  voice quality is that of a telephone (8 kHz). There are no video calls yet.
+- **Calls go through the server** (no direct peer-to-peer connection), so they add a little delay.
+  With someone on a version before Opus, or in a room with one, voice quality is that of a
+  telephone (8 kHz μ-law). There are no video calls yet.
 - **Voice rooms**: the server sees who is in which room and when; at most 12 people per room. Room
   keys are handed to every member of the channel (anyone who can read the channel may also
   listen), and nobody else can join.
@@ -509,7 +523,7 @@ Honest notes on what this project does **not** do:
 - Fuzzing the decoders (Jazzer) and a written security report
 - Sealed sender and message-size padding (less metadata for the server)
 - A formal model of the handshake and X3DH (ProVerif or Tamarin)
-- Multiple devices per account; video calls and screen sharing; a better voice codec (Opus)
+- Multiple devices per account; video calls and screen sharing
 
 ## Security
 

@@ -13,6 +13,17 @@ version from 3.2 on keeps working with this one.
   Each is one click away and ticks itself off when done.
 - The server verification screen says where the other copy of the fingerprint is.
 
+### Calls and voice rooms in Opus
+- **Calls and voice rooms sound twice as clear**: Opus at 16 kHz (wideband speech) instead of
+  the telephone's 8 kHz μ-law, at about a third of the data (24 instead of 64 kbit/s), with error
+  correction for lost packets. Through Concentus, a pure Java Opus: the same jar on every system.
+- **Older versions keep working**: a call starts in μ-law and moves to Opus once the other side
+  has shown it plays Opus, through packets an older version cannot authenticate and drops. A
+  voice room stays in μ-law while anyone in it is on an older version. Voice messages stay 8 kHz
+  μ-law files that every version since 3.4 can play.
+- The microphone and speaker now run at 16 kHz; a computer that cannot offer it is used at 8 kHz
+  and converted.
+
 ### Accessibility
 - **Screen readers**: buttons that show only an icon now have a name (their tooltip), text boxes
   without a label take their prompt, and the fields of the sign-in form are tied to their labels.

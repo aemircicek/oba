@@ -2,11 +2,14 @@ package com.emirchat.call;
 
 import java.util.function.Consumer;
 
-/** Microphone and speaker for a call: 8 kHz, 16-bit, mono, little-endian, in 20 ms frames. */
+/**
+ * Microphone and speaker for calls and voice rooms: 16 kHz, 16-bit, mono, little-endian, in 20 ms
+ * frames. (Until Opus they were 8 kHz; audio to and from older versions is converted.)
+ */
 public interface AudioDevice {
-    float SAMPLE_RATE = 8000f;
-    /** 20 ms of 16-bit samples at 8 kHz. */
-    int FRAME_BYTES = 320;
+    float SAMPLE_RATE = OpusCodec.SAMPLE_RATE;
+    /** 20 ms of 16-bit samples at {@link #SAMPLE_RATE}. */
+    int FRAME_BYTES = OpusCodec.FRAME_SAMPLES * 2;
 
     /**
      * Starts capturing and playing.

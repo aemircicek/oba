@@ -30,6 +30,7 @@ public final class CallCrypto {
     public static final int CALL_ID_LENGTH = 16;
     /** The app's former name: part of the protocol (calls with older versions), so it never changes. */
     private static final byte[] INFO = "scorpion call v1".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] OPUS_INFO = "oba call opus v1".getBytes(StandardCharsets.US_ASCII);
     private static final int TAG_BYTES = 16;
 
     private final byte[] callId;
@@ -54,9 +55,23 @@ public final class CallCrypto {
      *               is used for sending)
      */
     public static CallCrypto derive(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller) {
+        return derive(callId, mine, theirPublic, caller, INFO);
+    }
+
+    /**
+     * The keys for Opus audio in the same call: derived from the same exchange under another
+     * label, so they are independent of the μ-law keys. A version without Opus cannot
+     * authenticate these packets and drops them as damaged, which is what makes it safe to send
+     * them before knowing what the other side understands.
+     */
+    public static CallCrypto deriveOpus(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller) {
+        return derive(callId, mine, theirPublic, caller, OPUS_INFO);
+    }
+
+    private static CallCrypto derive(byte[] callId, KeyPair mine, byte[] theirPublic, boolean caller, byte[] info) {
         if (callId.length != CALL_ID_LENGTH) throw new IllegalArgumentException("Bad call id");
         byte[] shared = X25519.dh(mine, theirPublic);
-        byte[] okm = Hkdf.expand(Hkdf.extract(callId, shared), INFO, 64);
+        byte[] okm = Hkdf.expand(Hkdf.extract(callId, shared), info, 64);
         Arrays.fill(shared, (byte) 0);
         byte[] callerToCallee = Arrays.copyOfRange(okm, 0, 32);
         byte[] calleeToCaller = Arrays.copyOfRange(okm, 32, 64);

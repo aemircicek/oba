@@ -49,6 +49,12 @@
       <artifactId>core</artifactId>
       <version>3.5.3</version>
     </dependency>
+    <!-- Opus voice codec for calls and voice rooms: a pure Java port, no native code -->
+    <dependency>
+      <groupId>io.github.jaredmdobson</groupId>
+      <artifactId>concentus</artifactId>
+      <version>1.0.2</version>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

@@ -1,6 +1,5 @@
 package com.emirchat.server;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -90,10 +89,11 @@ class CallIntegrationTest {
         b.client.connection().respondFriendRequest(aName, true);
     }
 
+    /** 20 ms of a steady 500 Hz tone, starting {@code seed} samples in (so frames join up). */
     private static byte[] tone(int seed) {
         byte[] pcm = new byte[AudioDevice.FRAME_BYTES];
         for (int i = 0; i < pcm.length / 2; i++) {
-            short s = (short) (Math.sin((i + seed) / 5.0) * 8000);
+            short s = (short) (Math.sin(2 * Math.PI * 500 * (i + seed) / AudioDevice.SAMPLE_RATE) * 8000);
             pcm[2 * i] = (byte) s;
             pcm[2 * i + 1] = (byte) (s >> 8);
         }
@@ -114,21 +114,43 @@ class CallIntegrationTest {
             efe.await(c -> c.state() == Calls.State.CONNECTED);
             emir.await(c -> c.state() == Calls.State.CONNECTED);
 
+            // The first frames go out in μ-law, with an "I can play Opus" note; then both switch.
             byte[] hello = tone(0);
             emir.audio.say(hello);
             byte[] heard = efe.audio.speaker.poll(5, TimeUnit.SECONDS);
             assertNotNull(heard, "efe hears emir");
             assertEquals(hello.length, heard.length);
-            assertTrue(close(hello, heard), "μ-law keeps the sound close");
-            efe.audio.say(tone(7));
+            efe.audio.say(tone(0));
             assertNotNull(emir.audio.speaker.poll(5, TimeUnit.SECONDS), "and emir hears efe");
+            awaitCodec(emir, "opus");
+            awaitCodec(efe, "opus");
+
+            // a second of speech in Opus comes out at the same level and pitch
+            efe.audio.speaker.clear();
+            int frames = 50;
+            for (int f = 0; f < frames; f++) emir.audio.say(tone(f * hello.length / 2));
+            java.io.ByteArrayOutputStream got = new java.io.ByteArrayOutputStream();
+            for (int f = 0; f < frames; f++) {
+                byte[] frame = efe.audio.speaker.poll(5, TimeUnit.SECONDS);
+                assertNotNull(frame, "frame " + f);
+                got.writeBytes(frame);
+            }
+            byte[] sent = new byte[frames * hello.length];
+            for (int f = 0; f < frames; f++) System.arraycopy(tone(f * hello.length / 2), 0, sent, f * hello.length, hello.length);
+            assertTrue(similar(sent, got.toByteArray()), "Opus keeps the sound close");
 
             emir.client.calls().setMuted(true);
             emir.await(Calls.Call::muted);
-            emir.audio.say(hello);
-            byte[] silence = efe.audio.speaker.poll(5, TimeUnit.SECONDS);
-            assertNotNull(silence);
-            assertArrayEquals(new byte[hello.length], silence, "muted: efe hears silence");
+            // the first muted frame may still carry the last few ms of sound (the codec's own delay)
+            byte[] silence = null;
+            for (int f = 0; f < 3; f++) {
+                emir.audio.say(hello);
+                silence = efe.audio.speaker.poll(5, TimeUnit.SECONDS);
+                assertNotNull(silence);
+            }
+            int loudest = 0;
+            for (short v : samples(silence)) loudest = Math.max(loudest, Math.abs(v));
+            assertTrue(loudest < 64, "muted: efe hears silence (loudest sample " + loudest + ")");
 
             efe.client.calls().hangUp();
             assertEquals(Calls.EndReason.HUNG_UP, efe.await(c -> c.state() == Calls.State.ENDED).reason());
@@ -175,12 +197,43 @@ class CallIntegrationTest {
         }
     }
 
-    private static boolean close(byte[] a, byte[] b) {
-        for (int i = 0; i < a.length / 2; i++) {
-            int x = (short) ((a[2 * i] & 0xff) | (a[2 * i + 1] << 8));
-            int y = (short) ((b[2 * i] & 0xff) | (b[2 * i + 1] << 8));
-            if (Math.abs(x - y) > Math.max(16, Math.abs(x) / 16)) return false;
+    private static void awaitCodec(Device d, String codec) throws InterruptedException {
+        for (int i = 0; i < 100 && !codec.equals(d.client.calls().sendingCodec()); i++) Thread.sleep(50);
+        assertEquals(codec, d.client.calls().sendingCodec());
+    }
+
+    /**
+     * True if what was heard is what was said: the same level (within a quarter) and, at the best
+     * delay up to 10 ms (codecs and filters delay sound a little), nearly the same shape. The
+     * first 100 ms are skipped: a codec needs a moment to settle.
+     */
+    static boolean similar(byte[] said, byte[] heard) {
+        int skip = (int) (AudioDevice.SAMPLE_RATE / 10);
+        int maxLag = (int) (AudioDevice.SAMPLE_RATE / 100);
+        short[] a = samples(said);
+        short[] b = samples(heard);
+        int n = Math.min(a.length, b.length) - maxLag;
+        double best = -1;
+        for (int lag = 0; lag <= maxLag; lag++) {
+            double ab = 0, aa = 0, bb = 0;
+            for (int i = skip; i < n; i++) {
+                ab += a[i] * (double) b[i + lag];
+                aa += a[i] * (double) a[i];
+                bb += b[i + lag] * (double) b[i + lag];
+            }
+            if (aa > 0 && bb > 0) best = Math.max(best, ab / Math.sqrt(aa * bb));
         }
-        return true;
+        double la = 0, lb = 0;
+        for (int i = skip; i < n; i++) {
+            la += Math.abs(a[i]);
+            lb += Math.abs(b[i]);
+        }
+        return best > 0.9 && lb > 0.75 * la && lb < 1.25 * la;
+    }
+
+    private static short[] samples(byte[] pcm) {
+        short[] out = new short[pcm.length / 2];
+        for (int i = 0; i < out.length; i++) out[i] = (short) ((pcm[2 * i] & 0xff) | (pcm[2 * i + 1] << 8));
+        return out;
     }
 }

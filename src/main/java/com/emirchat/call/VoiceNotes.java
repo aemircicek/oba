@@ -13,7 +13,14 @@ public final class VoiceNotes {
     public static final String MIME = "audio/wav";
     /** Longest recording (five minutes: about 2.4 MB). */
     public static final int MAX_SECONDS = 300;
-    private static final int RATE = (int) AudioDevice.SAMPLE_RATE;
+    /**
+     * Voice messages stay at the telephone rate of 8 kHz in μ-law: they are files that every
+     * version since 3.4 can play, whatever the calls use.
+     */
+    public static final float SAMPLE_RATE = 8000f;
+    /** 20 ms of 16-bit samples at {@link #SAMPLE_RATE}. */
+    public static final int FRAME_BYTES = 320;
+    private static final int RATE = (int) SAMPLE_RATE;
     private static final int HEADER = 58; // RIFF + fmt (18 bytes, as non-PCM formats need) + fact + data headers
 
     private VoiceNotes() {}
