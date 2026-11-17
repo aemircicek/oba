@@ -9,7 +9,7 @@ import javax.sound.sampled.TargetDataLine;
 
 /** Records a voice message from the default microphone (8 kHz, 16-bit, mono). */
 public final class VoiceRecorder {
-    private static final AudioFormat FORMAT = new AudioFormat(AudioDevice.SAMPLE_RATE, 16, 1, true, false);
+    private static final AudioFormat FORMAT = new AudioFormat(VoiceNotes.SAMPLE_RATE, 16, 1, true, false);
     private final ByteArrayOutputStream pcm = new ByteArrayOutputStream();
     private volatile boolean running;
     private TargetDataLine line;
@@ -25,7 +25,7 @@ public final class VoiceRecorder {
     public synchronized void start(Consumer<Float> level, Runnable full) {
         try {
             line = AudioSystem.getTargetDataLine(FORMAT);
-            line.open(FORMAT, AudioDevice.FRAME_BYTES * 4);
+            line.open(FORMAT, VoiceNotes.FRAME_BYTES * 4);
         } catch (LineUnavailableException | IllegalArgumentException | SecurityException e) {
             line = null;
             throw new IllegalStateException("No microphone available: " + e.getMessage(), e);
@@ -33,9 +33,9 @@ public final class VoiceRecorder {
         running = true;
         line.start();
         TargetDataLine mic = line;
-        long maxBytes = (long) VoiceNotes.MAX_SECONDS * (long) AudioDevice.SAMPLE_RATE * 2;
+        long maxBytes = (long) VoiceNotes.MAX_SECONDS * (long) VoiceNotes.SAMPLE_RATE * 2;
         thread = Thread.ofPlatform().daemon().name("voice-recorder").start(() -> {
-            byte[] frame = new byte[AudioDevice.FRAME_BYTES];
+            byte[] frame = new byte[VoiceNotes.FRAME_BYTES];
             while (running) {
                 int n = mic.read(frame, 0, frame.length);
                 if (n <= 0) continue;

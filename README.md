@@ -308,8 +308,49 @@ sequenceDiagram
 Call offers and answers are ordinary end-to-end encrypted messages, so they are authenticated by
 the same keys as chat messages: the server cannot place or answer a call in someone's name, and
 an offer from a friend whose key changed waits until the key is verified. Each call has its own
-X25519 keys, forgotten when it ends. Audio is 8 kHz G.711 μ-law (64 kbit/s) in 20 ms packets with
-a sequence number; old, repeated and modified packets are dropped. The server relays audio only
+X25519 keys, forgotten when it ends. Audio is Opus at 16 kHz (wideband speech, 24 kbit/s with
+in-band error correction) in 20 ms packets with a sequence number; old, repeated and modified
+packets are dropped.
+
+Versions before Opus send and expect 8 kHz G.711 μ-law, and their signalling has no room for a
+codec list, so the choice is made inside the audio. A call starts in μ-law; each side also sends,
+once a second, a one-byte "I play Opus" packet under a second pair of keys derived from the same
+exchange (label `oba call opus v1`). An older version cannot authenticate those packets and drops
+them as damaged. Whoever receives one switches to sending Opus under those keys; a call with an
+older version simply stays in μ-law, converted between 16 and 8 kHz on our side.
+
+**Video and screen sharing** use a third key pair from the same exchange (label
+`oba call video v1`). The camera (480x360 at 15 frames a second) or the screen (up to 1280x800 at
+5) is encoded in VP8, cut into chunks of at most 960 bytes and sent through the same relay as the
+audio, so servers from 3.4 on carry it unchanged. The relay passes 100 packets a second from one
+device and Opus takes 50, so video is paced to 40: about 300 kbit/s. A receiver that loses a
+chunk asks for a key frame instead of showing a broken picture.
+
+```
+video packet = callId ‖ u64 seq ‖ AES-256-GCM(video key, nonce = 0⁴ ‖ seq, aad = callId, body)
+body         = u8 1 ‖ u32 frame ‖ u8 index ‖ u8 count ‖ u8 flags (key, screen) ‖ VP8 data
+             | u8 2   (please send a key frame)
+             | u8 3   (video stopped)
+```
+
+Video is offered only once the other side has shown it runs a version with Opus (the two came
+together); older versions cannot open video packets and drop them.
+
+**Direct calls.** Next to the relay, a call tries a direct UDP path between the two computers,
+in the manner of ICE (RFC 8445), much smaller. Each side collects its own addresses and the one
+the server's address service (UDP, same port number) sees it from, and sends them to the other
+through the relay under the call's "direct signal" keys. Both then send probes, authenticated
+under "direct control" keys, to every address of the other; the first answered probe opens the
+path, and probing from both sides at once opens most home routers. Audio and video then travel in
+the same sealed packets, directly; without relay limits the video bit rate triples. Keep-alives
+every second watch the path: after 3.5 seconds without one, the call is back on the relay within
+the same second and tries again later. The service answers each request with fewer bytes than it
+received and only a few times a second per address, so it cannot be used to flood others.
+
+A direct path shows each side the other's internet address. A side creates one only if its
+user allows it for that person (Settings: verified contacts, the default; all friends; never), so
+a side that does not allow it never sends its addresses nor probes: its address stays hidden. Camera and screen are opened
+only when you press the button, and closed when you press it again or the call ends. The server relays audio only
 between friends, at most 100 packets a second, and drops packets for a device that falls behind
 instead of queueing them. Calls are one-to-one; an offer that arrives more than a minute late is
 shown as a missed call.
@@ -422,7 +463,8 @@ seconds, so someone removed from the group is taken out even if they stay silent
 key      = 32 random bytes and a random 32-bit id, new each time anyone joins or leaves
 handover = an action inside the group's Sender Keys encryption (the server cannot read it)
 packet   = u32 keyId ‖ u64 seq ‖ AES-256-GCM(key, nonce = keyId ‖ seq,
-                                  aad = "scorpion voice v1" ‖ groupId ‖ sender, μ-law audio)
+                                  aad = "scorpion voice v1" ‖ groupId ‖ sender, kind ‖ body)
+kind     = 0 μ-law (8 kHz) · 1 place · 2 Opus (16 kHz) · 3 "I play Opus" (once a second)
 (the labels keep the app's former name: they are part of the protocol)
 ```
 
@@ -433,6 +475,10 @@ movement from speech; each client sets every voice's volume by distance and pans
 said after; clients also replace their key as soon as the member list shows a removal. Packets
 are bound to the room and the sender (one cannot pass off another's audio), and a receiver takes
 each sequence number once and never an older one.
+
+A room speaks Opus only while everyone else in it has said they play it; versions before Opus
+skip packet kinds they do not know, so one person on an older version turns everyone's sending
+back to μ-law within a frame, and the room returns to Opus when they leave.
 
 ### Time zones
 
@@ -460,8 +506,17 @@ Honest notes on what this project does **not** do:
 - **The server decides who is in a community.** Channel names and messages are encrypted for the
   members the server lists, so a malicious server could add a member (who would then appear in
   the member list). Check the member list of sensitive communities.
-- **Calls go through the server** (no direct peer-to-peer connection), so they add a little delay;
-  voice quality is that of a telephone (8 kHz). There are no video calls yet.
+- **Calls go through the server** unless both sides allow a direct call and a direct path can be
+  opened (strict company and mobile networks often block it), so they may add a little delay.
+  A direct call shows each side the other's address. With someone on a version before Opus, or in a room with one, voice quality is that of a
+  telephone (8 kHz μ-law).
+- **Video takes room**: in a small window the picture leaves space for only a few messages.
+- **Video is small**: the relay's limit leaves about 300 kbit/s, enough for a 480x360 camera or a
+  readable screen at a few frames a second, not for full-screen HD. Video is for one-to-one calls
+  only, not voice rooms. The server sees how much a call sends, so it can tell video from voice.
+- **Video uses native code** (FFmpeg, through JavaCPP), unlike the rest of the app; the installers
+  are about 25 MB larger for it. On macOS sharing the screen needs the "Screen Recording"
+  permission, without which only the desktop picture is shared.
 - **Voice rooms**: the server sees who is in which room and when; at most 12 people per room. Room
   keys are handed to every member of the channel (anyone who can read the channel may also
   listen), and nobody else can join.
@@ -509,7 +564,7 @@ Honest notes on what this project does **not** do:
 - Fuzzing the decoders (Jazzer) and a written security report
 - Sealed sender and message-size padding (less metadata for the server)
 - A formal model of the handshake and X3DH (ProVerif or Tamarin)
-- Multiple devices per account; video calls and screen sharing; a better voice codec (Opus)
+- Multiple devices per account; video in voice rooms
 
 ## Security
 

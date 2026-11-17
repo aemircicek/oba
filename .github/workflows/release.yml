@@ -56,13 +56,14 @@ jobs:
       - name: Tools for .deb packages
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fakeroot
-      - name: macOS icon and microphone permission
+      - name: macOS icon, microphone and camera permission
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
           iconutil -c icns packaging/macos/oba.iconset -o packaging/macos/oba.icns
-          # Voice calls need the microphone, and macOS only asks the user if Info.plist says why.
+          # Calls need the microphone and the camera, and macOS only asks the user if Info.plist says why
+          # (without a reason it refuses the camera, or ends the app).
           # Start from this JDK's own Info.plist template (its placeholders differ between versions).
           jimage extract --dir jdk-res --include 'regex:.*/Info-lite\.plist\.template' "$JAVA_HOME/lib/modules"
           TEMPLATE=$(find jdk-res -name 'Info-lite.plist.template' | head -n 1)
@@ -71,9 +72,10 @@ jobs:
             exit 0
           fi
           mkdir -p packaging/macos/resources
-          perl -pe 's#^\s*</dict>#  <key>NSMicrophoneUsageDescription</key>\n  <string>Oba uses the microphone only during end-to-end encrypted voice calls, voice rooms and voice messages.</string>\n</dict>#' \
+          perl -pe 's#^\s*</dict>#  <key>NSMicrophoneUsageDescription</key>\n  <string>Oba uses the microphone only during end-to-end encrypted voice calls, voice rooms and voice messages.</string>\n  <key>NSCameraUsageDescription</key>\n  <string>Oba uses the camera only when you turn it on in an end-to-end encrypted video call.</string>\n</dict>#' \
             "$TEMPLATE" > packaging/macos/resources/Info.plist
           grep -q NSMicrophoneUsageDescription packaging/macos/resources/Info.plist
+          grep -q NSCameraUsageDescription packaging/macos/resources/Info.plist
       - name: Package
         shell: bash
         env:

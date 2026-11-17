@@ -422,7 +422,14 @@ public final class ChatClient implements AutoCloseable {
             @Override public void audio(String peer, byte[] data) {
                 connection.sendAudio(peer, data);
             }
+
+            @Override public java.net.InetSocketAddress directServer() {
+                return connection.remoteAddress();
+            }
         }, () -> client.audioDevices.get(), call -> client.listener.call(call));
+        // Direct calls show each side's address to the other: by default only with people whose
+        // key the user has verified (the app's settings can widen or close this).
+        client.calls.directAllowed(friend -> client.isVerified(friend) && !client.keyChanged(friend));
         client.voice = new com.emirchat.call.VoiceChannels(loggedIn.username(), new com.emirchat.call.VoiceChannels.Transport() {
             @Override public List<String> join(long groupId) throws Exception {
                 if (!client.voiceSupported()) throw new IOException(com.emirchat.call.VoiceChannels.UNSUPPORTED);
@@ -1408,9 +1415,24 @@ public final class ChatClient implements AutoCloseable {
         }
     }
 
-    /** Voice calls with friends. */
+    /** Voice and video calls with friends. */
     public com.emirchat.call.Calls calls() {
         return calls;
+    }
+
+    /**
+     * The camera to send in a call; with {@code -Dsecurechat.video=pattern} a moving test picture
+     * instead (tests and screenshots must not open the real camera).
+     */
+    public com.emirchat.video.VideoSource camera() {
+        return "pattern".equals(System.getProperty("securechat.video"))
+                ? new com.emirchat.video.PatternSource(480, 360, 15, false) : new com.emirchat.video.CameraSource();
+    }
+
+    /** The screen to share in a call (a test picture with {@code -Dsecurechat.video=pattern}). */
+    public com.emirchat.video.VideoSource screen() {
+        return "pattern".equals(System.getProperty("securechat.video"))
+                ? new com.emirchat.video.PatternSource(1280, 800, 5, true) : new com.emirchat.video.ScreenSource();
     }
 
     /** Replaces the microphone and speaker (tests, or a device chosen in settings). */

@@ -7,7 +7,8 @@ services:
     container_name: secure-chat
     restart: unless-stopped
     ports:
-      - "5056:5056"            # the only port to open in the firewall
+      - "5056:5056"            # TCP: the app's connections
+      - "5056:5056/udp"        # UDP: tells apps their outside address, for direct calls (optional)
     volumes:
       - securechat-data:/data  # server identity key, accounts database, encrypted attachments
     read_only: true            # nothing but /data (and a small /tmp) is writable

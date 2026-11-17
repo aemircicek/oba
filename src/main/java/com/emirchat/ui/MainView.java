@@ -47,6 +47,7 @@ final class MainView implements AccountSession.View {
     private boolean focusHooked;
     private final HBox updateBanner = new HBox(8);
     final HBox callBar = new HBox(10);
+    final VideoStage videoStage = new VideoStage();
     final HBox voiceBar = new HBox(10);
     com.emirchat.call.VoiceChannels.State voiceState = com.emirchat.call.VoiceChannels.State.IDLE;
     Map<Long, List<String>> voiceRooms = Map.of();
@@ -170,7 +171,13 @@ final class MainView implements AccountSession.View {
         VBox.setVgrow(content, Priority.ALWAYS);
         voiceBar.managedProperty().bind(voiceBar.visibleProperty());
         voiceBar.setVisible(false);
-        frame.setCenter(new VBox(callBar, voiceBar, content));
+        // the picture of a video call sits above the conversation and takes a little under half of it,
+        // so a few messages and the composer stay in view even in a small window
+        videoStage.root().prefHeightProperty().bind(frame.heightProperty().multiply(0.45));
+        videoStage.root().setMinHeight(0);
+        session.client().calls().videoView(videoStage);
+        applyDirectCalls();
+        frame.setCenter(new VBox(callBar, voiceBar, videoStage.root(), content));
         stack.getChildren().add(frame);
         stack.getStyleClass().add("main-view");
         stack.setUserData(this); // lets the preview tool open the welcome-back screen
@@ -243,6 +250,19 @@ final class MainView implements AccountSession.View {
     }
 
     // ------------------------------------------------------------------ content
+
+    /**
+     * Who calls may go to directly (each side then sees the other's address): verified contacts
+     * by default, every friend, or nobody.
+     */
+    void applyDirectCalls() {
+        com.emirchat.client.ChatClient c = session.client();
+        switch (AppPrefs.directCalls()) {
+            case "friends" -> c.calls().directAllowed(u -> !c.keyChanged(u));
+            case "off" -> c.calls().directAllowed(u -> false);
+            default -> c.calls().directAllowed(u -> c.isVerified(u) && !c.keyChanged(u));
+        }
+    }
 
     void showEmpty() {
         if (current != null) current.dispose();
@@ -480,6 +500,7 @@ final class MainView implements AccountSession.View {
         if (callTicker != null) callTicker.stop();
         if (callHide != null) callHide.stop();
         if (c.state() == com.emirchat.call.Calls.State.ENDED) {
+            videoStage.clear();
             if (c.reason() == com.emirchat.call.Calls.EndReason.MISSED && !c.outgoing()) {
                 callBars.notifyCall(c.peer(), I18n.t("call.missedFrom", c.peer()));
                 if (calls.current() != null) return; // missed while talking to someone else: keep that bar
@@ -525,8 +546,15 @@ final class MainView implements AccountSession.View {
                 callBars.ring();
             }
             case CONNECTED -> {
-                Runnable tick = () -> status.setText("🔒 " + I18n.t("call.encrypted") + " · "
-                        + CallBars.duration(System.currentTimeMillis() - c.connectedAt()));
+                videoStage.peer(c.peer());
+                Button camera = callBars.videoButton(calls, false);
+                Button share = callBars.videoButton(calls, true);
+                Runnable tick = () -> {
+                    status.setText("🔒 " + I18n.t("call.encrypted") + " · "
+                            + (calls.direct() ? I18n.t("call.direct") + " · " : "")
+                            + CallBars.duration(System.currentTimeMillis() - c.connectedAt()));
+                    callBars.refreshVideoButtons(calls, camera, share);
+                };
                 tick.run();
                 callTicker = new javafx.animation.Timeline(new javafx.animation.KeyFrame(javafx.util.Duration.seconds(1),
                         e -> tick.run()));
@@ -537,7 +565,7 @@ final class MainView implements AccountSession.View {
                 mute.getStyleClass().add("small");
                 mute.setId("call-mute");
                 mute.setOnAction(e -> calls.setMuted(!c.muted()));
-                buttons.getChildren().addAll(mute, CallBars.hangUpButton(I18n.t("call.hangUp"), calls::hangUp));
+                buttons.getChildren().addAll(camera, share, mute, CallBars.hangUpButton(I18n.t("call.hangUp"), calls::hangUp));
             }
             default -> { }
         }

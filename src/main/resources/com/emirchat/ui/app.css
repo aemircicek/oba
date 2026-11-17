@@ -892,3 +892,8 @@
 .md.keyboard-click:focus-visible { -fx-effect: dropshadow(gaussian, -sc-accent, 5, 0.7, 0, 0); }
 .toggle-button:focus-visible { -fx-border-color: -sc-accent; -fx-border-width: 1.5; -fx-border-insets: -0.5; -fx-border-radius: 8.5; }
 .check-box:focus-visible .box { -fx-border-color: -sc-accent; -fx-border-width: 1.5; }
+
+/* Video calls: the picture above the conversation */
+.video-stage { -fx-background-color: #0b0a08; -fx-padding: 12; -fx-border-color: transparent transparent -sc-accent transparent; -fx-border-width: 0 0 2 0; }
+.video-local { -fx-background-color: #000000; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.5), 12, 0.2, 0, 2); }
+.video-caption { -fx-background-color: rgba(0,0,0,0.6); -fx-text-fill: #f3ece3; -fx-padding: 4 10; -fx-background-radius: 8; -fx-font-size: 12px; }

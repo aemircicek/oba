@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-A security review of the whole app. The encryption (handshake, X3DH, Double Ratchet, sender keys,
-files, calls) needed no change; the fixes are around it. Nothing in the protocol changes: every
-version from 3.2 on keeps working with this one.
+Video calls and screen sharing, Opus for calls and voice rooms, a gentler first start, an
+accessibility pass and a security review of the whole app. The server needs no update, and every
+version from 3.2 on keeps working with this one: new features switch on only between apps that
+have them. The security review found no fault in the encryption itself (handshake, X3DH, Double
+Ratchet, sender keys, files, calls); the fixes are around it.
 
 ### Added
 - **Creating an account shows the rules** for names and passwords and ticks them off while you
@@ -12,6 +14,39 @@ version from 3.2 on keeps working with this one.
 - **First steps** on the empty screen: add a friend, compare keys with one, back up the account.
   Each is one click away and ticks itself off when done.
 - The server verification screen says where the other copy of the fingerprint is.
+
+### Video calls and screen sharing
+- **Turn on your camera or share your screen** in a call: the other side's picture above the
+  conversation, yours small in a corner. VP8 through FFmpeg, end-to-end encrypted under keys of
+  their own; about 300 kbit/s, a 480x360 camera at 15 frames a second or a screen at 5.
+- **No server update needed**: video travels in the same relayed packets as call audio, paced to
+  stay inside the relay's limit, so servers from 3.4 on carry it. Older apps cannot open it and
+  drop it; the buttons appear once the other side is on a version with video.
+- The installers include FFmpeg's native libraries for their system (about 25 MB, LGPL v3); see
+  THIRD-PARTY-NOTICES. The macOS app asks for camera access the first time.
+
+### Direct calls
+- **Calls go straight between the two computers** when both allow it: lower delay, and three
+  times the video quality without the relay's limits. The server tells each app its outside
+  address over UDP (same port number; open 5056/udp in the firewall, see docs/deploy.md); paths
+  are found with authenticated probes from both sides, and a call falls back to the server within
+  seconds if the path is lost.
+- **Your address stays yours**: a direct path shows each side the other's internet address, so by
+  default it is only tried with contacts you have verified. Settings → Direct calls: verified
+  contacts, all friends or never. A side that does not allow it never sends its address.
+- Servers without the UDP service (3.4, or with the port closed) keep working: calls then use
+  only addresses the apps know themselves, or the relay.
+
+### Calls and voice rooms in Opus
+- **Calls and voice rooms sound twice as clear**: Opus at 16 kHz (wideband speech) instead of
+  the telephone's 8 kHz μ-law, at about a third of the data (24 instead of 64 kbit/s), with error
+  correction for lost packets. Through Concentus, a pure Java Opus: the same jar on every system.
+- **Older versions keep working**: a call starts in μ-law and moves to Opus once the other side
+  has shown it plays Opus, through packets an older version cannot authenticate and drops. A
+  voice room stays in μ-law while anyone in it is on an older version. Voice messages stay 8 kHz
+  μ-law files that every version since 3.4 can play.
+- The microphone and speaker now run at 16 kHz; a computer that cannot offer it is used at 8 kHz
+  and converted.
 
 ### Accessibility
 - **Screen readers**: buttons that show only an icon now have a name (their tooltip), text boxes

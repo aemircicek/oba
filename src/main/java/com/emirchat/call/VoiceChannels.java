@@ -103,8 +103,13 @@ public final class VoiceChannels implements AutoCloseable {
         return Math.max(-1, Math.min(1, (them[0] - me[0]) / 0.30));
     }
 
+    /** μ-law at 8 kHz: what every version since 3.4 sends and understands. */
     private static final byte AUDIO = 0;
     private static final byte PLACE = 1;
+    /** Opus at 16 kHz. Versions before Opus skip packets of a kind they do not know. */
+    private static final byte OPUS = 2;
+    /** "I can play Opus", sent every second. */
+    private static final byte CAN_OPUS = 3;
     private final Map<String, double[]> places = new HashMap<>();
     private int heartbeat;
 
@@ -137,6 +142,17 @@ public final class VoiceChannels implements AutoCloseable {
         byte[] body = java.nio.ByteBuffer.allocate(5).put(PLACE)
                 .putShort((short) Math.round(p[0] * 65535)).putShort((short) Math.round(p[1] * 65535)).array();
         transport.audio(group, s.seal(group, me, body));
+    }
+
+    private void sendCanOpus() {
+        VoiceCrypto.Sender s;
+        long group;
+        synchronized (this) {
+            if (groupId == 0 || sender == null) return;
+            s = sender;
+            group = groupId;
+        }
+        transport.audio(group, s.seal(group, me, new byte[] {CAN_OPUS}));
     }
 
     /** The error a join reports when the server is older than voice rooms. */
@@ -172,6 +188,17 @@ public final class VoiceChannels implements AutoCloseable {
     private boolean muted;
     private boolean deafened;
     private Set<String> lastSpeaking = Set.of();
+    /**
+     * Who in the room has said they play Opus. We send Opus only when everyone else has, and
+     * μ-law otherwise, so someone on an older version always hears us; a newcomer on an older
+     * version turns everyone back to μ-law within a frame.
+     */
+    private final Set<String> canOpus = new java.util.HashSet<>();
+    private final Map<String, OpusCodec.Decoder> decoders = new HashMap<>();
+    private final Map<String, Resample> upsamplers = new HashMap<>();
+    // used by the capture thread only (replaced on every join)
+    private volatile OpusCodec.Encoder encoder;
+    private volatile Resample downsampler;
 
     /** @param busy true while a one-to-one call uses the microphone */
     public VoiceChannels(String me, Transport transport, Supplier<AudioDevice> devices, BooleanSupplier busy, Listener listener) {
@@ -214,6 +241,8 @@ public final class VoiceChannels implements AutoCloseable {
             return;
         }
         AudioDevice d = devices.get();
+        encoder = new OpusCodec.Encoder();
+        downsampler = Resample.down();
         try {
             d.start(this::captured);
         } catch (IllegalStateException e) {
@@ -254,6 +283,7 @@ public final class VoiceChannels implements AutoCloseable {
             queues.clear();
             loudAt.clear();
             places.clear();
+            forgetCodecs(null);
             deafened = false;
             muted = false;
             if (mixing != null) mixing.cancel(false);
@@ -308,6 +338,7 @@ public final class VoiceChannels implements AutoCloseable {
             listener.state(snapshot("key: " + e.getMessage()));
         }
         sendPlace();
+        sendCanOpus(); // newcomers learn at once what we play
     }
 
     // ------------------------------------------------------------------ from the network
@@ -329,6 +360,7 @@ public final class VoiceChannels implements AutoCloseable {
                         places.remove(gone);
                         queues.remove(gone);
                         loudAt.remove(gone);
+                        forgetCodecs(gone);
                     }
                 }
                 participants = List.copyOf(people);
@@ -351,6 +383,7 @@ public final class VoiceChannels implements AutoCloseable {
                     receiver.forget(p);
                     queues.remove(p);
                     loudAt.remove(p);
+                    forgetCodecs(p);
                     rotate = true;
                 }
             }
@@ -360,6 +393,25 @@ public final class VoiceChannels implements AutoCloseable {
             rotateKey();
             publish();
         }
+    }
+
+    /** Forgets what we know of someone's audio (everyone's, for null). Called with the lock held. */
+    private void forgetCodecs(String who) {
+        if (who == null) {
+            canOpus.clear();
+            decoders.clear();
+            upsamplers.clear();
+        } else {
+            canOpus.remove(who);
+            decoders.remove(who);
+            upsamplers.remove(who);
+        }
+    }
+
+    /** True if we send Opus now: everyone else in the room has said they play it. */
+    synchronized boolean sendingOpus() {
+        for (String p : participants) if (!p.equals(me) && !canOpus.contains(p)) return false;
+        return true;
     }
 
     /** Someone's sending key arrived through the group's encrypted channel. */
@@ -396,9 +448,26 @@ public final class VoiceChannels implements AutoCloseable {
             }
             return;
         }
-        if (plain[0] != AUDIO) return; // something newer than us: ignore it
-        ulaw = java.util.Arrays.copyOfRange(plain, 1, plain.length);
-        byte[] pcm = Mulaw.decode(ulaw);
+        byte[] pcm;
+        if (plain[0] == CAN_OPUS || plain[0] == OPUS) {
+            OpusCodec.Decoder decoder;
+            synchronized (this) {
+                canOpus.add(from);
+                if (plain[0] == CAN_OPUS) return;
+                decoder = decoders.computeIfAbsent(from, k -> new OpusCodec.Decoder());
+            }
+            pcm = decoder.decode(java.util.Arrays.copyOfRange(plain, 1, plain.length));
+            if (pcm == null) return;
+        } else if (plain[0] == AUDIO) {
+            Resample up;
+            synchronized (this) {
+                up = upsamplers.computeIfAbsent(from, k -> Resample.up());
+            }
+            ulaw = java.util.Arrays.copyOfRange(plain, 1, plain.length);
+            pcm = up.process(Mulaw.decode(ulaw));
+        } else {
+            return; // something newer than us: ignore it
+        }
         synchronized (this) {
             Deque<byte[]> q = queues.computeIfAbsent(from, k -> new ArrayDeque<>());
             q.addLast(pcm);
@@ -418,10 +487,18 @@ public final class VoiceChannels implements AutoCloseable {
             group = groupId;
             if (VoiceNotes.level(frame) > SPEAKING_LEVEL) loudAt.put(me, System.currentTimeMillis());
         }
-        byte[] ulaw = Mulaw.encode(frame);
-        byte[] body = new byte[ulaw.length + 1];
-        body[0] = AUDIO;
-        System.arraycopy(ulaw, 0, body, 1, ulaw.length);
+        byte[] coded;
+        byte kind;
+        if (sendingOpus()) {
+            coded = encoder.encode(frame);
+            kind = OPUS;
+        } else {
+            coded = Mulaw.encode(downsampler.process(frame));
+            kind = AUDIO;
+        }
+        byte[] body = new byte[coded.length + 1];
+        body[0] = kind;
+        System.arraycopy(coded, 0, body, 1, coded.length);
         transport.audio(group, s.seal(group, me, body));
     }
 
@@ -502,6 +579,7 @@ public final class VoiceChannels implements AutoCloseable {
     /** Ten times a second: tell the UI when the set of speakers changed. */
     private void tick() {
         if (++heartbeat % 30 == 0) sendPlace();
+        if (heartbeat % 10 == 0) sendCanOpus(); // muted or not: the others decide by it what to send
         Set<String> now;
         synchronized (this) {
             now = speakingNow();

@@ -8,7 +8,7 @@ import javax.sound.sampled.SourceDataLine;
 
 /** Plays one voice message at a time through the default speaker. */
 public final class VoicePlayer {
-    private static final AudioFormat FORMAT = new AudioFormat(AudioDevice.SAMPLE_RATE, 16, 1, true, false);
+    private static final AudioFormat FORMAT = new AudioFormat(VoiceNotes.SAMPLE_RATE, 16, 1, true, false);
     private static VoicePlayer current;
 
     private final byte[] pcm;
@@ -36,7 +36,7 @@ public final class VoicePlayer {
         SourceDataLine line;
         try {
             line = AudioSystem.getSourceDataLine(FORMAT);
-            line.open(FORMAT, AudioDevice.FRAME_BYTES * 8);
+            line.open(FORMAT, VoiceNotes.FRAME_BYTES * 8);
         } catch (LineUnavailableException | IllegalArgumentException | SecurityException e) {
             throw new IllegalStateException("No speaker available: " + e.getMessage(), e);
         }
@@ -45,7 +45,7 @@ public final class VoicePlayer {
         thread = Thread.ofPlatform().daemon().name("voice-player").start(() -> {
             try {
                 while (running && position < pcm.length) {
-                    int n = Math.min(AudioDevice.FRAME_BYTES * 2, pcm.length - position);
+                    int n = Math.min(VoiceNotes.FRAME_BYTES * 2, pcm.length - position);
                     line.write(pcm, position, n);
                     position += n;
                     progress.accept((double) position / pcm.length);

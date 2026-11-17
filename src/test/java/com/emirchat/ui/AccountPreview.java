@@ -122,6 +122,7 @@ public final class AccountPreview {
         I18n.use(System.getProperty("preview.language", "en"));
         System.setProperty("securechat.preview", "true");
         System.setProperty("securechat.audio", "none"); // never open the real microphone or speaker
+        System.setProperty("securechat.video", "pattern"); // nor the camera or the screen
         java.util.prefs.Preferences.userNodeForPackage(AppPrefs.class).node("preview-app").clear();
         Files.createDirectories(out);
         work = Files.createTempDirectory("securechat-account-preview");
@@ -536,7 +537,9 @@ public final class AccountPreview {
         fx(() -> { ((Button) find("#appearance-done")).fire(); return null; });
         Thread.sleep(300);
 
-        // A voice call from ayse: ringing, answered, talking (silent devices: no real microphone)
+        // A voice call from ayse, over the chat with her: ringing, answered, talking (silent devices: no real microphone)
+        fx(() -> { ((MainView) find(".main-view").getUserData()).open(AccountSession.dm("ayse")); return null; });
+        waitFor("#composer");
         ayse.client.useAudioDevices(com.emirchat.call.SilentDevice::new);
         ayse.client.calls().call("emir");
         waitFor("#call-accept");
@@ -546,6 +549,16 @@ public final class AccountPreview {
         waitFor("#call-mute");
         Thread.sleep(2300);
         snap("17-in-call");
+
+        // Video: ayse turns on her camera, emir answers with his (test pictures: no real camera)
+        ayse.client.calls().startVideo(new com.emirchat.video.PatternSource(480, 360, 15, false));
+        waitFor("#video-stage");
+        fx(() -> { ((Button) find("#call-camera")).fire(); return null; });
+        Thread.sleep(2500);
+        snap("17b-video-call");
+        ayse.client.calls().startVideo(new com.emirchat.video.PatternSource(1280, 800, 5, true));
+        Thread.sleep(3500);
+        snap("17c-screen-share");
         fx(() -> { ((Button) find("#call-hangup")).fire(); return null; });
         Thread.sleep(800);
         snap("18-call-ended");

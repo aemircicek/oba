@@ -218,7 +218,7 @@ final class VoiceMessages {
             }
         });
         byte[] cached = voices.get(key);
-        long limit = 64 + 2L * (long) com.emirchat.call.AudioDevice.SAMPLE_RATE * com.emirchat.call.VoiceNotes.MAX_SECONDS;
+        long limit = 64 + 2L * (long) com.emirchat.call.VoiceNotes.SAMPLE_RATE * com.emirchat.call.VoiceNotes.MAX_SECONDS;
         if (cached != null) {
             ready.accept(cached);
         } else if (file.size() > limit) {

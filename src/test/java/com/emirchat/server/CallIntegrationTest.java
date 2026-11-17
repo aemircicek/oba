@@ -1,6 +1,5 @@
 package com.emirchat.server;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -103,10 +102,11 @@ class CallIntegrationTest {
         b.client.connection().respondFriendRequest(aName, true);
     }
 
+    /** 20 ms of a steady 500 Hz tone, starting {@code seed} samples in (so frames join up). */
     private static byte[] tone(int seed) {
         byte[] pcm = new byte[AudioDevice.FRAME_BYTES];
         for (int i = 0; i < pcm.length / 2; i++) {
-            short s = (short) (Math.sin((i + seed) / 5.0) * 8000);
+            short s = (short) (Math.sin(2 * Math.PI * 500 * (i + seed) / AudioDevice.SAMPLE_RATE) * 8000);
             pcm[2 * i] = (byte) s;
             pcm[2 * i + 1] = (byte) (s >> 8);
         }
@@ -127,27 +127,207 @@ class CallIntegrationTest {
             efe.await(c -> c.state() == Calls.State.CONNECTED);
             emir.await(c -> c.state() == Calls.State.CONNECTED);
 
+            // The first frames go out in μ-law, with an "I can play Opus" note; then both switch.
             byte[] hello = tone(0);
             emir.audio.say(hello);
             byte[] heard = efe.audio.speaker.poll(5, TimeUnit.SECONDS);
             assertNotNull(heard, "efe hears emir");
             assertEquals(hello.length, heard.length);
-            assertTrue(close(hello, heard), "μ-law keeps the sound close");
-            efe.audio.say(tone(7));
+            efe.audio.say(tone(0));
             assertNotNull(emir.audio.speaker.poll(5, TimeUnit.SECONDS), "and emir hears efe");
+            awaitCodec(emir, "opus");
+            awaitCodec(efe, "opus");
+
+            // a second of speech in Opus comes out at the same level and pitch
+            efe.audio.speaker.clear();
+            int frames = 50;
+            for (int f = 0; f < frames; f++) emir.audio.say(tone(f * hello.length / 2));
+            java.io.ByteArrayOutputStream got = new java.io.ByteArrayOutputStream();
+            for (int f = 0; f < frames; f++) {
+                byte[] frame = efe.audio.speaker.poll(5, TimeUnit.SECONDS);
+                assertNotNull(frame, "frame " + f);
+                got.writeBytes(frame);
+            }
+            byte[] sent = new byte[frames * hello.length];
+            for (int f = 0; f < frames; f++) System.arraycopy(tone(f * hello.length / 2), 0, sent, f * hello.length, hello.length);
+            assertTrue(similar(sent, got.toByteArray()), "Opus keeps the sound close");
 
             emir.client.calls().setMuted(true);
             emir.await(Calls.Call::muted);
-            emir.audio.say(hello);
-            byte[] silence = efe.audio.speaker.poll(5, TimeUnit.SECONDS);
-            assertNotNull(silence);
-            assertArrayEquals(new byte[hello.length], silence, "muted: efe hears silence");
+            // the first muted frame may still carry the last few ms of sound (the codec's own delay)
+            byte[] silence = null;
+            for (int f = 0; f < 3; f++) {
+                emir.audio.say(hello);
+                silence = efe.audio.speaker.poll(5, TimeUnit.SECONDS);
+                assertNotNull(silence);
+            }
+            int loudest = 0;
+            for (short v : samples(silence)) loudest = Math.max(loudest, Math.abs(v));
+            assertTrue(loudest < 64, "muted: efe hears silence (loudest sample " + loudest + ")");
 
             efe.client.calls().hangUp();
             assertEquals(Calls.EndReason.HUNG_UP, efe.await(c -> c.state() == Calls.State.ENDED).reason());
             assertEquals(Calls.EndReason.HUNG_UP, emir.await(c -> c.state() == Calls.State.ENDED).reason());
             assertTrue(emir.audio.stopped && efe.audio.stopped, "microphones are released");
             assertNull(emir.client.calls().current());
+        }
+    }
+
+    /** Pictures as the test's screen sees them. */
+    static final class FakeScreen implements com.emirchat.call.CallVideo.View {
+        final BlockingQueue<com.emirchat.video.VideoFrame> remote = new LinkedBlockingQueue<>();
+        final BlockingQueue<Boolean> screens = new LinkedBlockingQueue<>();
+        final BlockingQueue<String> stops = new LinkedBlockingQueue<>();
+
+        @Override public void remote(com.emirchat.video.VideoFrame frame, boolean screen) {
+            screens.add(screen); // first: a test that saw the frame finds its kind already there
+            remote.add(frame);
+        }
+
+        @Override public void remoteStopped() { stops.add("stopped"); }
+    }
+
+    @Test
+    void videoFlowsAlongsideTheVoiceAndStops() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe")) {
+            befriend(emir, efe, "efe", "emir");
+            FakeScreen efeScreen = new FakeScreen();
+            efe.client.calls().videoView(efeScreen);
+            emir.client.calls().call("efe");
+            efe.await(c -> c.state() == Calls.State.RINGING);
+            efe.client.calls().accept();
+            emir.await(c -> c.state() == Calls.State.CONNECTED);
+            efe.await(c -> c.state() == Calls.State.CONNECTED);
+
+            // voice runs all the time, as in a real call: 50 packets a second each way
+            java.util.concurrent.atomic.AtomicBoolean talking = new java.util.concurrent.atomic.AtomicBoolean(true);
+            java.util.concurrent.atomic.AtomicInteger said = new java.util.concurrent.atomic.AtomicInteger();
+            Thread voices = Thread.ofPlatform().daemon().start(() -> {
+                for (int f = 0; talking.get(); f++) {
+                    emir.audio.say(tone(f * 320));
+                    said.incrementAndGet();
+                    efe.audio.say(tone(f * 320));
+                    try {
+                        Thread.sleep(20);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            });
+            try {
+                for (int i = 0; i < 100 && !emir.client.calls().videoPossible(); i++) Thread.sleep(20);
+                assertTrue(emir.client.calls().videoPossible(), "both sides are current versions");
+
+                emir.client.calls().startVideo(new com.emirchat.video.PatternSource(480, 360, 15, false));
+                com.emirchat.video.VideoFrame first = efeScreen.remote.poll(10, TimeUnit.SECONDS);
+                assertNotNull(first, "efe sees emir");
+                assertEquals(480, first.width());
+                assertEquals(360, first.height());
+                assertEquals(Boolean.FALSE, efeScreen.screens.poll(5, TimeUnit.SECONDS), "a camera, not a screen");
+
+                // three seconds of video next to the voice: nearly every frame arrives, so the relay's limit is kept
+                efeScreen.remote.clear();
+                efe.audio.speaker.clear();
+                int saidBefore = said.get();
+                Thread.sleep(3000);
+                int frames = efeScreen.remote.size();
+                int spoken = said.get() - saidBefore;
+                Thread.sleep(300); // the last frames still on their way
+                int heard = efe.audio.speaker.size();
+                assertTrue(frames >= 36, "about 15 frames a second came through: " + frames + " in 3 s");
+                assertTrue(heard >= spoken * 0.95, "and the voice was not crowded out: " + heard + " of " + spoken + " heard");
+                com.emirchat.video.VideoFrame latest = null;
+                for (com.emirchat.video.VideoFrame f : efeScreen.remote) latest = f;
+                assertNotNull(latest);
+
+                emir.client.calls().startVideo(new com.emirchat.video.PatternSource(1280, 800, 5, true));
+                efeScreen.screens.clear();
+                boolean sawScreen = false;
+                long until = System.currentTimeMillis() + 10_000;
+                while (!sawScreen && System.currentTimeMillis() < until) {
+                    sawScreen = Boolean.TRUE.equals(efeScreen.screens.poll(1, TimeUnit.SECONDS));
+                }
+                assertTrue(sawScreen, "switching to the screen is seen as a screen");
+
+                emir.client.calls().stopVideo();
+                assertNotNull(efeScreen.stops.poll(5, TimeUnit.SECONDS), "and efe learns it stopped");
+            } finally {
+                talking.set(false);
+                voices.join();
+            }
+        }
+    }
+
+    /** Connects a call from emir to efe with a stream of silence both ways, as a real call has. */
+    private static Thread connectTalking(Device emir, Device efe, java.util.concurrent.atomic.AtomicBoolean talking)
+            throws Exception {
+        emir.client.calls().call("efe");
+        efe.await(c -> c.state() == Calls.State.RINGING);
+        efe.client.calls().accept();
+        emir.await(c -> c.state() == Calls.State.CONNECTED);
+        efe.await(c -> c.state() == Calls.State.CONNECTED);
+        return Thread.ofPlatform().daemon().start(() -> {
+            for (int f = 0; talking.get(); f++) {
+                emir.audio.say(tone(f * 320));
+                efe.audio.say(tone(f * 320));
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        });
+    }
+
+    private static boolean awaitDirect(Device d, long millis) throws InterruptedException {
+        long until = System.currentTimeMillis() + millis;
+        while (System.currentTimeMillis() < until) {
+            if (d.client.calls().direct()) return true;
+            Thread.sleep(50);
+        }
+        return false;
+    }
+
+    @Test
+    void whenBothAllowItTheCallGoesDirectlyAndLeavesTheRelay() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe")) {
+            befriend(emir, efe, "efe", "emir");
+            emir.client.calls().directAllowed(u -> true);
+            efe.client.calls().directAllowed(u -> true);
+            java.util.concurrent.atomic.AtomicBoolean talking = new java.util.concurrent.atomic.AtomicBoolean(true);
+            Thread voices = connectTalking(emir, efe, talking);
+            try {
+                assertTrue(awaitDirect(emir, 10_000), "emir's side found a direct path");
+                assertTrue(awaitDirect(efe, 10_000), "and so did efe's");
+                long[] before = emir.client.calls().packetsSent();
+                efe.audio.speaker.clear();
+                Thread.sleep(1500);
+                long[] after = emir.client.calls().packetsSent();
+                assertTrue(after[0] - before[0] > 30, "audio goes directly: " + (after[0] - before[0]));
+                assertTrue(after[1] - before[1] <= 2, "and no longer through the server: " + (after[1] - before[1]));
+                assertTrue(efe.audio.speaker.size() > 30, "efe still hears emir: " + efe.audio.speaker.size());
+            } finally {
+                talking.set(false);
+                voices.join();
+            }
+        }
+    }
+
+    @Test
+    void byDefaultAnUnverifiedFriendIsNeverCalledDirectly() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe")) {
+            befriend(emir, efe, "efe", "emir");
+            efe.client.calls().directAllowed(u -> true); // efe would; emir keeps the default (verified only)
+            java.util.concurrent.atomic.AtomicBoolean talking = new java.util.concurrent.atomic.AtomicBoolean(true);
+            Thread voices = connectTalking(emir, efe, talking);
+            try {
+                assertFalse(awaitDirect(emir, 4000), "emir has not verified efe: no direct path");
+                assertFalse(efe.client.calls().direct(), "nor from efe's side: emir never answers or probes");
+                assertTrue(emir.client.calls().packetsSent()[0] == 0, "emir sent nothing directly");
+            } finally {
+                talking.set(false);
+                voices.join();
+            }
         }
     }
 
@@ -188,12 +368,43 @@ class CallIntegrationTest {
         }
     }
 
-    private static boolean close(byte[] a, byte[] b) {
-        for (int i = 0; i < a.length / 2; i++) {
-            int x = (short) ((a[2 * i] & 0xff) | (a[2 * i + 1] << 8));
-            int y = (short) ((b[2 * i] & 0xff) | (b[2 * i + 1] << 8));
-            if (Math.abs(x - y) > Math.max(16, Math.abs(x) / 16)) return false;
+    private static void awaitCodec(Device d, String codec) throws InterruptedException {
+        for (int i = 0; i < 100 && !codec.equals(d.client.calls().sendingCodec()); i++) Thread.sleep(50);
+        assertEquals(codec, d.client.calls().sendingCodec());
+    }
+
+    /**
+     * True if what was heard is what was said: the same level (within a quarter) and, at the best
+     * delay up to 10 ms (codecs and filters delay sound a little), nearly the same shape. The
+     * first 100 ms are skipped: a codec needs a moment to settle.
+     */
+    static boolean similar(byte[] said, byte[] heard) {
+        int skip = (int) (AudioDevice.SAMPLE_RATE / 10);
+        int maxLag = (int) (AudioDevice.SAMPLE_RATE / 100);
+        short[] a = samples(said);
+        short[] b = samples(heard);
+        int n = Math.min(a.length, b.length) - maxLag;
+        double best = -1;
+        for (int lag = 0; lag <= maxLag; lag++) {
+            double ab = 0, aa = 0, bb = 0;
+            for (int i = skip; i < n; i++) {
+                ab += a[i] * (double) b[i + lag];
+                aa += a[i] * (double) a[i];
+                bb += b[i + lag] * (double) b[i + lag];
+            }
+            if (aa > 0 && bb > 0) best = Math.max(best, ab / Math.sqrt(aa * bb));
         }
-        return true;
+        double la = 0, lb = 0;
+        for (int i = skip; i < n; i++) {
+            la += Math.abs(a[i]);
+            lb += Math.abs(b[i]);
+        }
+        return best > 0.9 && lb > 0.75 * la && lb < 1.25 * la;
+    }
+
+    private static short[] samples(byte[] pcm) {
+        short[] out = new short[pcm.length / 2];
+        for (int i = 0; i < out.length; i++) out[i] = (short) ((pcm[2 * i] & 0xff) | (pcm[2 * i + 1] << 8));
+        return out;
     }
 }

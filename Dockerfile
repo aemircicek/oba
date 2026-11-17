@@ -17,7 +17,7 @@ RUN groupadd --system securechat && useradd --system --gid securechat --home-dir
 COPY --from=build /src/target/secure-chat.jar /app/secure-chat.jar
 USER securechat
 VOLUME /data
-EXPOSE 5056
+EXPOSE 5056 5056/udp
 # A TCP connect is enough: the server answers every connection with its handshake.
 HEALTHCHECK --interval=60s --timeout=5s --start-period=20s --retries=3 \
     CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/5056' || exit 1
