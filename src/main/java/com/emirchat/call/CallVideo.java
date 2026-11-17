@@ -100,8 +100,15 @@ public final class CallVideo implements AutoCloseable {
 
     // ------------------------------------------------------------------ sending
 
-    /** Starts sending pictures from {@code s}, replacing what was being sent. */
+    /**
+     * Starts sending pictures from {@code s}, replacing what was being sent.
+     *
+     * @throws IllegalStateException if the call has ended (the camera is then never opened)
+     */
     synchronized void start(VideoSource s) {
+        // close() takes the same lock, so a call that ends while this runs ends after it, and stops
+        // the source; a call that has already ended must not open the camera at all.
+        if (closed) throw new IllegalStateException("The call has ended");
         stopSource(false);
         s.start(frame -> {
             if (closed || source != s) return;

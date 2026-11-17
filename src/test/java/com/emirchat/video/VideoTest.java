@@ -105,6 +105,25 @@ class VideoTest {
     }
 
     @Test
+    void aFloodOfUnfinishedFramesKeepsNothingBehind() {
+        VideoPackets.Assembler a = new VideoPackets.Assembler();
+        for (int f = 0; f < 100_000; f++) a.add(VideoPackets.split(f, new byte[2000], 0).get(0)); // never completed
+        assertTrue(a.waiting() <= 4, "waiting: " + a.waiting());
+    }
+
+    @Test
+    void aKeyFrameDeclaringAHugePictureIsRefusedBeforeDecoding() {
+        byte[] header = {0x10, 0, 0, (byte) 0x9d, 0x01, 0x2a, (byte) 0xff, 0x3f, (byte) 0xff, 0x3f, 0, 0};
+        assertTrue(Vp8.Decoder.tooLarge(header), "16383 x 16383");
+        byte[] fine = {0x10, 0, 0, (byte) 0x9d, 0x01, 0x2a, (byte) 0xe0, 0x01, 0x68, 0x01, 0, 0};
+        assertFalse(Vp8.Decoder.tooLarge(fine), "480 x 360");
+        assertFalse(Vp8.Decoder.tooLarge(new byte[] {0x11, 0, 0, 0, 0, 0, 0, 0, 0, 0}), "a delta frame has no size");
+        try (Vp8.Decoder decoder = new Vp8.Decoder()) {
+            assertNull(decoder.decode(header));
+        }
+    }
+
+    @Test
     void thePacerSpreadsPacketsAndRefusesWhatWouldWaitTooLong() {
         Pacer p = new Pacer(40, 40); // 25 ms apart, at most a second waiting
         long[] first = p.book(3, 0);

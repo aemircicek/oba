@@ -59,11 +59,18 @@ public final class VideoPackets {
      * otherwise everything waits for the next key frame, and {@link #needKeyFrame} says so.
      */
     public static final class Assembler {
-        private final TreeMap<Integer, byte[][]> pending = new TreeMap<>();
-        private final TreeMap<Integer, Integer> flagsOf = new TreeMap<>();
+        /** A frame being put together: its chunks so far and its flags (removed together, so nothing is left behind). */
+        private record Pending(byte[][] parts, int flags) {}
+
+        private final TreeMap<Integer, Pending> pending = new TreeMap<>();
         private int lastHanded = -1;
         private boolean broken = true; // nothing to build on until the first key frame
         private boolean askForKey;
+
+        /** How many frames are waiting for chunks (for tests: it never grows past a few). */
+        int waiting() {
+            return pending.size();
+        }
 
         /** @return frames now complete and decodable, oldest first (often none, often one) */
         public List<Frame> add(byte[] chunk) {
@@ -75,10 +82,9 @@ public final class VideoPackets {
             int count = b.get() & 0xff;
             int flags = b.get() & 0xff;
             if (count == 0 || index >= count || frame < 0 || (lastHanded >= 0 && frame <= lastHanded)) return List.of();
-            byte[][] parts = pending.computeIfAbsent(frame, k -> new byte[count][]);
-            if (parts.length != count) return List.of(); // contradicts what came before: ignore
-            parts[index] = Arrays.copyOfRange(chunk, HEADER, chunk.length);
-            flagsOf.put(frame, flags);
+            Pending p = pending.computeIfAbsent(frame, k -> new Pending(new byte[count][], flags));
+            if (p.parts().length != count || p.flags() != flags) return List.of(); // contradicts what came before: ignore
+            p.parts()[index] = Arrays.copyOfRange(chunk, HEADER, chunk.length);
             while (pending.size() > MAX_PENDING) { // the oldest will not be completed any more
                 pending.pollFirstEntry();
                 broken = true;
@@ -92,22 +98,20 @@ public final class VideoPackets {
             while (!pending.isEmpty()) {
                 var first = pending.firstEntry();
                 int number = first.getKey();
-                byte[][] parts = first.getValue();
+                byte[][] parts = first.getValue().parts();
                 for (byte[] p : parts) if (p == null) return out; // still waiting for this one
                 pending.pollFirstEntry();
-                int flags = flagsOf.remove(number);
+                int flags = first.getValue().flags();
                 boolean key = (flags & FLAG_KEY) != 0;
                 boolean follows = lastHanded >= 0 && number == lastHanded + 1;
                 if (!key && (broken || !follows)) {
                     broken = true; // a frame is missing: what follows cannot be decoded until a key frame
                     askForKey = true;
                     lastHanded = number;
-                    flagsOf.headMap(number, true).clear();
                     continue;
                 }
                 broken = false;
                 lastHanded = number;
-                flagsOf.headMap(number, true).clear();
                 int size = 0;
                 for (byte[] p : parts) size += p.length;
                 ByteBuffer data = ByteBuffer.allocate(size);
@@ -127,7 +131,6 @@ public final class VideoPackets {
         /** The sender started again (camera or screen switched on): forget what we had. */
         public void reset() {
             pending.clear();
-            flagsOf.clear();
             lastHanded = -1;
             broken = true;
             askForKey = false;

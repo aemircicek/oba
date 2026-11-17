@@ -134,6 +134,7 @@ public final class Vp8 {
             if (codec == null) throw new IllegalStateException("This FFmpeg has no VP8 decoder");
             context = avcodec_alloc_context3(codec);
             context.thread_count(1);
+            context.max_pixels((long) MAX_SIDE * MAX_SIDE); // libavcodec refuses larger pictures itself
             if (avcodec_open2(context, codec, (AVDictionary) null) < 0) {
                 close();
                 throw new IllegalStateException("The VP8 decoder did not start");
@@ -144,7 +145,7 @@ public final class Vp8 {
 
         /** @return the picture, or null if the data is not a decodable frame (it is never trusted) */
         public VideoFrame decode(byte[] data) {
-            if (data.length == 0 || av_new_packet(packet, data.length) < 0) return null;
+            if (data.length == 0 || tooLarge(data) || av_new_packet(packet, data.length) < 0) return null;
             packet.data().put(data);
             try {
                 if (avcodec_send_packet(context, packet) < 0) return null;
@@ -160,6 +161,19 @@ public final class Vp8 {
             } finally {
                 av_packet_unref(packet);
             }
+        }
+
+        /**
+         * True for a key frame that declares a picture larger than we accept, read from its header
+         * (RFC 6386, 9.1) before the decoder allocates anything for it.
+         */
+        static boolean tooLarge(byte[] d) {
+            boolean key = d.length >= 10 && (d[0] & 1) == 0;
+            if (!key) return false;
+            if ((d[3] & 0xff) != 0x9d || (d[4] & 0xff) != 0x01 || (d[5] & 0xff) != 0x2a) return true; // not VP8
+            int width = ((d[6] & 0xff) | (d[7] & 0xff) << 8) & 0x3fff;
+            int height = ((d[8] & 0xff) | (d[9] & 0xff) << 8) & 0x3fff;
+            return width > MAX_SIDE || height > MAX_SIDE;
         }
 
         @Override
