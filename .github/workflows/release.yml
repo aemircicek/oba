@@ -20,9 +20,6 @@ permissions:
   id-token: write      # sign attestations with the workflow's identity
   attestations: write
 
-env:
-  WIN_UPGRADE_UUID: 3b9f6c1e-6a52-4f0e-9a51-6c0f2c7e5a11   # never change: lets new versions replace old ones
-
 jobs:
   package:
     strategy:
@@ -81,45 +78,7 @@ jobs:
         env:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
           PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
-          VERSION="${TAG#v}"               # file names keep a suffix such as -rc.1; installers need plain numbers
-          mkdir -p dist input
-          cp target/secure-chat.jar input/
-          cp target/secure-chat.jar "dist/Oba-${VERSION}-${PLATFORM}.jar"
-          COMMON=(--name Oba --input input --main-jar secure-chat.jar --main-class com.emirchat.Main
-                  --app-version "${VERSION%%-*}" --vendor "Emir Cicek" --copyright "(c) 2026 Emir Cicek, MIT License"
-                  --description "End-to-end encrypted messenger")
-          INSTALLER=(--about-url "https://github.com/aemircicek/oba")   # not valid for app-image
-          # Faster starts (AppCDS): the JVM writes a class archive next to the app on the first run and
-          # maps it on later ones. Only where the app folder belongs to the user (Windows per-user
-          # install and the portable zip); a macOS bundle must not change after signing and /opt is
-          # read-only. ($APPDIR is expanded by jpackage's launcher, not by this shell.)
-          CDS=(--java-options '-XX:+AutoCreateSharedArchive' --java-options '-XX:SharedArchiveFile=$APPDIR/oba.jsa')
-          case "$RUNNER_OS" in
-            Windows)
-              jpackage "${COMMON[@]}" "${CDS[@]}" "${INSTALLER[@]}" --type exe --icon packaging/windows/oba.ico --dest pkg \
-                --win-per-user-install --win-menu --win-menu-group Oba --win-shortcut --win-shortcut-prompt \
-                --win-dir-chooser --win-upgrade-uuid "$WIN_UPGRADE_UUID" --file-associations packaging/scbackup.properties
-              cp pkg/*.exe "dist/Oba-${VERSION}-${PLATFORM}.exe"
-              jpackage "${COMMON[@]}" "${CDS[@]}" --type app-image --icon packaging/windows/oba.ico --dest portable
-              ZIP="dist/Oba-${VERSION}-${PLATFORM}-portable.zip"
-              if command -v 7z > /dev/null; then (cd portable && 7z a -tzip "../$ZIP" Oba > /dev/null)
-              else powershell -NoProfile -Command "Compress-Archive -Path portable/Oba -DestinationPath '$ZIP'"; fi ;;
-            macOS)
-              RES=()
-              if [ -f packaging/macos/resources/Info.plist ]; then RES=(--resource-dir packaging/macos/resources); fi
-              jpackage "${COMMON[@]}" "${INSTALLER[@]}" ${RES[@]+"${RES[@]}"} --type dmg --icon packaging/macos/oba.icns --dest pkg \
-                --mac-package-identifier org.oba.app --mac-package-name Oba \
-                --file-associations packaging/scbackup.properties
-              cp pkg/*.dmg "dist/Oba-${VERSION}-${PLATFORM}.dmg" ;;
-            Linux)
-              jpackage "${COMMON[@]}" "${INSTALLER[@]}" --type deb --icon packaging/linux/oba.png --dest pkg \
-                --linux-package-name oba --linux-shortcut --linux-menu-group Network --linux-app-category net \
-                --file-associations packaging/scbackup.properties
-              cp pkg/*.deb "dist/Oba-${VERSION}-${PLATFORM}.deb" ;;
-          esac
-          ls -l dist
+        run: bash packaging/package.sh "${TAG#v}" "$PLATFORM"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:

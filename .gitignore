@@ -5,3 +5,12 @@ out/
 .idea/
 .vscode/
 .DS_Store
+# packaging (packaging/package.sh)
+/dist/
+/img/
+/input/
+/pkg/
+/portable/
+/cds-train.log
+packaging/macos/oba.icns
+packaging/macos/resources/
