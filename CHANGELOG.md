@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+Life at the camp: cameras and screens at the fire, amber messages, nudges, a sandstorm curtain,
+a scorpion for every key, the constellation of trust, and a look at what the server actually
+carries. The server needs no update. 3.5 shows the new kinds of message as "update to see it";
+versions before 3.5 report them as messages that could not be decrypted.
+
+### Added
+- **Cameras and screens in voice rooms**: anyone at the fire can turn on their camera or share
+  their screen; it shows large in the middle of the scene. End-to-end encrypted under the room's
+  keys, paced to fit beside the voice in the relay's limit, so **no server change**. Versions
+  without it skip the pictures and keep hearing everyone.
+- **Amber messages** (`/amber 2027-01-01 text`, `/amber 3d text`, or `/kehribar` in Turkish):
+  the message shows as a stone of amber with a scorpion caught inside and its date on it, and
+  cracks open on the day. Not a lock: the text is already on the recipient's computer, encrypted
+  like any message, only hidden; the app says so. Previews and notifications keep it hidden too.
+- **Nudges** (`/nudge`, `/dürt`, direct chats only): a scorpion walks over to the other person's
+  composer and stings it. At most one per friend every ten seconds; Settings → Nudges turns
+  them off.
+- **Sandstorm** (⌘⇧H / Ctrl+Shift+H, or by itself when you leave the window if you choose so in
+  the settings): everything blurs behind blowing sand until you move the mouse or press a key.
+  A curtain against looks over your shoulder, not a lock, and it says so.
+- **A scorpion for every key**: next to each fingerprint in the contact and key-changed dialogs,
+  a scorpion drawn from the key (colour, shell, claws, tail). The same key always gives the same
+  scorpion; a changed key shows a stranger.
+- **Constellation of trust** (Friends → Sky): friends as stars around you; verified ones bright
+  and joined to you, unverified faint, a changed key flickering red. Click a star to open the chat.
+- **Watch it decrypt** (a message's menu): the exact bytes the server stored and passed on for
+  that message, the layers that protect it (X3DH, Double Ratchet, AES-GCM; sender keys in groups)
+  and the text settling out of the noise. Kept in memory only, for this session's messages.
+
+### Changed
+- **Faster starts on macOS and Linux**: the installers carry class-data-sharing archives (the
+  JDK's own and one of Oba's classes, written by a training run while packaging), so classes load
+  about 3.7 times faster. On Windows the archive the app writes on its first start now actually
+  works: the bundled runtime lacked the base archive it needs. The macOS download grows by about
+  20 MB.
+- Packaging moved into `packaging/package.sh`, and CI builds the installers on all three systems
+  on every change (nothing is uploaded), so a broken package shows before a release.
+
+### Fixed
+- A voice room's packets are sealed and sent in one step, so a burst (now: video) can no longer
+  overtake audio and be dropped as a replay.
+
 ## 3.5.0 (2026-11-22)
 
 Video calls and screen sharing, Opus for calls and voice rooms, a gentler first start, an

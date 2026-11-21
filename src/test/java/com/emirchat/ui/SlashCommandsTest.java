@@ -79,4 +79,24 @@ class SlashCommandsTest {
         assertEquals(SlashCommands.NAMES, SlashCommands.complete("/"));
         assertEquals(List.of(), SlashCommands.complete("/poll x"));
     }
+
+    @Test
+    void amberTakesADateOrASpanAndText() {
+        long now = java.time.LocalDate.of(2026, 11, 22).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        var dated = (SlashCommands.Amber) SlashCommands.amber("2027-01-01 Mutlu yıllar", now);
+        assertEquals(java.time.LocalDate.of(2027, 1, 1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                dated.capsule().opensAt());
+        assertEquals("Mutlu yıllar", dated.capsule().text());
+        var turkish = (SlashCommands.Amber) SlashCommands.amber("31.12.2026 yılbaşı", now);
+        assertEquals(java.time.LocalDate.of(2026, 12, 31).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                turkish.capsule().opensAt());
+        var span = (SlashCommands.Amber) SlashCommands.amber("3g sürpriz", now);
+        assertEquals(now + 3 * 86_400_000L, span.capsule().opensAt());
+        assertInstanceOf(SlashCommands.Problem.class, SlashCommands.amber("2020-01-01 geçmiş", now), "not in the past");
+        assertInstanceOf(SlashCommands.Problem.class, SlashCommands.amber("2027-01-01", now), "needs text");
+        assertInstanceOf(SlashCommands.Problem.class, SlashCommands.amber("2027-02-30 x", now), "a real date");
+        assertInstanceOf(SlashCommands.Problem.class, SlashCommands.amber("2040-01-01 x", now), "at most ten years");
+        assertInstanceOf(SlashCommands.Nudge.class, run("/dürt"));
+        assertInstanceOf(SlashCommands.Amber.class, run("/kehribar 1h x"));
+    }
 }

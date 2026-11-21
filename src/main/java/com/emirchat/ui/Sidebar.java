@@ -345,10 +345,16 @@ final class Sidebar {
         }
     }
 
-    /** The question of a stored poll, or null if the text is not one. */
-    static String pollQuestion(String text) {
+    /**
+     * How a stored poll or amber message is previewed (in the chat list, notifications), or null
+     * for an ordinary text. An amber message never shows its text before its date.
+     */
+    static String specialPreview(String text) {
         com.emirchat.chat.Poll p = com.emirchat.chat.Poll.fromStored(text);
-        return p == null ? null : p.question();
+        if (p != null) return "📊 " + p.question();
+        com.emirchat.chat.Capsule c = com.emirchat.chat.Capsule.fromStored(text);
+        if (c == null) return null;
+        return c.open(System.currentTimeMillis()) ? "🟠 " + Markdown.plain(c.text()) : "🟠 " + I18n.t("amber.preview", UiKit.time(c.opensAt()));
     }
 
     /** Voice messages are files named voice-….wav (see ConversationView#startRecording). */
@@ -374,7 +380,7 @@ final class Sidebar {
         }
         String last = s == null ? "" : s.lastText().equals(History.DELETED_TEXT) ? I18n.t("conv.deleted")
                 : isVoiceName(s.lastText()) ? "🎤 " + I18n.t("voice.message")
-                : pollQuestion(s.lastText()) != null ? "📊 " + pollQuestion(s.lastText())
+                : specialPreview(s.lastText()) != null ? specialPreview(s.lastText())
                 : Markdown.plain(s.lastText());
         String preview = s == null ? I18n.t("main.noMessages")
                 : (s.lastSender().equals(client.username()) ? I18n.t("conv.you") + ": " : group ? s.lastSender() + ": " : "") + last;
@@ -460,7 +466,15 @@ final class Sidebar {
                         new VBox(2, UiKit.label(to, "row-title"), UiKit.label(I18n.t("main.waitingAnswer"), "row-sub")), cancel));
             }
         }
-        main.list.getChildren().add(heading(I18n.t("main.friendsHeading", friends.friends().size())));
+        HBox friendsHeading = heading(I18n.t("main.friendsHeading", friends.friends().size()));
+        if (!friends.friends().isEmpty()) {
+            Button sky = new Button("✦ " + I18n.t("sky.button"));
+            sky.getStyleClass().addAll("small", "link");
+            sky.setId("open-sky");
+            sky.setOnAction(e -> openSky(friends));
+            friendsHeading.getChildren().addAll(UiKit.grow(), sky);
+        }
+        main.list.getChildren().add(friendsHeading);
         if (friends.friends().isEmpty()) {
             Label none = UiKit.label(I18n.t("main.noFriends"), "caption");
             none.setWrapText(true);
@@ -484,7 +498,30 @@ final class Sidebar {
         }
     }
 
-    private static Node heading(String text) {
+    /** The trust constellation of all friends, in a dialog. */
+    private void openSky(Packet.FriendList friends) {
+        ChatClient c = main.session.client();
+        List<Constellation.Star> stars = friends.friends().stream().map(f -> new Constellation.Star(f.username(),
+                c.keyChanged(f.username()) ? Constellation.Trust.CHANGED
+                        : c.isVerified(f.username()) ? Constellation.Trust.VERIFIED : Constellation.Trust.UNVERIFIED,
+                f.online())).toList();
+        javafx.scene.canvas.Canvas canvas = Constellation.sky(c.username(), stars, name -> {
+            main.overlay.close();
+            main.open(AccountSession.dm(name));
+        });
+        Label legend = UiKit.label(I18n.t("sky.legend"), "caption");
+        legend.setWrapText(true);
+        legend.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        Button close = new Button(I18n.t("common.close"));
+        close.setId("sky-close");
+        close.setOnAction(e -> main.overlay.close());
+        VBox box = Overlay.dialog(I18n.t("sky.title"), canvas, legend, new HBox(UiKit.grow(), close));
+        box.setId("sky-dialog");
+        box.setMaxWidth(Constellation.WIDTH + 60);
+        main.overlay.show(box);
+    }
+
+    private static HBox heading(String text) {
         HBox h = new HBox(UiKit.label(text, "overline"));
         h.getStyleClass().add("list-heading");
         return h;

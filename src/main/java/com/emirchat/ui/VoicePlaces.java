@@ -40,7 +40,7 @@ final class VoicePlaces {
                 topic = "";
             }
             String line = s == null ? "" : (s.lastSender().equals(c.username()) ? I18n.t("conv.you") : s.lastSender()) + ": "
-                    + (Sidebar.pollQuestion(s.lastText()) != null ? "📊 " + Sidebar.pollQuestion(s.lastText()) : Markdown.plain(s.lastText()));
+                    + (Sidebar.specialPreview(s.lastText()) != null ? Sidebar.specialPreview(s.lastText()) : Markdown.plain(s.lastText()));
             oases.add(new CommunityMap.Oasis(ch.id(), ConversationView.channelTitle(ch), topic, line,
                     main.sidebarUi.unread(conv, summaries), s == null ? 0 : s.lastAt(), main.voiceRooms.getOrDefault(ch.id(), List.of()).size()));
         }

@@ -36,6 +36,14 @@ public final class CallVideo implements AutoCloseable {
     /** We ask for a key frame at most this often. */
     static final long KEY_REQUEST_GAP_MS = 500;
 
+    /** How video packets are sealed and opened: a call's video keys, or a voice room's keys. */
+    public interface Crypto {
+        byte[] seal(byte[] body);
+
+        /** The body, or null if the packet is not ours. */
+        byte[] open(byte[] packet);
+    }
+
     /** Sends one sealed video packet (the caller adds the call id and hands it to the relay). */
     public interface Out {
         void send(byte[] sealed);
@@ -56,7 +64,7 @@ public final class CallVideo implements AutoCloseable {
         default void localStopped() {}
     }
 
-    private final CallCrypto crypto;
+    private final Crypto crypto;
     private final Out out;
     private volatile View view = new View() {};
     private final Pacer pacer = new Pacer(PACKETS_PER_SECOND, 2 * PACKETS_PER_SECOND);
@@ -82,6 +90,14 @@ public final class CallVideo implements AutoCloseable {
     private long lastKeyRequest;
 
     CallVideo(CallCrypto crypto, Out out) {
+        this(new Crypto() {
+            @Override public byte[] seal(byte[] body) { return crypto.seal(body); }
+
+            @Override public byte[] open(byte[] packet) { return crypto.open(packet); }
+        }, out);
+    }
+
+    CallVideo(Crypto crypto, Out out) {
         this.crypto = crypto;
         this.out = out;
         sender.scheduleWithFixedDelay(this::checkRemote, 1, 1, TimeUnit.SECONDS);

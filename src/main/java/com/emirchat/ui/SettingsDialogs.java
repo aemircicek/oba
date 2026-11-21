@@ -103,6 +103,10 @@ final class SettingsDialogs {
             toggles.getChildren().add(appToggle(I18n.t("settings.keepRunning"), I18n.t("settings.keepRunningHint"),
                     "setting-keep-running", AppPrefs.keepRunning(), AppPrefs::setKeepRunning));
         }
+        toggles.getChildren().add(appToggle(I18n.t("settings.nudges"), I18n.t("settings.nudgesHint"),
+                "setting-nudges", AppPrefs.nudges(), AppPrefs::setNudges));
+        toggles.getChildren().add(appToggle(I18n.t("settings.storm"), I18n.t("settings.stormHint", Sandstorm.SHORTCUT_TEXT),
+                "setting-storm", AppPrefs.stormOnBlur(), AppPrefs::setStormOnBlur));
         toggles.getChildren().add(appToggle(I18n.t("settings.updates"), I18n.t("settings.updatesHint"),
                 "setting-updates", AppPrefs.checkUpdates(), AppPrefs::setCheckUpdates));
         if (Autostart.supported()) {

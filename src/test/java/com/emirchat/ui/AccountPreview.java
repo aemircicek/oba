@@ -251,6 +251,44 @@ public final class AccountPreview {
         Thread.sleep(900);
         snap("05d-rich");
 
+        // 3.6: an amber message from efe, opening in three days (a stone with the date on it)
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.TYPING, null, "0");
+        efe.client.sendCapsule(toEmir, new com.emirchat.chat.Capsule(System.currentTimeMillis() + 3L * 86_400_000L,
+                "Doğum günün kutlu olsun! 🎂"), 0, ChatClient.newMessageId());
+        Thread.sleep(900);
+        snap("05p-amber");
+
+        // efe nudges emir: the scorpion caught as it stings the composer
+        System.setProperty("securechat.motion", "force");
+        efe.client.sendAction(toEmir, ChatClient.ActionKind.NUDGE, null, "");
+        Thread.sleep(1150);
+        snap("05q-nudge");
+        Thread.sleep(1300);
+        System.clearProperty("securechat.motion");
+
+        // watching a message decrypt: the bytes the server carried for efe's last text
+        ChatClient.Sent plain = efe.client.send(toEmir, "Planı yarın sabah gönderiyorum.", 0, null);
+        Thread.sleep(700);
+        fx(() -> {
+            MainView main = (MainView) find(".main-view").getUserData();
+            main.overlay.show(DecryptView.dialog(main.session.client().sealed(plain.messageId()),
+                    "Planı yarın sabah gönderiyorum.", main.overlay::close));
+            return null;
+        });
+        waitFor("#decrypt-dialog");
+        Thread.sleep(2500); // the letters have settled
+        snap("05r-decrypt");
+        fx(() -> { ((Button) find("#decrypt-done")).fire(); return null; });
+        Thread.sleep(300);
+
+        // the sandstorm over everything
+        fx(() -> { ((MainView) find(".main-view").getUserData()).storm.raise(); return null; });
+        waitFor("#sandstorm");
+        Thread.sleep(700);
+        snap("05s-sandstorm");
+        fx(() -> { ((MainView) find(".main-view").getUserData()).storm.clear(); return null; });
+        Thread.sleep(500);
+
         // Markdown with a code block, the hover tools, :emoji suggestions, the picker and the image viewer
         efe.client.send(toEmir, "**Not:** son hali `kat-plani.png` dosyasında.\n```java\nint oda = 4; // salon dahil\nString ad = \"MobilCAD\";\n```\n> Bir de şuna bak: https://github.com/aemircicek", 0, null);
         Thread.sleep(900);
@@ -343,6 +381,16 @@ public final class AccountPreview {
         snap("06-verify-contact");
         fx(() -> { ((Button) find("#confirm-verify")).fire(); return null; });
         Thread.sleep(500);
+
+        // the constellation of trust: efe verified (bright, joined), ayse not yet (faint)
+        fx(() -> { ((ToggleButton) find("#tab-friends")).setSelected(true); return null; });
+        waitFor("#open-sky");
+        fx(() -> { ((Button) find("#open-sky")).fire(); return null; });
+        waitFor("#sky-dialog");
+        Thread.sleep(600);
+        snap("06b-sky");
+        fx(() -> { ((Button) find("#sky-close")).fire(); return null; });
+        Thread.sleep(300);
 
         // A group
         fx(() -> { ((ToggleButton) find("#tab-chats")).setSelected(true); return null; });
@@ -517,6 +565,12 @@ public final class AccountPreview {
         efeNew.client.voice().moveTo(0.86, 0.74);
         Thread.sleep(2200);
         snap("15i-campfire-apart");
+        // ayse shares her screen with the fire (a test picture: no real screen)
+        ayse.client.voice().startVideo(new com.emirchat.video.PatternSource(1280, 800, 5, true));
+        Thread.sleep(3500);
+        snap("15l-campfire-screen");
+        ayse.client.voice().stopVideo();
+        Thread.sleep(800);
         fx(() -> { ((Button) find("#campfire-back")).fire(); return null; });
         Thread.sleep(500);
         snap("15g-voice");

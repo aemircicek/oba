@@ -110,6 +110,14 @@ public final class VoiceChannels implements AutoCloseable {
     private static final byte OPUS = 2;
     /** "I can play Opus", sent every second. */
     private static final byte CAN_OPUS = 3;
+    /** A piece of someone's camera or screen (see {@link RoomVideo}); older versions skip it. */
+    private static final byte VIDEO = 4;
+    /**
+     * Sealing and handing to the network happen under this lock, so packets leave in the order of
+     * their sequence numbers: the receiver drops one that arrives after a later one as a replay.
+     */
+    private final Object sendLock = new Object();
+    private final RoomVideo video;
     private final Map<String, double[]> places = new HashMap<>();
     private int heartbeat;
 
@@ -141,7 +149,29 @@ public final class VoiceChannels implements AutoCloseable {
         }
         byte[] body = java.nio.ByteBuffer.allocate(5).put(PLACE)
                 .putShort((short) Math.round(p[0] * 65535)).putShort((short) Math.round(p[1] * 65535)).array();
-        transport.audio(group, s.seal(group, me, body));
+        send(group, s, body);
+    }
+
+    /** Seals and sends one packet, in sequence order (see {@link #sendLock}). */
+    private void send(long group, VoiceCrypto.Sender s, byte[] body) {
+        synchronized (sendLock) {
+            transport.audio(group, s.seal(group, me, body));
+        }
+    }
+
+    /** A video body from {@link RoomVideo}: sealed under our current key, if we are in a room. */
+    private void sendVideo(byte[] body) {
+        VoiceCrypto.Sender s;
+        long group;
+        synchronized (this) {
+            if (groupId == 0 || sender == null) return;
+            s = sender;
+            group = groupId;
+        }
+        byte[] packet = new byte[body.length + 1];
+        packet[0] = VIDEO;
+        System.arraycopy(body, 0, packet, 1, body.length);
+        send(group, s, packet);
     }
 
     private void sendCanOpus() {
@@ -152,7 +182,7 @@ public final class VoiceChannels implements AutoCloseable {
             s = sender;
             group = groupId;
         }
-        transport.audio(group, s.seal(group, me, new byte[] {CAN_OPUS}));
+        send(group, s, new byte[] {CAN_OPUS});
     }
 
     /** The error a join reports when the server is older than voice rooms. */
@@ -207,6 +237,35 @@ public final class VoiceChannels implements AutoCloseable {
         this.devices = devices;
         this.busy = busy;
         this.listener = listener;
+        this.video = new RoomVideo(me, this::sendVideo);
+    }
+
+    // ------------------------------------------------------------------ video
+
+    /** Where the room's pictures are shown. */
+    public void videoView(RoomVideo.View view) {
+        video.view(view);
+    }
+
+    /**
+     * Sends our camera or screen to the room.
+     *
+     * @throws IllegalStateException if we are not in a room, or the source cannot start
+     */
+    public void startVideo(com.emirchat.video.VideoSource source) {
+        synchronized (this) {
+            if (groupId == 0) throw new IllegalStateException("Not in a voice room");
+        }
+        video.start(source);
+    }
+
+    public void stopVideo() {
+        video.stop();
+    }
+
+    /** The room's pictures, both ways. */
+    public RoomVideo video() {
+        return video;
     }
 
     public synchronized State state() {
@@ -272,9 +331,11 @@ public final class VoiceChannels implements AutoCloseable {
     public void leave() {
         long group;
         AudioDevice d;
+        List<String> was;
         synchronized (this) {
             group = groupId;
             if (group == 0) return;
+            was = participants;
             d = device;
             device = null;
             groupId = 0;
@@ -294,6 +355,8 @@ public final class VoiceChannels implements AutoCloseable {
             else rooms.put(group, List.copyOf(left));
         }
         receiver.clear(); // keys of a room we left are of no further use
+        video.stop();
+        for (String p : was) video.forget(p);
         if (d != null) d.stop();
         try {
             transport.leave(group);
@@ -361,6 +424,7 @@ public final class VoiceChannels implements AutoCloseable {
                         queues.remove(gone);
                         loudAt.remove(gone);
                         forgetCodecs(gone);
+                        video.forget(gone);
                     }
                 }
                 participants = List.copyOf(people);
@@ -384,6 +448,7 @@ public final class VoiceChannels implements AutoCloseable {
                     queues.remove(p);
                     loudAt.remove(p);
                     forgetCodecs(p);
+                    video.forget(p);
                     rotate = true;
                 }
             }
@@ -448,6 +513,10 @@ public final class VoiceChannels implements AutoCloseable {
             }
             return;
         }
+        if (plain[0] == VIDEO) {
+            video.receive(from, java.util.Arrays.copyOfRange(plain, 1, plain.length));
+            return;
+        }
         byte[] pcm;
         if (plain[0] == CAN_OPUS || plain[0] == OPUS) {
             OpusCodec.Decoder decoder;
@@ -499,7 +568,7 @@ public final class VoiceChannels implements AutoCloseable {
         byte[] body = new byte[coded.length + 1];
         body[0] = kind;
         System.arraycopy(coded, 0, body, 1, coded.length);
-        transport.audio(group, s.seal(group, me, body));
+        send(group, s, body);
     }
 
     /**
@@ -613,6 +682,7 @@ public final class VoiceChannels implements AutoCloseable {
     @Override
     public void close() {
         leave();
+        video.close();
         mixer.shutdownNow();
     }
 }

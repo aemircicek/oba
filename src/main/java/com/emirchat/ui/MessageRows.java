@@ -58,6 +58,8 @@ final class MessageRows {
             body = fileCard(m.file());
         } else if (com.emirchat.chat.Poll.fromStored(m.text()) != null) {
             body = pollCard(m, com.emirchat.chat.Poll.fromStored(m.text()));
+        } else if (com.emirchat.chat.Capsule.fromStored(m.text()) != null) {
+            body = amberCard(m, com.emirchat.chat.Capsule.fromStored(m.text()));
         } else if (Markdown.hasFormatting(m.text())) {
             body = richText(m.text());
         } else {
@@ -198,7 +200,15 @@ final class MessageRows {
             pinItem.setOnAction(e -> chat.side.pin(m, !pinned));
             menu.getItems().add(pinItem);
         }
-        boolean isPoll = com.emirchat.chat.Poll.isStored(m.text());
+        // a poll or an amber message keeps its stored form to itself: no copying or editing it
+        boolean isPoll = com.emirchat.chat.Poll.isStored(m.text()) || com.emirchat.chat.Capsule.isStored(m.text());
+        com.emirchat.client.ChatClient.Sealed sealed = chat.session.client().sealed(m.uid());
+        if (sealed != null && !m.deleted()) {
+            MenuItem watch = new MenuItem(I18n.t("decrypt.menu"));
+            watch.setId("menu-decrypt");
+            watch.setOnAction(e -> chat.actions.dialog(close -> DecryptView.dialog(sealed, plainOf(m), close)));
+            menu.getItems().add(watch);
+        }
         if (m.file() == null && !isPoll) {
             MenuItem copy = new MenuItem(I18n.t("conv.copy"));
             copy.setOnAction(e -> {
@@ -221,6 +231,13 @@ final class MessageRows {
             menu.getItems().add(delete);
         }
         return menu;
+    }
+
+    /** The message as a reader sees it (an unopened amber message stays hidden here too). */
+    private static String plainOf(History.Message m) {
+        if (m.file() != null) return "📎 " + m.file().name();
+        String special = Sidebar.specialPreview(m.text());
+        return special != null ? special : Markdown.plain(m.text());
     }
 
     void applyStatus(Label l, int status) {
@@ -419,6 +436,89 @@ final class MessageRows {
             });
         }
         return t;
+    }
+
+    /**
+     * An amber message: until its date a stone of amber with a scorpion caught inside and the date
+     * on it; from then on the text. If the date comes while the chat is open, the stone cracks.
+     */
+    private Node amberCard(History.Message m, com.emirchat.chat.Capsule capsule) {
+        VBox card = new VBox(6);
+        card.getStyleClass().add("amber-card");
+        card.setId("amber-" + m.id());
+        card.setMinWidth(240);
+        long now = System.currentTimeMillis();
+        if (capsule.open(now)) {
+            card.getChildren().add(openedAmber(capsule, false));
+            return card;
+        }
+        StackPane stone = new StackPane();
+        stone.getStyleClass().add("amber-stone");
+        stone.setMinHeight(86);
+        Label insect = UiKit.label("🦂", "amber-scorpion");
+        insect.setRotate(-18);
+        Label date = UiKit.label(I18n.t("amber.opensOn", UiKit.time(capsule.opensAt()) + " " + UiKit.clock(capsule.opensAt())), "amber-date");
+        StackPane.setAlignment(date, Pos.BOTTOM_CENTER);
+        StackPane.setMargin(date, new Insets(0, 0, 6, 0));
+        stone.getChildren().addAll(insect, date);
+        Label note = UiKit.label(I18n.t(m.outgoing() ? "amber.sentNote" : "amber.receivedNote"), "amber-note");
+        note.setWrapText(true);
+        card.getChildren().addAll(stone, note);
+        long wait = capsule.opensAt() - now;
+        if (wait < 24L * 3600 * 1000) {
+            // the date comes today: crack the stone then, if this row is still on screen
+            javafx.animation.PauseTransition until = new javafx.animation.PauseTransition(javafx.util.Duration.millis(Math.max(1, wait)));
+            until.setOnFinished(e -> {
+                if (card.getScene() == null) return;
+                crack(card, stone, capsule);
+            });
+            until.play();
+        }
+        return card;
+    }
+
+    private Node openedAmber(com.emirchat.chat.Capsule capsule, boolean fresh) {
+        Label head = UiKit.label("🟠 " + I18n.t(fresh ? "amber.justOpened" : "amber.opened", UiKit.time(capsule.opensAt())), "amber-kind");
+        Node text = Markdown.hasFormatting(capsule.text()) ? richText(capsule.text()) : wrapped(capsule.text());
+        return new VBox(6, head, text);
+    }
+
+    private static Label wrapped(String text) {
+        Label l = UiKit.label(text, "bubble-text");
+        l.setWrapText(true);
+        return l;
+    }
+
+    /** The stone splits in two and falls apart; the text shows underneath. */
+    private void crack(VBox card, StackPane stone, com.emirchat.chat.Capsule capsule) {
+        Node opened = openedAmber(capsule, true);
+        if (!Motion.enabled()) {
+            card.getChildren().setAll(opened);
+            return;
+        }
+        javafx.scene.shape.SVGPath line = new javafx.scene.shape.SVGPath();
+        line.setContent("M 10 0 L 22 18 L 14 30 L 30 52 L 22 70 L 34 86");
+        line.getStyleClass().add("amber-crack");
+        line.setStrokeWidth(2);
+        line.setFill(null);
+        stone.getChildren().add(line);
+        javafx.animation.FadeTransition hide = new javafx.animation.FadeTransition(javafx.util.Duration.millis(450), stone);
+        hide.setFromValue(1);
+        hide.setToValue(0);
+        javafx.animation.ScaleTransition burst = new javafx.animation.ScaleTransition(javafx.util.Duration.millis(450), stone);
+        burst.setToX(1.08);
+        burst.setToY(0.9);
+        javafx.animation.PauseTransition hold = new javafx.animation.PauseTransition(javafx.util.Duration.millis(500));
+        javafx.animation.SequentialTransition all = new javafx.animation.SequentialTransition(hold,
+                new javafx.animation.ParallelTransition(hide, burst));
+        all.setOnFinished(e -> {
+            card.getChildren().setAll(opened);
+            opened.setOpacity(0);
+            javafx.animation.FadeTransition show = new javafx.animation.FadeTransition(javafx.util.Duration.millis(350), opened);
+            show.setToValue(1);
+            show.play();
+        });
+        all.play();
     }
 
     /** A poll: the question, each answer as a bar filled by its share of the votes, and the total. */

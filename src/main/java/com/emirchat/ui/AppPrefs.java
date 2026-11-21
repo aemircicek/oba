@@ -157,4 +157,22 @@ final class AppPrefs {
         }
         stage.setMaximized(NODE.getBoolean("window.maximized", false));
     }
+
+    /** Let friends nudge us (a scorpion walks over the composer). */
+    static boolean nudges() {
+        return NODE.getBoolean("nudges", true);
+    }
+
+    static void setNudges(boolean on) {
+        NODE.putBoolean("nudges", on);
+    }
+
+    /** Raise the sandstorm by itself when the window loses focus. */
+    static boolean stormOnBlur() {
+        return NODE.getBoolean("storm-on-blur", false);
+    }
+
+    static void setStormOnBlur(boolean on) {
+        NODE.putBoolean("storm-on-blur", on);
+    }
 }

@@ -63,6 +63,8 @@ public final class ChatClient implements AutoCloseable {
     private static final int KIND_POLL = 3;
     /** 3.4: a text inside the thread of the message it replies to. */
     private static final int KIND_THREAD = 4;
+    /** An amber message (3.6): hidden until its date. */
+    private static final int KIND_CAPSULE = 5;
     public static final int MESSAGE_ID_BYTES = 16;
     public static final int MAX_ACTION_VALUE_BYTES = ChatMessage.MAX_TEXT_BYTES;
     private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
@@ -88,7 +90,9 @@ public final class ChatClient implements AutoCloseable {
         /** groups only: the sender's current voice room key (see VoiceCrypto); no target, never shown */
         VOICE_KEY(9),
         /** direct messages only: the sender's time zone (an IANA id such as Europe/Istanbul); no target */
-        CLOCK(10);
+        CLOCK(10),
+        /** direct messages only: a scorpion walks over and stings the composer (3.6); no target, value empty */
+        NUDGE(11);
 
         final int code;
 
@@ -126,10 +130,16 @@ public final class ChatClient implements AutoCloseable {
      * @param replyTo   the id of the message this answers, or empty
      */
     public record Incoming(String from, long groupId, byte[] messageId, ChatMessage text, FileMessage file,
-                           long expireSeconds, byte[] replyTo, long envelopeId, com.emirchat.chat.Poll poll, boolean thread) {
+                           long expireSeconds, byte[] replyTo, long envelopeId, com.emirchat.chat.Poll poll, boolean thread,
+                           com.emirchat.chat.Capsule capsule) {
         public Incoming(String from, long groupId, byte[] messageId, ChatMessage text, FileMessage file,
                         long expireSeconds, byte[] replyTo, long envelopeId) {
-            this(from, groupId, messageId, text, file, expireSeconds, replyTo, envelopeId, null, false);
+            this(from, groupId, messageId, text, file, expireSeconds, replyTo, envelopeId, null, false, null);
+        }
+
+        public Incoming(String from, long groupId, byte[] messageId, ChatMessage text, FileMessage file,
+                        long expireSeconds, byte[] replyTo, long envelopeId, com.emirchat.chat.Poll poll, boolean thread) {
+            this(from, groupId, messageId, text, file, expireSeconds, replyTo, envelopeId, poll, thread, null);
         }
     }
 
@@ -250,6 +260,12 @@ public final class ChatClient implements AutoCloseable {
         return sendMessage(chat, KIND_POLL, poll.encode(), expireSeconds, null, null, messageId);
     }
 
+    /** An amber message: shown as a stone with its date until then (see {@link com.emirchat.chat.Capsule}). */
+    public Sent sendCapsule(Chat chat, com.emirchat.chat.Capsule capsule, long expireSeconds, byte[] messageId)
+            throws IOException, ApiException, KeyChangedException {
+        return sendMessage(chat, KIND_CAPSULE, capsule.encode(), expireSeconds, null, null, messageId);
+    }
+
     /** A reply inside the thread of {@code root} (shown in the thread, not in the chat itself). */
     public Sent sendThreadReply(Chat chat, byte[] root, String text, long expireSeconds, byte[] messageId)
             throws IOException, ApiException, KeyChangedException {
@@ -311,8 +327,45 @@ public final class ChatClient implements AutoCloseable {
         if (id.length != MESSAGE_ID_BYTES) throw new IllegalArgumentException("Bad message id");
         Content content = new Content(CONTENT_MESSAGE, new Wire.Writer().u8(1).bytes(id).i64(expireSeconds).bytes(reply)
                 .u8(kind).bytes(body).toByteArray());
-        if (chat.isGroup()) return new Sent(id, 0, sendGroupContent(chat.groupId(), content), file);
-        return new Sent(id, sendPairwise(chat.user(), content).id(), List.of(), file);
+        try {
+            if (chat.isGroup()) return new Sent(id, 0, sendGroupContent(chat.groupId(), content), file);
+            return new Sent(id, sendPairwise(chat.user(), content).id(), List.of(), file);
+        } finally {
+            byte[] sealedBody = lastSealed.get();
+            lastSealed.remove();
+            if (sealedBody != null) rememberSealed(id, new Sealed(sealedBody, chat.isGroup()));
+        }
+    }
+
+    // ------------------------------------------------------------------ what the server carried
+
+    /**
+     * A message as it travelled: the exact bytes the server stored and passed on (an envelope
+     * body), and how it was encrypted ({@code group}: the sender's group key, else the pairwise
+     * session). Kept in memory for recent messages of this session only, to show what
+     * end-to-end encryption looks like from the outside.
+     */
+    public record Sealed(byte[] ciphertext, boolean group) {}
+
+    private static final int SEALED_KEPT = 2000;
+    private final Map<String, Sealed> sealedById = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<>(64, 0.75f, false) {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, Sealed> eldest) {
+                    return size() > SEALED_KEPT;
+                }
+            });
+    /** The envelope body of the message being sent on this thread (set by the send paths). */
+    private final ThreadLocal<byte[]> lastSealed = new ThreadLocal<>();
+    /** The envelope body being opened (the inbox handles one envelope at a time). */
+    private volatile byte[] opening;
+
+    private void rememberSealed(byte[] messageId, Sealed sealed) {
+        sealedById.put(java.util.HexFormat.of().formatHex(messageId), sealed);
+    }
+
+    /** What the server carried for a message of this session, or null (older, or from before a restart). */
+    public Sealed sealed(byte[] messageId) {
+        return messageId == null ? null : sealedById.get(java.util.HexFormat.of().formatHex(messageId));
     }
 
     private static byte[] randomId() {
@@ -640,6 +693,7 @@ public final class ChatClient implements AutoCloseable {
         byte[] key = pinnedKey(user);
         byte[] plaintext = new Wire.Writer().u8(contentType).bytes(payload).toByteArray();
         byte[] body = messenger.encrypt(user, key, () -> fetchBundle(user), plaintext);
+        if (contentType == CONTENT_MESSAGE) lastSealed.set(body);
         return connection.sendEnvelope(user, body);
     }
 
@@ -1045,7 +1099,9 @@ public final class ChatClient implements AutoCloseable {
             }
         }
         byte[] plaintext = new Wire.Writer().u8(contentType).bytes(payload).toByteArray();
-        connection.call(new Packet.SendGroupEnvelope(groupId, groupKeys.encrypt(groupId, plaintext)));
+        byte[] sealedBody = groupKeys.encrypt(groupId, plaintext);
+        if (contentType == CONTENT_MESSAGE) lastSealed.set(sealedBody);
+        connection.call(new Packet.SendGroupEnvelope(groupId, sealedBody));
         return skipped;
     }
 
@@ -1180,6 +1236,7 @@ public final class ChatClient implements AutoCloseable {
             return;
         }
         boolean ack = true;
+        opening = envelope.body();
         try {
             if (envelope.groupId() != 0) {
                 receiveGroup(envelope);
@@ -1263,8 +1320,9 @@ public final class ChatClient implements AutoCloseable {
             String value = r.string(MAX_ACTION_VALUE_BYTES);
             r.expectEnd();
             boolean needsTarget = kind != ActionKind.TYPING && kind != ActionKind.TOPIC && kind != ActionKind.VOICE_KEY
-                    && kind != ActionKind.CLOCK;
+                    && kind != ActionKind.CLOCK && kind != ActionKind.NUDGE;
             if (kind == ActionKind.CLOCK && groupId != 0) throw new ProtocolException("Clocks are for direct messages");
+            if (kind == ActionKind.NUDGE && groupId != 0) return; // nudges are for one person, never a whole group
             if (needsTarget != (target.length == MESSAGE_ID_BYTES) || (target.length != 0 && target.length != MESSAGE_ID_BYTES)) {
                 throw new ProtocolException("Bad action target");
             }
@@ -1280,6 +1338,8 @@ public final class ChatClient implements AutoCloseable {
             Wire.Reader r = new Wire.Reader(payload);
             if (r.u8() != 1) throw new ProtocolException("Unknown message format");
             byte[] id = r.exactBytes(MESSAGE_ID_BYTES);
+            byte[] carried = opening;
+            if (carried != null) rememberSealed(id, new Sealed(carried, groupId != 0));
             long expire = r.i64();
             byte[] replyTo = r.bytes(MESSAGE_ID_BYTES);
             int kind = r.u8();
@@ -1294,6 +1354,8 @@ public final class ChatClient implements AutoCloseable {
                         replyTo, envelopeId));
                 case KIND_POLL -> listener.incoming(new Incoming(from, groupId, id, null, null, expire, replyTo, envelopeId,
                         com.emirchat.chat.Poll.decode(body), false));
+                case KIND_CAPSULE -> listener.incoming(new Incoming(from, groupId, id, null, null, expire, replyTo,
+                        envelopeId, null, false, com.emirchat.chat.Capsule.decode(body)));
                 case KIND_THREAD -> {
                     if (replyTo.length != MESSAGE_ID_BYTES) throw new ProtocolException("Thread reply without its thread");
                     listener.incoming(new Incoming(from, groupId, id, ChatMessage.decode(body), null, expire, replyTo,

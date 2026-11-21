@@ -391,6 +391,40 @@ final class MessageSender {
         deliver(localId, () -> chat.session.client().sendPoll(chat.chat(), poll, expire, uid));
     }
 
+    private void sendAmber(com.emirchat.chat.Capsule capsule) {
+        String me = chat.session.client().username();
+        byte[] uid = ChatClient.newMessageId();
+        long now = System.currentTimeMillis();
+        long expire = chat.session.timer(chat.conversation);
+        long localId;
+        try {
+            localId = chat.session.history().add(chat.conversation, me, capsule.toStored(), now, true, History.PENDING, 0,
+                    AccountSession.expiresAt(now, expire), uid, new byte[0]);
+            chat.append(chat.session.history().get(localId));
+        } catch (IOException e) {
+            return;
+        }
+        deliver(localId, () -> chat.session.client().sendCapsule(chat.chat(), capsule, expire, uid));
+    }
+
+    private long lastNudge;
+
+    /** Sends a scorpion to the person of this direct chat (at most every ten seconds). */
+    void nudge() {
+        if (chat.chat().isGroup()) {
+            chat.systemLine(I18n.t("nudge.onlyDirect"), true);
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastNudge < AccountSession.NUDGE_GAP_MS) {
+            chat.systemLine(I18n.t("nudge.wait"), true);
+            return;
+        }
+        lastNudge = now;
+        sendAction(ChatClient.ActionKind.NUDGE, null, "");
+        chat.systemLine("🦂 " + I18n.t("nudge.sent", chat.peer), false);
+    }
+
     interface Send {
         ChatClient.Sent run() throws Exception;
     }
@@ -465,6 +499,15 @@ final class MessageSender {
                 chat.systemLine(I18n.t("slash.help").replace("\\n", "\n"), false);
             }
             case SlashCommands.Problem p -> chat.systemLine(I18n.t(p.key(), p.arg()), true);
+            case SlashCommands.Amber a -> {
+                chat.input.clear();
+                strike();
+                sendAmber(a.capsule());
+            }
+            case SlashCommands.Nudge n -> {
+                chat.input.clear();
+                nudge();
+            }
         }
         return true;
     }
