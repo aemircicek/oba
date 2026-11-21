@@ -21,6 +21,40 @@ jobs:
       - name: Build and test
         run: mvn -B verify
 
+  # The whole suite on Windows and macOS too, then the real capture paths (FFmpeg's native
+  # libraries, the screen, and the camera where there is one) on all three systems.
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build and test
+        if: runner.os != 'Linux'   # the build job above already runs them on Linux
+        run: mvn -B verify
+      - name: A fake camera (v4l2loopback fed by FFmpeg)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y v4l2loopback-dkms ffmpeg xvfb "linux-modules-extra-$(uname -r)" || sudo apt-get install -y v4l2loopback-dkms ffmpeg xvfb
+          sudo modprobe v4l2loopback devices=1 video_nr=0 card_label=OBA exclusive_caps=1
+          sudo chmod 666 /dev/video0
+          nohup ffmpeg -loglevel error -re -f lavfi -i testsrc=size=640x480:rate=30 -pix_fmt yuyv422 -f v4l2 /dev/video0 > /dev/null 2>&1 &
+          sleep 3
+          echo "OBA_EXPECT_CAMERA=1" >> "$GITHUB_ENV"
+      - name: Real capture paths
+        shell: bash
+        run: |
+          RUN=(mvn -B test -Dtest=NativeCaptureTest -Doba.native=true -Dsurefire.failIfNoSpecifiedTests=false)
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a "${RUN[@]}"; else "${RUN[@]}"; fi
+
   semgrep:
     runs-on: ubuntu-latest
     container:

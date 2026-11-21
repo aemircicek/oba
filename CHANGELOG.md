@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.5.0 (2026-11-22)
 
 Video calls and screen sharing, Opus for calls and voice rooms, a gentler first start, an
 accessibility pass and a security review of the whole app. The server needs no update, and every
