@@ -73,7 +73,7 @@ jobs:
         shell: bash
         run: |
           [ -f target/secure-chat.jar ] || mvn -B -q package -DskipTests
-          bash packaging/package.sh 0.0.1-ci "$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')-check"
+          bash packaging/package.sh 1.0.0-ci "$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')-check"
           if [ "$RUNNER_OS" != Windows ]; then
             find img -name oba.jsa | grep -q . || { echo "::error::no AppCDS archive in the package"; cat cds-train.log; exit 1; }
           fi
