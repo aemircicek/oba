@@ -528,6 +528,11 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     }
 
     @Override
+    public void unsupported(String from, long groupId) {
+        fx(v -> v.problem(I18n.t("session.unsupported", from)));
+    }
+
+    @Override
     public void keyChanged(String friend) {
         fx(v -> v.keyChanged(friend));
     }

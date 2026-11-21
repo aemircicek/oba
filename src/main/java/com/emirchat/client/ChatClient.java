@@ -100,6 +100,12 @@ public final class ChatClient implements AutoCloseable {
             for (ActionKind k : values()) if (k.code == code) return k;
             throw new ProtocolException("Unknown action " + code);
         }
+
+        /** The kind, or null for one from a newer version. */
+        static ActionKind orNull(int code) {
+            for (ActionKind k : values()) if (k.code == code) return k;
+            return null;
+        }
     }
 
     /** A chat: a direct message with a user, or a group. */
@@ -146,6 +152,9 @@ public final class ChatClient implements AutoCloseable {
 
         /** A message arrived but could not be decrypted (e.g. forged, or sent to an old device). */
         default void undecryptable(String from, String reason) {}
+
+        /** Something from a newer version that this one cannot show (it decrypted fine). */
+        default void unsupported(String from, long groupId) {}
 
         default void delivered(long envelopeId) {}
 
@@ -280,6 +289,18 @@ public final class ChatClient implements AutoCloseable {
         Content content = new Content(CONTENT_ACTION, new Wire.Writer().u8(kind.code).bytes(t).string(v).toByteArray());
         if (chat.isGroup()) sendGroupContent(chat.groupId(), content);
         else sendPairwise(chat.user(), content);
+    }
+
+    /** Tests: an action of any code, as a newer version would send it. */
+    void sendRawAction(Chat chat, int code, String value) throws IOException, ApiException, KeyChangedException {
+        Content content = new Content(CONTENT_ACTION, new Wire.Writer().u8(code).bytes(new byte[0]).string(value).toByteArray());
+        if (chat.isGroup()) sendGroupContent(chat.groupId(), content);
+        else sendPairwise(chat.user(), content);
+    }
+
+    /** Tests: a message of any kind, as a newer version would send it. */
+    Sent sendRawMessage(Chat chat, int kind, byte[] body) throws IOException, ApiException, KeyChangedException {
+        return sendMessage(chat, kind, body, 0, null, null, newMessageId());
     }
 
     private Sent sendMessage(Chat chat, int kind, byte[] body, long expireSeconds, byte[] replyTo, FileMessage file,
@@ -1236,7 +1257,8 @@ public final class ChatClient implements AutoCloseable {
     private void deliver(String from, long groupId, int contentType, byte[] payload, long envelopeId) throws ProtocolException {
         if (contentType == CONTENT_ACTION) {
             Wire.Reader r = new Wire.Reader(payload);
-            ActionKind kind = ActionKind.of(r.u8());
+            ActionKind kind = ActionKind.orNull(r.u8());
+            if (kind == null) return; // an action from a newer version: nothing to show, nothing to report
             byte[] target = r.bytes(MESSAGE_ID_BYTES);
             String value = r.string(MAX_ACTION_VALUE_BYTES);
             r.expectEnd();
@@ -1277,7 +1299,7 @@ public final class ChatClient implements AutoCloseable {
                     listener.incoming(new Incoming(from, groupId, id, ChatMessage.decode(body), null, expire, replyTo,
                             envelopeId, null, true));
                 }
-                default -> throw new ProtocolException("Unknown message kind");
+                default -> listener.unsupported(from, groupId); // a newer kind of message: say so, not "undecryptable"
             }
             return;
         }
