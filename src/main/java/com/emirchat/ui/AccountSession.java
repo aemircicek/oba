@@ -75,6 +75,9 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
         /** A friend told us their time zone. */
         default void clockChanged(String user) {}
+
+        /** A friend nudged us (already rate limited and allowed by the settings). */
+        default void nudged(String user) {}
     }
 
     @Override
@@ -287,10 +290,33 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
     // ------------------------------------------------------------------ ChatClient.Listener (inbox thread)
 
+    /** One nudge per friend every ten seconds; more are ignored (no one can shake us all day). */
+    static final long NUDGE_GAP_MS = 10_000;
+    private final java.util.Map<String, Long> lastNudge = new java.util.concurrent.ConcurrentHashMap<>();
+
+    boolean nudgeAllowed(String from) {
+        long now = System.currentTimeMillis();
+        Long before = lastNudge.get(from);
+        if (before != null && now - before < NUDGE_GAP_MS) return false;
+        lastNudge.put(from, now);
+        return true;
+    }
+
     @Override
     public void incoming(ChatClient.Incoming m) {
         String conversation = m.groupId() == 0 ? dm(m.from()) : group(m.groupId());
-        if (m.poll() != null) {
+        if (m.capsule() != null) {
+            com.emirchat.chat.Capsule clean;
+            try {
+                clean = new com.emirchat.chat.Capsule(m.capsule().opensAt(),
+                        TerminalSanitizer.sanitizeMultiline(m.capsule().text()).strip());
+            } catch (IllegalArgumentException e) {
+                fx(v -> v.problem(I18n.t("session.undecryptable", m.from(), e.getMessage())));
+                return;
+            }
+            store(conversation, m.from(), new ChatMessage(ChatMessage.Type.TEXT, System.currentTimeMillis(), clean.toStored()),
+                    m.envelopeId(), m.expireSeconds(), m.messageId(), m.replyTo(), false, true);
+        } else if (m.poll() != null) {
             // every field from a peer is sanitized like any text (bidi overrides, controls) before it is stored
             com.emirchat.chat.Poll clean;
             try {
@@ -357,6 +383,10 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                     fx(v -> v.topicChanged(conversation, a.from(), topic));
                 }
                 case VOICE_KEY -> { } // handled inside ChatClient; never reaches the app
+                case NUDGE -> {
+                    if (a.groupId() != 0 || !AppPrefs.nudges() || !nudgeAllowed(a.from())) return;
+                    fx(v -> v.nudged(a.from()));
+                }
                 case CLOCK -> {
                     java.time.ZoneId zone = parseZone(a.value());
                     if (zone == null || a.groupId() != 0) return;

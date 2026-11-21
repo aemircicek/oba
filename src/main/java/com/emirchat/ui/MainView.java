@@ -182,9 +182,15 @@ final class MainView implements AccountSession.View {
         stack.getStyleClass().add("main-view");
         stack.setUserData(this); // lets the preview tool open the welcome-back screen
         stack.sceneProperty().addListener((o, a, scene) -> {
-            if (scene != null) scene.getAccelerators().put(
+            if (scene == null) return;
+            scene.getAccelerators().put(
                     new javafx.scene.input.KeyCodeCombination(javafx.scene.input.KeyCode.K,
                             javafx.scene.input.KeyCombination.SHORTCUT_DOWN), switcher::openPalette);
+            scene.getAccelerators().put(Sandstorm.SHORTCUT, storm::toggle);
+            if (scene.getWindow() != null) watchFocus(scene.getWindow());
+            else scene.windowProperty().addListener((oo, aa, w) -> {
+                if (w != null) watchFocus(w);
+            });
         });
         sidebarUi.refreshSidebar();
         session.setView(this);
@@ -283,6 +289,10 @@ final class MainView implements AccountSession.View {
             @Override public void openContact(String user) { MainView.this.contacts.openContact(user); }
 
             @Override public void openGroupInfo(long groupId) { MainView.this.contacts.openGroupInfo(groupId); }
+
+            @Override public void dialog(java.util.function.Function<Runnable, javafx.scene.layout.VBox> build) {
+                overlay.show(build.apply(overlay::close));
+            }
 
             @Override public void call(String friend) {
                 if (voiceState.joined()) {
@@ -444,7 +454,7 @@ final class MainView implements AccountSession.View {
                 if (campfire != null) campfire.stop();
                 Packet.GroupInfo g = group(state.groupId());
                 String title = g == null ? "" : g.community() != 0 ? ConversationView.channelTitle(g) : ConversationView.groupName(g);
-                campfire = new Campfire(session, state.groupId(), title, places::backFromCampfire);
+                campfire = new Campfire(session, state.groupId(), title, places::backFromCampfire, this::notice);
                 places.showCampfire(); // joining a room takes you to its fire
             }
             campfire.update(state);
@@ -452,6 +462,27 @@ final class MainView implements AccountSession.View {
         }
         if (current != null && (wasJoined != state.joined() || before != state.groupId())) current.refreshHeader();
         sidebarUi.refreshSidebar();
+    }
+
+    /** The privacy curtain over the whole window. */
+    final Sandstorm storm = new Sandstorm(stack);
+
+    private void watchFocus(javafx.stage.Window window) {
+        window.focusedProperty().addListener((o, was, now) -> {
+            if (!now && AppPrefs.stormOnBlur()) storm.raise();
+        });
+    }
+
+    @Override
+    public void nudged(String user) {
+        boolean focused = stack.getScene() != null && stack.getScene().getWindow() != null && stack.getScene().getWindow().isFocused();
+        Sounds.play();
+        if (!focused) Tray.get().notify("Oba", "🦂 " + I18n.t("nudge.received", user));
+        if (current != null && user.equals(current.peer())) {
+            Nudge.play(current.layer, current.input); // waits on screen for when they look back, too
+            return;
+        }
+        notice("🦂 " + I18n.t("nudge.received", user), false);
     }
 
     @Override
@@ -587,7 +618,7 @@ final class MainView implements AccountSession.View {
         String title = m.conversation().startsWith("g:") ? I18n.t("notify.inGroup", m.sender(), where) : where;
         String body = session.setting(AccountSession.NOTIFICATION_PREVIEW)
                 ? (m.file() != null ? (Sidebar.isVoiceName(m.text()) ? "🎤 " + I18n.t("voice.message") : "📎 " + m.text())
-                        : Sidebar.pollQuestion(m.text()) != null ? "📊 " + Sidebar.pollQuestion(m.text())
+                        : Sidebar.specialPreview(m.text()) != null ? Sidebar.specialPreview(m.text())
                         : Markdown.plain(m.text()))
                 : I18n.t("notify.newMessage");
         Tray.get().notify(title, body);

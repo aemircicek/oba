@@ -31,6 +31,15 @@ final class ContactDialogs {
         this.main = main;
     }
 
+    /** A fingerprint with the scorpion its key gives, side by side. */
+    static javafx.scene.Node creatureBeside(javafx.scene.Node fingerprint, String fingerprintHex) {
+        javafx.scene.canvas.Canvas creature = KeyCreature.of(fingerprintHex, 76);
+        javafx.scene.control.Tooltip.install(creature, new javafx.scene.control.Tooltip(I18n.t("creature.tip")));
+        HBox row = new HBox(12, fingerprint, UiKit.grow(), creature);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
     void openContact(String user) {
         ChatClient c = main.session.client();
         String current = c.currentFingerprint(user);
@@ -46,11 +55,12 @@ final class ContactDialogs {
         explain.setWrapText(true);
         VBox box = Overlay.dialog(changed ? I18n.t("contact.changedTitle", user) : I18n.t("contact.title", user), explain);
         if (changed && pinned != null) {
-            box.getChildren().add(new VBox(6, UiKit.label(I18n.t("keyChanged.before"), "overline"), FingerprintView.compact(pinned)));
+            box.getChildren().add(new VBox(6, UiKit.label(I18n.t("keyChanged.before"), "overline"),
+                    creatureBeside(FingerprintView.compact(pinned), pinned)));
         }
         if (current != null) {
             VBox theirs = new VBox(8, UiKit.label(changed ? I18n.t("contact.newKey") : I18n.t("chat.theirKey", user.toUpperCase(I18n.locale())), "overline"),
-                    FingerprintView.compact(current));
+                    creatureBeside(FingerprintView.compact(current), current));
             theirs.getStyleClass().add("card-flat");
             box.getChildren().add(theirs);
         }

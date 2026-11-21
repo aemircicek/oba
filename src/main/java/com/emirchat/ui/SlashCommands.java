@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  * Dice and coins are thrown on the sender's computer; the message says so, nobody else checks.
  */
 final class SlashCommands {
-    sealed interface Result permits NotACommand, Text, PollResult, Remind, Topic, Help, Problem {}
+    sealed interface Result permits NotACommand, Text, PollResult, Remind, Topic, Help, Problem, Amber, Nudge {}
 
     /** Ordinary text: send it as typed. */
     record NotACommand(String text) implements Result {}
@@ -42,10 +42,16 @@ final class SlashCommands {
 
     record Help() implements Result {}
 
+    /** An amber message: hidden from the others until {@code capsule.opensAt()}. */
+    record Amber(com.emirchat.chat.Capsule capsule) implements Result {}
+
+    /** A nudge for the person of this direct chat. */
+    record Nudge() implements Result {}
+
     /** Shown to the user only; {@code key} is a translation key. */
     record Problem(String key, String arg) implements Result {}
 
-    static final List<String> NAMES = List.of("poll", "roll", "flip", "remind", "shrug", "me", "topic", "help");
+    static final List<String> NAMES = List.of("poll", "roll", "flip", "remind", "amber", "nudge", "shrug", "me", "topic", "help");
 
     private static final Pattern DICE = Pattern.compile("(\\d{1,2})?d(\\d{1,4})", Pattern.CASE_INSENSITIVE);
     private static final Pattern DURATION = Pattern.compile("(\\d{1,4})\\s*(sn|sa|dk|s|m|h|d|g)(?=\\s|$)", Pattern.CASE_INSENSITIVE);
@@ -69,6 +75,8 @@ final class SlashCommands {
             case "me", "ben" -> rest.isEmpty() ? new Problem("slash.meUsage", "") : new Text("_" + me + " " + rest + "_");
             case "topic", "konu" -> new Topic(rest);
             case "help", "yardim" -> new Help();
+            case "amber", "kehribar" -> amber(rest, System.currentTimeMillis());
+            case "nudge", "durt", "dürt" -> new Nudge();
             default -> looksLikePath(text) ? new NotACommand(input) : new Problem("slash.unknown", name);
         };
     }
@@ -127,6 +135,50 @@ final class SlashCommands {
         String what = rest.substring(m.end()).strip();
         if (delay <= 0 || delay > MAX_REMIND_MILLIS || what.isEmpty()) return new Problem("slash.remindUsage", "");
         return new Remind(delay, what);
+    }
+
+    private static final Pattern DATE = Pattern.compile("(\\d{4})-(\\d{1,2})-(\\d{1,2})|(\\d{1,2})\\.(\\d{1,2})\\.(\\d{4})");
+
+    /**
+     * "/amber 2027-01-01 text", "/amber 31.12.2026 text" (opens at midnight, this computer's time)
+     * or "/amber 3d text" (in three days; s, m, h, d as for /remind).
+     */
+    static Result amber(String rest, long now) {
+        long opensAt;
+        String what;
+        Matcher d = DATE.matcher(rest);
+        Matcher span = DURATION.matcher(rest);
+        try {
+            if (d.lookingAt()) {
+                int y = Integer.parseInt(d.group(1) != null ? d.group(1) : d.group(6));
+                int mo = Integer.parseInt(d.group(2) != null ? d.group(2) : d.group(5));
+                int day = Integer.parseInt(d.group(3) != null ? d.group(3) : d.group(4));
+                opensAt = java.time.LocalDate.of(y, mo, day).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+                what = rest.substring(d.end()).strip();
+            } else if (span.lookingAt()) {
+                long amount = Long.parseLong(span.group(1));
+                long unit = switch (span.group(2).toLowerCase(Locale.ROOT)) {
+                    case "s", "sn" -> 1000L;
+                    case "m", "dk" -> 60_000L;
+                    case "h", "sa" -> 3_600_000L;
+                    default -> 86_400_000L;
+                };
+                opensAt = now + amount * unit;
+                what = rest.substring(span.end()).strip();
+            } else {
+                return new Problem("slash.amberUsage", "");
+            }
+        } catch (java.time.DateTimeException | NumberFormatException e) {
+            return new Problem("slash.amberUsage", "");
+        }
+        if (opensAt <= now || opensAt - now > com.emirchat.chat.Capsule.MAX_AHEAD_MILLIS || what.isEmpty()) {
+            return new Problem("slash.amberUsage", "");
+        }
+        try {
+            return new Amber(new com.emirchat.chat.Capsule(opensAt, what));
+        } catch (IllegalArgumentException e) {
+            return new Problem("slash.amberUsage", "");
+        }
     }
 
     /** Commands whose name starts with what is typed after "/", for suggestions. */

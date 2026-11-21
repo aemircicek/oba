@@ -47,7 +47,45 @@ final class Campfire {
     private double time;
     private long lastMove;
 
+    /** Cameras and screens shared in the room: one at a time, large, above the fire. */
+    private final VideoStage stage = new VideoStage();
+    private volatile String focus;
+    private final java.util.function.BiConsumer<String, Boolean> notice;
+    private final Button cameraButton = new Button();
+    private final Button screenButton = new Button();
+    private final com.emirchat.call.RoomVideo.View roomView = new com.emirchat.call.RoomVideo.View() {
+        @Override public void remote(String who, com.emirchat.video.VideoFrame frame, boolean screen) {
+            String current = focus;
+            if (current == null) {
+                focus = who; // the first to share is shown; the next one when they stop
+                current = who;
+                javafx.application.Platform.runLater(() -> stage.peer(who));
+            }
+            if (who.equals(current)) stage.remote(frame, screen);
+        }
+
+        @Override public void remoteStopped(String who) {
+            if (who.equals(focus)) {
+                focus = null;
+                stage.remoteStopped();
+            }
+        }
+
+        @Override public void local(com.emirchat.video.VideoFrame frame, boolean screen) { stage.local(frame, screen); }
+
+        @Override public void localStopped() {
+            stage.localStopped();
+            javafx.application.Platform.runLater(Campfire.this::refreshVideoButtons);
+        }
+    };
+
     Campfire(AccountSession session, long groupId, String title, Runnable back) {
+        this(session, groupId, title, back, (text, danger) -> { });
+    }
+
+    Campfire(AccountSession session, long groupId, String title, Runnable back,
+             java.util.function.BiConsumer<String, Boolean> notice) {
+        this.notice = notice;
         this.session = session;
         this.groupId = groupId;
         this.seed = groupId * 7919L;
@@ -70,15 +108,31 @@ final class Campfire {
         chat.setGraphic(Icons.of(Icons.MESSAGE, 14, "on-dark"));
         chat.getStyleClass().addAll("small", "campfire-button");
         chat.setId("campfire-back");
+        chat.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         chat.setOnAction(e -> back.run());
-        HBox hud = new HBox(12, words, UiKit.grow(), chat);
+        for (Button b : new Button[] {cameraButton, screenButton}) {
+            b.getStyleClass().addAll("small", "campfire-button");
+            b.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+            boolean screen = b == screenButton;
+            b.setId(screen ? "campfire-screen" : "campfire-camera");
+            b.setOnAction(e -> toggleVideo(screen));
+        }
+        refreshVideoButtons();
+        HBox hud = new HBox(12, words, UiKit.grow(), cameraButton, screenButton, chat);
         hud.setAlignment(Pos.TOP_LEFT);
         hud.setPickOnBounds(false);
         hud.setPadding(new javafx.geometry.Insets(16, 18, 0, 20));
         StackPane.setAlignment(hud, Pos.TOP_CENTER);
         hud.setMaxHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
 
-        root.getChildren().addAll(ground, people, hud);
+        // a box in the middle of the fire, never the whole scene (its picture would otherwise push its minimum up)
+        stage.root().setMinSize(0, 0);
+        stage.root().setPrefSize(720, 450);
+        stage.root().setMaxSize(720, 450);
+        stage.root().getStyleClass().add("campfire-video");
+        StackPane.setAlignment(stage.root(), Pos.CENTER);
+        stage.root().setMouseTransparent(true); // the sand stays walkable around and under it
+        root.getChildren().addAll(ground, people, stage.root(), hud);
         // a click on the sand walks us there
         ground.setOnMouseClicked(e -> walkTo(wx(e.getX()), wy(e.getY())));
         ground.setCursor(javafx.scene.Cursor.CROSSHAIR);
@@ -113,7 +167,44 @@ final class Campfire {
 
     // ------------------------------------------------------------------ life
 
+    /** Turns our camera or screen on in the room, or off if it is the one being sent. */
+    private void toggleVideo(boolean screen) {
+        com.emirchat.call.RoomVideo v = voice().video();
+        boolean thisOne = v.sending() && v.sendingScreen() == screen;
+        cameraButton.setDisable(true);
+        screenButton.setDisable(true);
+        session.background().execute(() -> {
+            String problem = null;
+            try {
+                if (thisOne) voice().stopVideo();
+                else voice().startVideo(screen ? session.client().screen() : session.client().camera());
+            } catch (IllegalStateException ex) {
+                problem = ex.getMessage();
+            }
+            String error = problem;
+            javafx.application.Platform.runLater(() -> {
+                refreshVideoButtons();
+                if (error != null) notice.accept(I18n.t(screen ? "video.screenFailed" : "video.cameraFailed", error), true);
+            });
+        });
+    }
+
+    private void refreshVideoButtons() {
+        com.emirchat.call.RoomVideo v = session.client() == null ? null : voice().video();
+        boolean camera = v != null && v.sending() && !v.sendingScreen();
+        boolean screen = v != null && v.sending() && v.sendingScreen();
+        cameraButton.setAccessibleText(camera ? I18n.t("call.cameraOff") : I18n.t("call.camera"));
+        cameraButton.setGraphic(Icons.of(Icons.VIDEO, 14, camera ? "accent" : "on-dark"));
+        cameraButton.setTooltip(new javafx.scene.control.Tooltip((camera ? I18n.t("call.cameraOff") : I18n.t("campfire.cameraTip"))));
+        screenButton.setAccessibleText(screen ? I18n.t("call.stopSharing") : I18n.t("call.shareScreen"));
+        screenButton.setGraphic(Icons.of(Icons.MONITOR, 14, screen ? "accent" : "on-dark"));
+        screenButton.setTooltip(new javafx.scene.control.Tooltip((screen ? I18n.t("call.stopSharing") : I18n.t("campfire.screenTip"))));
+        cameraButton.setDisable(false);
+        screenButton.setDisable(false);
+    }
+
     private void start() {
+        voice().videoView(roomView);
         follow = new javafx.animation.Timeline(new javafx.animation.KeyFrame(javafx.util.Duration.millis(100), e -> refresh()));
         follow.setCycleCount(javafx.animation.Animation.INDEFINITE);
         follow.play();
@@ -138,6 +229,9 @@ final class Campfire {
     }
 
     void stop() {
+        voice().videoView(null);
+        focus = null;
+        stage.clear();
         if (frames != null) frames.stop();
         if (follow != null) follow.stop();
     }

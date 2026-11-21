@@ -264,4 +264,65 @@ class VoiceRoomIntegrationTest {
             assertEquals("hâlâ buradayım", emir.nextMessage().text().text(), "and its connection is fine");
         }
     }
+
+    /** Pictures of a room as one member's screen sees them. */
+    static final class RoomScreen implements com.emirchat.call.RoomVideo.View {
+        final BlockingQueue<String> frames = new LinkedBlockingQueue<>();
+        final BlockingQueue<String> stopped = new LinkedBlockingQueue<>();
+
+        @Override public void remote(String who, com.emirchat.video.VideoFrame frame, boolean screen) {
+            frames.add(who + (screen ? " screen " : " camera ") + frame.width() + "x" + frame.height());
+        }
+
+        @Override public void remoteStopped(String who) { stopped.add(who); }
+    }
+
+    @Test
+    void someoneSharesTheirScreenWithTheRoomWhileEveryoneKeepsTalking() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(com.emirchat.video.Ffmpeg.available(), "no FFmpeg here");
+        try (Device emir = new Device("emir"); Device efe = new Device("efe"); Device ayse = new Device("ayse")) {
+            befriend(emir, efe);
+            befriend(emir, ayse);
+            long g = emir.client.createGroup("ekran", List.of("efe", "ayse")).id();
+            for (Device d : List.of(efe, ayse)) {
+                for (int i = 0; i < 100 && d.client.refreshGroups().stream().noneMatch(x -> x.id() == g); i++) Thread.sleep(50);
+            }
+            RoomScreen efeScreen = new RoomScreen();
+            RoomScreen ayseScreen = new RoomScreen();
+            efe.client.voice().videoView(efeScreen);
+            ayse.client.voice().videoView(ayseScreen);
+            for (Device d : List.of(emir, efe, ayse)) d.client.voice().join(g);
+            awaitRoom(emir, g, 3);
+            Thread.sleep(800);
+
+            emir.client.voice().startVideo(new com.emirchat.video.PatternSource(640, 400, 5, true));
+            Thread speaking = Thread.ofVirtual().start(() -> {
+                try {
+                    emir.audio.say(100); // two seconds of voice alongside the picture
+                } catch (InterruptedException ignored) {
+                    // done
+                }
+            });
+            String seen = efeScreen.frames.poll(10, TimeUnit.SECONDS);
+            assertEquals("emir screen 640x400", seen, "efe sees emir's screen");
+            assertEquals("emir screen 640x400", ayseScreen.frames.poll(10, TimeUnit.SECONDS), "and so does ayse");
+            assertTrue(efe.audio.heardSpeech(3000), "the voice still comes through");
+            speaking.join();
+            assertTrue(emir.client.voice().video().sending());
+
+            emir.client.voice().stopVideo();
+            assertEquals("emir", efeScreen.stopped.poll(5, TimeUnit.SECONDS), "efe sees the sharing stop");
+            assertEquals(java.util.Set.of(), efe.client.voice().video().receiving());
+
+            // leaving the room while sharing stops the sharing for the others
+            efeScreen.frames.clear(); // frames of the screen still on their way
+            emir.client.voice().startVideo(new com.emirchat.video.PatternSource(480, 360, 15, false));
+            String camera = null;
+            for (int i = 0; i < 50 && !"emir camera 480x360".equals(camera); i++) camera = efeScreen.frames.poll(10, TimeUnit.SECONDS);
+            assertEquals("emir camera 480x360", camera);
+            emir.client.voice().leave();
+            assertEquals("emir", efeScreen.stopped.poll(5, TimeUnit.SECONDS));
+            assertTrue(!emir.client.voice().video().sending(), "the camera is off after leaving");
+        }
+    }
 }

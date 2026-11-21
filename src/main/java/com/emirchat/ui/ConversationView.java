@@ -47,6 +47,9 @@ final class ConversationView {
 
         /** False on a server that is too old for voice rooms. */
         default boolean voiceAvailable() { return true; }
+
+        /** Shows a dialog over the window; the runnable given to the builder closes it. */
+        default void dialog(java.util.function.Function<Runnable, javafx.scene.layout.VBox> build) {}
     }
 
     final AccountSession session;

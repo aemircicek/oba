@@ -699,6 +699,20 @@
 
 /* Polls */
 .poll-card { -fx-padding: 2 0 2 0; }
+/* Amber messages (time capsules) */
+.amber-card { -fx-padding: 2 0 2 0; }
+.amber-stone {
+    -fx-background-color: radial-gradient(center 40% 35%, radius 75%, #ffd27a 0%, #e89a2c 45%, #a85a12 100%);
+    -fx-background-radius: 26 18 30 20;
+    -fx-border-color: rgba(255, 236, 190, 0.55);
+    -fx-border-radius: 26 18 30 20;
+    -fx-effect: dropshadow(gaussian, rgba(120, 60, 0, 0.45), 10, 0, 0, 2);
+}
+.amber-scorpion { -fx-font-size: 30px; -fx-opacity: 0.55; -fx-effect: dropshadow(gaussian, rgba(90, 40, 0, 0.8), 4, 0, 0, 0); }
+.amber-date { -fx-text-fill: #4a2300; -fx-font-size: 11px; -fx-font-weight: bold; }
+.amber-note { -fx-font-size: 11px; -fx-opacity: 0.8; }
+.amber-kind { -fx-font-size: 11px; -fx-font-weight: bold; }
+.amber-crack { -fx-stroke: #fff4d6; }
 .poll-kind { -fx-font-size: 11px; -fx-font-weight: bold; }
 .bubble.own .poll-kind { -fx-text-fill: -sc-own-time; }
 .bubble.peer .poll-kind { -fx-text-fill: -sc-accent-text; }
@@ -897,3 +911,14 @@
 .video-stage { -fx-background-color: #0b0a08; -fx-padding: 12; -fx-border-color: transparent transparent -sc-accent transparent; -fx-border-width: 0 0 2 0; }
 .video-local { -fx-background-color: #000000; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.5), 12, 0.2, 0, 2); }
 .video-caption { -fx-background-color: rgba(0,0,0,0.6); -fx-text-fill: #f3ece3; -fx-padding: 4 10; -fx-background-radius: 8; -fx-font-size: 12px; }
+
+/* The sandstorm (privacy curtain) */
+.sandstorm { -fx-background-color: linear-gradient(to bottom right, rgba(120, 80, 35, 0.55), rgba(70, 40, 15, 0.7)); }
+.storm-title { -fx-text-fill: #fff3df; -fx-font-size: 22px; -fx-font-weight: bold; -fx-effect: dropshadow(gaussian, rgba(40,20,5,0.8), 8, 0, 0, 1); }
+.storm-hint { -fx-text-fill: #fff3df; -fx-font-size: 13px; -fx-text-alignment: center; -fx-effect: dropshadow(gaussian, rgba(40,20,5,0.8), 6, 0, 0, 1); }
+
+/* Watching a message decrypt */
+.cipher-bytes { -fx-font-family: "Menlo", "Consolas", "DejaVu Sans Mono", monospace; -fx-font-size: 11px; -fx-text-fill: -sc-text-2;
+    -fx-background-color: -sc-surface-2; -fx-background-radius: 8; -fx-padding: 10; }
+.cipher-layers { -fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: -sc-accent-text; }
+.cipher-plain { -fx-font-family: "Menlo", "Consolas", "DejaVu Sans Mono", monospace; -fx-font-size: 14px; -fx-padding: 6 0 6 0; }

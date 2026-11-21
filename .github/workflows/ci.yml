@@ -56,6 +56,27 @@ jobs:
           else
             echo "::warning::the virtual camera cannot be read even by the system FFmpeg; the camera check only expects a clean report"
           fi
+      # The installers, built as a release would build them (nothing is uploaded), so packaging
+      # and the start-up archive (AppCDS) are checked on every change.
+      - name: Tools for the Windows installer (WiX 3)
+        if: runner.os == 'Windows'
+        run: |
+          if (Test-Path "${env:ProgramFiles(x86)}\WiX Toolset v3*") { "WiX 3 is already installed" }
+          else { choco install wixtoolset -y --no-progress }
+      - name: Tools for .deb packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y fakeroot
+      - name: macOS icon
+        if: runner.os == 'macOS'
+        run: iconutil -c icns packaging/macos/oba.iconset -o packaging/macos/oba.icns
+      - name: Package (check only)
+        shell: bash
+        run: |
+          [ -f target/secure-chat.jar ] || mvn -B -q package -DskipTests
+          bash packaging/package.sh 1.0.0-ci "$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')-check"
+          if [ "$RUNNER_OS" != Windows ]; then
+            find img -name oba.jsa | grep -q . || { echo "::error::no AppCDS archive in the package"; cat cds-train.log; exit 1; }
+          fi
       - name: Real capture paths
         shell: bash
         run: |

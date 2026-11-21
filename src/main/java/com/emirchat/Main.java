@@ -14,6 +14,10 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) {
+        if (args.length == 1 && args[0].equals("--cds-train")) {
+            CdsTraining.run();
+            return;
+        }
         // Desktop extras: "--background" (start hidden in the tray) and a backup file opened by
         // double-click (the installer associates .scbackup files with Oba).
         boolean background = false;
