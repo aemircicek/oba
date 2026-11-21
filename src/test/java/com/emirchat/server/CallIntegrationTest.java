@@ -328,7 +328,10 @@ class CallIntegrationTest {
                 long[] before = emir.client.calls().packetsSent();
                 int saidBefore = said.get();
                 efe.audio.speaker.clear();
-                Thread.sleep(1500);
+                // until 30 packets were said (1.5 s normally; much longer on a slow CI machine)
+                long deadline = System.currentTimeMillis() + 8000;
+                while (said.get() - saidBefore < 30 && System.currentTimeMillis() < deadline) Thread.sleep(50);
+                Thread.sleep(200); // the last ones on their way
                 long[] after = emir.client.calls().packetsSent();
                 int saidIn = said.get() - saidBefore;
                 // compared with what was said: a slow test machine says less, it is not the path
