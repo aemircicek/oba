@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.5.0 (2026-11-22)
 
 Video calls and screen sharing, Opus for calls and voice rooms, a gentler first start, an
 accessibility pass and a security review of the whole app. The server needs no update, and every
@@ -61,6 +61,9 @@ Ratchet, sender keys, files, calls); the fixes are around it.
   shifts what is around it.
 
 ### Changed
+- **Ready for what comes next**: an action from a newer version (a new kind of reaction, say) is
+  skipped quietly instead of being reported as a message that could not be decrypted, and a new
+  kind of message shows "update Oba to see it".
 - `ConversationView` and `MainView` (2680 and 2343 lines) are split into fifteen parts by what
   they do. No change in behaviour.
 

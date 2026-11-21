@@ -300,7 +300,29 @@ public final class AccountPreview {
         waitFor("#settings-dialog");
         pause();
         snap("05f-settings");
-        fx(() -> { ((Button) find("#settings-done")).fire(); return null; });
+        // making a backup: the passphrase form, filled in (saving would open a file chooser)
+        fx(() -> { ((Button) find("#backup")).fire(); return null; });
+        waitFor("#backup-dialog");
+        fx(() -> {
+            ((TextField) find("#backup-pass")).setText("kum tepesi gece yildiz");
+            ((TextField) find("#backup-repeat")).setText("kum tepesi gece yildiz");
+            return null;
+        });
+        pause();
+        snap("05n-backup");
+        fx(() -> {
+            Node layer = scene.lookup(".overlay");
+            if (layer != null) ((StackPane) layer.getParent()).getChildren().remove(layer);
+            return null;
+        });
+        Thread.sleep(300);
+
+        // recording a voice message (silent microphone: the clock runs, nothing is heard)
+        fx(() -> { ((Button) find("#mic")).fire(); return null; });
+        waitFor("#voice-clock");
+        Thread.sleep(1300);
+        snap("05o-voice-recording");
+        fx(() -> { ((Button) find("#voice-cancel")).fire(); return null; });
         Thread.sleep(300);
 
         // Disappearing messages: turn on a one-hour timer, then send a message
@@ -385,9 +407,11 @@ public final class AccountPreview {
         waitFor("#community-name");
         fx(() -> {
             ((TextField) find("#community-name")).setText("MobilCAD Topluluğu");
-            ((Button) find("#create-community")).fire();
             return null;
         });
+        pause();
+        snap("13-new-community");
+        fx(() -> { ((Button) find("#create-community")).fire(); return null; });
         waitFor("#add-channel");
         for (String channel : new String[] {"duyurular", "tasarım"}) {
             fx(() -> { ((Button) find("#add-channel")).fire(); return null; });
@@ -458,6 +482,16 @@ public final class AccountPreview {
         fx(() -> { ((Button) find("#members-button")).fire(); return null; });
         Thread.sleep(400);
         snap("15e-members");
+        // the contact page, opened from the member list
+        fx(() -> { click(find("#member-ayse")); return null; });
+        waitFor("#contact-dialog");
+        pause();
+        snap("15k-contact-from-members");
+        fx(() -> {
+            Node layer = scene.lookup(".overlay");
+            if (layer != null) ((StackPane) layer.getParent()).getChildren().remove(layer);
+            return null;
+        });
         fx(() -> { ((Button) find("#side-close")).fire(); return null; });
         fx(() -> {
             javafx.scene.control.TextInputControl box = (javafx.scene.control.TextInputControl) find("#composer");

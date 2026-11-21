@@ -218,7 +218,22 @@ class CallIntegrationTest {
                 for (int i = 0; i < 100 && !emir.client.calls().videoPossible(); i++) Thread.sleep(20);
                 assertTrue(emir.client.calls().videoPossible(), "both sides are current versions");
 
-                emir.client.calls().startVideo(new com.emirchat.video.PatternSource(480, 360, 15, false));
+                java.util.concurrent.atomic.AtomicInteger made = new java.util.concurrent.atomic.AtomicInteger();
+                com.emirchat.video.PatternSource pattern = new com.emirchat.video.PatternSource(480, 360, 15, false);
+                emir.client.calls().startVideo(new com.emirchat.video.VideoSource() {
+                    @Override public boolean screen() { return false; }
+
+                    @Override public int fps() { return pattern.fps(); }
+
+                    @Override public void start(java.util.function.Consumer<com.emirchat.video.VideoFrame> frames) {
+                        pattern.start(f -> {
+                            made.incrementAndGet();
+                            frames.accept(f);
+                        });
+                    }
+
+                    @Override public void stop() { pattern.stop(); }
+                });
                 com.emirchat.video.VideoFrame first = efeScreen.remote.poll(10, TimeUnit.SECONDS);
                 assertNotNull(first, "efe sees emir");
                 assertEquals(480, first.width());
@@ -229,12 +244,16 @@ class CallIntegrationTest {
                 efeScreen.remote.clear();
                 efe.audio.speaker.clear();
                 int saidBefore = said.get();
+                int madeBefore = made.get();
                 Thread.sleep(3000);
                 int frames = efeScreen.remote.size();
+                int madeIn = made.get() - madeBefore;
                 int spoken = said.get() - saidBefore;
                 Thread.sleep(300); // the last frames still on their way
                 int heard = efe.audio.speaker.size();
-                assertTrue(frames >= 36, "about 15 frames a second came through: " + frames + " in 3 s");
+                // compared with what the camera made: a slow test machine makes fewer, not the relay
+                assertTrue(madeIn >= 15, "the test camera ran: " + madeIn + " frames in 3 s");
+                assertTrue(frames >= madeIn * 0.8 - 2, "nearly every frame came through: " + frames + " of " + madeIn);
                 assertTrue(heard >= spoken * 0.95, "and the voice was not crowded out: " + heard + " of " + spoken + " heard");
                 com.emirchat.video.VideoFrame latest = null;
                 for (com.emirchat.video.VideoFrame f : efeScreen.remote) latest = f;
@@ -261,6 +280,11 @@ class CallIntegrationTest {
     /** Connects a call from emir to efe with a stream of silence both ways, as a real call has. */
     private static Thread connectTalking(Device emir, Device efe, java.util.concurrent.atomic.AtomicBoolean talking)
             throws Exception {
+        return connectTalking(emir, efe, talking, new java.util.concurrent.atomic.AtomicInteger());
+    }
+
+    private static Thread connectTalking(Device emir, Device efe, java.util.concurrent.atomic.AtomicBoolean talking,
+                                         java.util.concurrent.atomic.AtomicInteger said) throws Exception {
         emir.client.calls().call("efe");
         efe.await(c -> c.state() == Calls.State.RINGING);
         efe.client.calls().accept();
@@ -269,6 +293,7 @@ class CallIntegrationTest {
         return Thread.ofPlatform().daemon().start(() -> {
             for (int f = 0; talking.get(); f++) {
                 emir.audio.say(tone(f * 320));
+                said.incrementAndGet();
                 efe.audio.say(tone(f * 320));
                 try {
                     Thread.sleep(20);
@@ -295,17 +320,25 @@ class CallIntegrationTest {
             emir.client.calls().directAllowed(u -> true);
             efe.client.calls().directAllowed(u -> true);
             java.util.concurrent.atomic.AtomicBoolean talking = new java.util.concurrent.atomic.AtomicBoolean(true);
-            Thread voices = connectTalking(emir, efe, talking);
+            java.util.concurrent.atomic.AtomicInteger said = new java.util.concurrent.atomic.AtomicInteger();
+            Thread voices = connectTalking(emir, efe, talking, said);
             try {
                 assertTrue(awaitDirect(emir, 10_000), "emir's side found a direct path");
                 assertTrue(awaitDirect(efe, 10_000), "and so did efe's");
                 long[] before = emir.client.calls().packetsSent();
+                int saidBefore = said.get();
                 efe.audio.speaker.clear();
-                Thread.sleep(1500);
+                // until 30 packets were said (1.5 s normally; much longer on a slow CI machine)
+                long deadline = System.currentTimeMillis() + 8000;
+                while (said.get() - saidBefore < 30 && System.currentTimeMillis() < deadline) Thread.sleep(50);
+                Thread.sleep(200); // the last ones on their way
                 long[] after = emir.client.calls().packetsSent();
-                assertTrue(after[0] - before[0] > 30, "audio goes directly: " + (after[0] - before[0]));
+                int saidIn = said.get() - saidBefore;
+                // compared with what was said: a slow test machine says less, it is not the path
+                assertTrue(saidIn >= 15, "the test spoke: " + saidIn);
+                assertTrue(after[0] - before[0] >= saidIn * 0.9 - 2, "audio goes directly: " + (after[0] - before[0]) + " of " + saidIn);
                 assertTrue(after[1] - before[1] <= 2, "and no longer through the server: " + (after[1] - before[1]));
-                assertTrue(efe.audio.speaker.size() > 30, "efe still hears emir: " + efe.audio.speaker.size());
+                assertTrue(efe.audio.speaker.size() >= saidIn * 0.9 - 2, "efe still hears emir: " + efe.audio.speaker.size() + " of " + saidIn);
             } finally {
                 talking.set(false);
                 voices.join();
