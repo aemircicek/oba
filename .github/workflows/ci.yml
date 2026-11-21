@@ -43,12 +43,19 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y v4l2loopback-dkms ffmpeg xvfb "linux-modules-extra-$(uname -r)" || sudo apt-get install -y v4l2loopback-dkms ffmpeg xvfb
+          sudo apt-get install -y v4l2loopback-dkms v4l-utils ffmpeg xvfb "linux-modules-extra-$(uname -r)" || sudo apt-get install -y v4l2loopback-dkms v4l-utils ffmpeg xvfb
           sudo modprobe v4l2loopback devices=1 video_nr=0 card_label=OBA exclusive_caps=1
           sudo chmod 666 /dev/video0
-          nohup ffmpeg -loglevel error -re -f lavfi -i testsrc=size=640x480:rate=30 -pix_fmt yuyv422 -f v4l2 /dev/video0 > /dev/null 2>&1 &
-          sleep 3
-          echo "OBA_EXPECT_CAMERA=1" >> "$GITHUB_ENV"
+          nohup ffmpeg -loglevel warning -re -f lavfi -i testsrc=size=640x480:rate=30 -pix_fmt yuyv422 -f v4l2 /dev/video0 > feeder.log 2>&1 &
+          sleep 4
+          cat feeder.log
+          v4l2-ctl -d /dev/video0 --all | head -40 || true
+          # the system's own FFmpeg reads a frame: if this fails the camera is the runner's problem, not Oba's
+          if ffmpeg -loglevel error -f v4l2 -i /dev/video0 -frames:v 1 -y probe.png; then
+            echo "OBA_EXPECT_CAMERA=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::the virtual camera cannot be read even by the system FFmpeg; the camera check only expects a clean report"
+          fi
       - name: Real capture paths
         shell: bash
         run: |
