@@ -927,3 +927,10 @@
     -fx-background-color: -sc-surface-2; -fx-background-radius: 8; -fx-padding: 10; }
 .cipher-layers { -fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: -sc-accent-text; }
 .cipher-plain { -fx-font-family: "Menlo", "Consolas", "DejaVu Sans Mono", monospace; -fx-font-size: 14px; -fx-padding: 6 0 6 0; }
+
+/* the media panel: pictures in square tiles, files and links in rows */
+.media-tile { -fx-background-color: -sc-surface-2; -fx-background-radius: 8; -fx-cursor: hand; }
+.media-tile:hover { -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.25), 8, 0, 0, 1); }
+.media-tab:selected { -fx-background-color: -sc-accent; -fx-text-fill: -sc-on-accent; }
+.media-link-row { -fx-padding: 4 0 8 0; -fx-border-color: transparent transparent -sc-surface-2 transparent; }
+.media-link { -fx-text-overrun: center-ellipsis; }

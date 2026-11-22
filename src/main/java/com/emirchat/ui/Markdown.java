@@ -42,6 +42,14 @@ final class Markdown {
                 || text.contains("http://") || text.contains("https://") || text.startsWith(">") || text.contains("\n>");
     }
 
+    /** The web addresses in a text, in order, each once. */
+    static List<String> links(String text) {
+        java.util.LinkedHashSet<String> found = new java.util.LinkedHashSet<>();
+        java.util.regex.Matcher m = URL.matcher(text);
+        while (m.find()) found.add(m.group());
+        return List.copyOf(found);
+    }
+
     /** True if the text mentions {@code user} as @user (any case). */
     static boolean mentions(String text, String user) {
         if (text == null || !text.contains("@")) return false;

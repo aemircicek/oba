@@ -12,6 +12,8 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.Hyperlink;
+import javafx.scene.control.Tooltip;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
@@ -32,7 +34,9 @@ final class SidePanels {
         this.chat = chat;
     }
 
-    String sideMode;              // "members", "pins", "thread" or null
+    String sideMode;              // "members", "pins", "thread", "media" or null
+    /** The tab of the media panel: 0 pictures, 1 files, 2 links. */
+    int mediaTab;
     History.Message threadRoot;   // the thread shown in the side panel
     void pin(History.Message m, boolean on) {
         try {
@@ -123,6 +127,181 @@ final class SidePanels {
             }
         }
         showSide("members", I18n.t("members.title"), list);
+    }
+
+    /** Everything shared in this chat: pictures in a grid, files, and links, newest first. */
+    void showMedia(int tab) {
+        mediaTab = tab;
+        VBox content = new VBox(10);
+        javafx.scene.control.ToggleGroup tabs = new javafx.scene.control.ToggleGroup();
+        HBox tabRow = new HBox(4);
+        String[] names = {I18n.t("media.pictures"), I18n.t("media.files"), I18n.t("media.links")};
+        for (int i = 0; i < names.length; i++) {
+            int which = i;
+            javafx.scene.control.ToggleButton b = new javafx.scene.control.ToggleButton(names[i]);
+            b.setToggleGroup(tabs);
+            b.getStyleClass().addAll("small", "media-tab");
+            b.setId("media-tab-" + i);
+            b.setSelected(i == tab);
+            b.setOnAction(e -> showMedia(which));
+            tabRow.getChildren().add(b);
+        }
+        content.getChildren().add(tabRow);
+        VBox body = new VBox(6);
+        Label wait = UiKit.label(I18n.t("main.searching"), "caption");
+        body.getChildren().add(wait);
+        content.getChildren().add(body);
+        showSide("media", I18n.t("media.title"), content);
+        String query = "in:" + chat.conversation + (tab == 2 ? " has:link" : " has:file");
+        chat.session.downloads().execute(() -> {
+            List<History.Message> found;
+            try {
+                found = chat.session.history().search(query, 500);
+            } catch (IOException e) {
+                found = List.of();
+            }
+            List<History.Message> items = found.stream().filter(m -> switch (tab) {
+                case 0 -> m.file() != null && m.file().isPreviewableImage();
+                case 1 -> m.file() != null && !m.file().isPreviewableImage()
+                        && !com.emirchat.call.VoiceNotes.isVoice(m.file().mimeType(), m.file().name());
+                default -> m.file() == null;
+            }).toList();
+            Platform.runLater(() -> {
+                if (!"media".equals(sideMode) || mediaTab != tab) return;
+                body.getChildren().clear();
+                if (items.isEmpty()) body.getChildren().add(wrapLabel(I18n.t("media.none"), "caption"));
+                else if (tab == 0) body.getChildren().add(pictureGrid(items));
+                else for (History.Message m : items) body.getChildren().add(tab == 1 ? fileRow(m) : linkRows(m));
+            });
+        });
+    }
+
+    private Node pictureGrid(List<History.Message> items) {
+        javafx.scene.layout.TilePane grid = new javafx.scene.layout.TilePane(4, 4);
+        grid.setPrefColumns(3);
+        grid.setId("media-grid");
+        // the viewer steps through every picture of the chat, oldest first
+        java.util.Map<Node, Runnable> pending = new java.util.LinkedHashMap<>();
+        List<com.emirchat.chat.FileMessage> all = new java.util.ArrayList<>();
+        for (int i = items.size() - 1; i >= 0; i--) all.add(items.get(i).file());
+        for (History.Message m : items) {
+            com.emirchat.chat.FileMessage file = m.file();
+            javafx.scene.layout.StackPane tile = new javafx.scene.layout.StackPane(Icons.of(Icons.IMAGE, 20, "muted"));
+            tile.getStyleClass().add("media-tile");
+            tile.setPrefSize(84, 84);
+            tile.setId("media-" + m.id());
+            A11y.clickable(tile, file.name());
+            tile.setOnMouseClicked(e -> {
+                chat.gallery.clear();
+                chat.gallery.addAll(all);
+                chat.viewer.openViewer(file);
+            });
+            Tooltip.install(tile, new javafx.scene.control.Tooltip(file.name() + " · " + UiKit.time(m.sentAt())));
+            Runnable fetch = () -> chat.session.downloads().execute(() -> {
+                try {
+                    String key = ConversationView.fileKey(file);
+                    javafx.scene.image.Image image = chat.images.get(key);
+                    if (image == null) image = ImageFiles.decode(chat.session.client().downloadFile(file));
+                    if (image == null || image.isError()) return;
+                    javafx.scene.image.Image done = image;
+                    Platform.runLater(() -> {
+                        chat.images.put(key, done);
+                        javafx.scene.image.ImageView view = new javafx.scene.image.ImageView(done);
+                        // fill the square, cropping the longer side
+                        double side = Math.min(done.getWidth(), done.getHeight());
+                        view.setViewport(new javafx.geometry.Rectangle2D((done.getWidth() - side) / 2,
+                                (done.getHeight() - side) / 2, side, side));
+                        view.setFitWidth(84);
+                        view.setFitHeight(84);
+                        view.setSmooth(true);
+                        tile.getChildren().setAll(view);
+                    });
+                } catch (Exception ignored) {
+                    // the icon stays; opening it reports the problem
+                }
+            });
+            pending.put(tile, fetch);
+            grid.getChildren().add(tile);
+        }
+        // decrypt pictures as they scroll into the panel's view (and one view ahead)
+        Runnable check = () -> {
+            ScrollPane scroll = null;
+            for (Node n = grid.getParent(); n != null; n = n.getParent()) if (n instanceof ScrollPane sp) { scroll = sp; break; }
+            if (scroll == null || grid.getScene() == null) return;
+            javafx.geometry.Bounds view = scroll.localToScene(scroll.getBoundsInLocal());
+            var it = pending.entrySet().iterator();
+            while (it.hasNext()) {
+                var e = it.next();
+                javafx.geometry.Bounds b = e.getKey().localToScene(e.getKey().getBoundsInLocal());
+                if (b.getMaxY() >= view.getMinY() && b.getMinY() <= view.getMaxY() + view.getHeight()) {
+                    it.remove();
+                    e.getValue().run();
+                }
+            }
+        };
+        grid.sceneProperty().addListener((o, a, scene) -> {
+            if (scene == null) return;
+            Platform.runLater(() -> {
+                for (Node n = grid.getParent(); n != null; n = n.getParent()) {
+                    if (n instanceof ScrollPane sp) {
+                        sp.vvalueProperty().addListener((oo, aa, bb) -> check.run());
+                        sp.heightProperty().addListener((oo, aa, bb) -> check.run());
+                        break;
+                    }
+                }
+                check.run();
+            });
+        });
+        grid.layoutBoundsProperty().addListener((o, a, b) -> check.run());
+        return grid;
+    }
+
+    private Node fileRow(History.Message m) {
+        com.emirchat.chat.FileMessage file = m.file();
+        Label name = UiKit.label(file.name(), "row-title");
+        name.setMinWidth(0);
+        Label sub = UiKit.label(ConversationView.humanSize(file.size()) + " · " + (m.outgoing() ? I18n.t("conv.you") : m.sender())
+                + " · " + UiKit.time(m.sentAt()), "row-sub");
+        VBox text = new VBox(1, name, sub);
+        text.setMinWidth(0);
+        Button save = new Button();
+        save.getStyleClass().addAll("small", "attach");
+        save.setGraphic(Icons.of(Icons.DOWNLOAD, 15, "muted"));
+        save.setTooltip(new javafx.scene.control.Tooltip(I18n.t("conv.saveTip")));
+        save.setOnAction(e -> chat.sender.saveFile(file));
+        HBox row = new HBox(8, Icons.of(Icons.FILE, 16, "accent"), text, UiKit.grow(), save);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getStyleClass().addAll("list-row", "media-file");
+        row.setId("media-" + m.id());
+        A11y.clickable(row, file.name());
+        row.setOnMouseClicked(e -> {
+            if (e.getTarget() instanceof Node n && isInside(n, save)) return;
+            chat.reveal(m.id());
+        });
+        return row;
+    }
+
+    private Node linkRows(History.Message m) {
+        VBox box = new VBox(2);
+        for (String url : Markdown.links(m.text())) {
+            Hyperlink link = new Hyperlink(url);
+            link.getStyleClass().add("media-link");
+            link.setMaxWidth(Double.MAX_VALUE);
+            link.setOnAction(e -> MainView.browse(url));
+            box.getChildren().add(link);
+        }
+        Label sub = UiKit.label((m.outgoing() ? I18n.t("conv.you") : m.sender()) + " · " + UiKit.time(m.sentAt()), "row-sub");
+        A11y.clickable(sub, null);
+        sub.setOnMouseClicked(e -> chat.reveal(m.id()));
+        box.getChildren().add(sub);
+        box.getStyleClass().add("media-link-row");
+        box.setId("media-" + m.id());
+        return box;
+    }
+
+    private static boolean isInside(Node n, Node parent) {
+        for (Node x = n; x != null; x = x.getParent()) if (x == parent) return true;
+        return false;
     }
 
     /** The thread panel: the first message, its replies, and a composer that answers in the thread. */
