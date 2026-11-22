@@ -39,12 +39,71 @@ final class SecurityDialogs {
         }
         VBox twoStep = new VBox(8, UiKit.label(I18n.t("security.twoStep"), "h3"), wrap(I18n.t("security.loading"), "caption"));
         VBox password = passwordSection();
-        VBox box = Overlay.dialog(I18n.t("security.title"), twoStep, new javafx.scene.control.Separator(), password,
-                new HBox(UiKit.grow(), close));
+        VBox computers = new VBox(8, UiKit.label(I18n.t("devices.title"), "h3"), wrap(I18n.t("security.loading"), "caption"));
+        computers.setId("devices-section");
+        javafx.scene.control.ScrollPane scroll = new javafx.scene.control.ScrollPane(new VBox(14, twoStep,
+                new javafx.scene.control.Separator(), computers, new javafx.scene.control.Separator(), password));
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.getStyleClass().add("dialog-scroll");
+        scroll.setPrefViewportHeight(460);
+        scroll.setMaxHeight(500);
+        VBox box = Overlay.dialog(I18n.t("security.title"), scroll, new HBox(UiKit.grow(), close));
         box.setId("security-dialog");
         box.setMaxWidth(480);
         main.overlay.show(box);
         load(twoStep);
+        loadDevices(computers);
+    }
+
+    /** The account's computers, with "Remove" for the others. */
+    private void loadDevices(VBox section) {
+        main.session.background().execute(() -> {
+            try {
+                List<Packet.DeviceInfo> list = main.session.client().devices();
+                Platform.runLater(() -> showDevices(section, list));
+            } catch (Exception e) {
+                Platform.runLater(() -> section.getChildren().setAll(UiKit.label(I18n.t("devices.title"), "h3"),
+                        wrap(message(e), "caption")));
+            }
+        });
+    }
+
+    private void showDevices(VBox section, List<Packet.DeviceInfo> list) {
+        section.getChildren().setAll(UiKit.label(I18n.t("devices.title"), "h3"), wrap(I18n.t("devices.hint"), "caption"));
+        for (Packet.DeviceInfo d : list) {
+            String name = d.name().isBlank() ? (d.id() == 0 ? I18n.t("devices.first") : I18n.t("devices.unnamed")) : d.name();
+            Label title = UiKit.label(name + (d.current() ? "  · " + I18n.t("devices.thisOne") : ""), "row-title");
+            Label sub = UiKit.label(d.online() ? I18n.t("conv.online")
+                    : d.lastSeen() > 0 ? I18n.t("devices.lastSeen", UiKit.time(d.lastSeen())) : "", "row-sub");
+            VBox text = new VBox(1, title, sub);
+            HBox row = new HBox(8, Icons.of(Icons.MONITOR, 16, d.current() ? "accent" : "muted"), text, UiKit.grow());
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.getStyleClass().add("list-row");
+            row.setId("device-" + d.id());
+            if (!d.current()) {
+                Button remove = new Button(I18n.t("devices.remove"));
+                remove.getStyleClass().addAll("small", "danger-ghost");
+                remove.setId("device-remove-" + d.id());
+                remove.setOnAction(e -> {
+                    remove.setDisable(true);
+                    main.session.background().execute(() -> {
+                        try {
+                            main.session.client().removeDevice(d.id());
+                            Platform.runLater(() -> loadDevices(section));
+                        } catch (Exception ex) {
+                            Platform.runLater(() -> {
+                                remove.setDisable(false);
+                                section.getChildren().add(wrap(message(ex), "caption"));
+                            });
+                        }
+                    });
+                });
+                row.getChildren().add(remove);
+            }
+            section.getChildren().add(row);
+        }
+        if (list.isEmpty()) section.getChildren().add(wrap(I18n.t("devices.oldServer"), "caption"));
     }
 
     private void load(VBox twoStep) {

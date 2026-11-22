@@ -167,6 +167,12 @@ public final class GroupNames {
         if (s != null && s.distributedTo.add(member)) save(groupId, s);
     }
 
+    /** The member's devices changed: they need the name key again. */
+    public synchronized void unmarkDistributed(long groupId, String member) throws IOException {
+        State s = state(groupId);
+        if (s != null && s.distributedTo.remove(member)) save(groupId, s);
+    }
+
     public synchronized void forget(long groupId) throws IOException {
         cache.remove(groupId);
         Files.deleteIfExists(file(groupId));

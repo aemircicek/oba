@@ -243,8 +243,17 @@ final class AccountService {
         }
     }
 
-    boolean deviceExists(Database.User user, int deviceId) throws java.sql.SQLException {
-        return db.deviceExists(user.id(), deviceId);
+    byte[] deviceSecret(Database.User user, int deviceId) throws java.sql.SQLException {
+        return db.deviceSecret(user.id(), deviceId);
+    }
+
+    /** True once device 0 has a row (and so its secret was issued already, or must be). */
+    boolean deviceExists0(Database.User user) throws java.sql.SQLException {
+        return db.devices(user.id()).stream().anyMatch(d -> d.id() == 0 && d.createdAt() > 0);
+    }
+
+    void setDeviceSecret(Database.User user, int deviceId, byte[] hash) throws java.sql.SQLException {
+        db.setDeviceSecret(user.id(), deviceId, hash);
     }
 
     void deviceSeen(Database.User user, int deviceId, String name) throws java.sql.SQLException {
@@ -279,11 +288,13 @@ final class AccountService {
             return false;
         });
         if (!ok) {
-            if (found.isPresent()) perUsername.recordFailure(username);
+            // counted for every well-formed name, as in login: the limits must not tell which names exist
+            if (USERNAME.matcher(username).matches()) perUsername.recordFailure(username);
             perAddress.recordFailure(address);
             throw new ApiException(ErrorCode.BAD_CREDENTIALS, GENERIC_LOGIN_ERROR);
         }
         secondStep(found.get(), code, username, address);
+        perUsername.reset(username);
         return found.get();
     }
 

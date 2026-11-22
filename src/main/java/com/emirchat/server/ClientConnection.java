@@ -377,17 +377,29 @@ final class ClientConnection {
             }
             case Packet.SetDevice d -> {
                 Database.User u = me();
+                byte[] issued = null;
                 try {
-                    if (!services.accounts().deviceExists(u, d.deviceId())) {
+                    byte[] known = services.accounts().deviceSecret(u, d.deviceId());
+                    if (known == null) {
+                        // only the first device may get its secret on first use: the others got theirs when linked
+                        if (d.deviceId() != 0 || services.accounts().deviceExists0(u)) {
+                            throw new ApiException(ErrorCode.INVALID_REQUEST, "This computer is not one of the account's devices.");
+                        }
+                        issued = new byte[Packet.DEVICE_SECRET_BYTES];
+                        new java.security.SecureRandom().nextBytes(issued);
+                        services.accounts().deviceSeen(u, 0, d.name());
+                        services.accounts().setDeviceSecret(u, 0, LinkService.hash(issued));
+                    } else if (!java.security.MessageDigest.isEqual(known, LinkService.hash(d.secret()))) {
                         throw new ApiException(ErrorCode.INVALID_REQUEST, "This computer is not one of the account's devices.");
+                    } else {
+                        services.accounts().deviceSeen(u, d.deviceId(), d.name());
                     }
-                    services.accounts().deviceSeen(u, d.deviceId(), d.name());
                 } catch (java.sql.SQLException e) {
                     throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
                 }
                 deviceId = d.deviceId();
                 multiDevice = true;
-                yield new Packet.Ok();
+                yield issued != null ? new Packet.DeviceSecret(issued) : new Packet.Ok();
             }
             case Packet.FetchDeviceBundles f -> services.messages().deviceBundles(me(), deviceId, f.username());
             case Packet.SendToDevices s -> {

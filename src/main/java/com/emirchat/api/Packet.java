@@ -38,6 +38,7 @@ public sealed interface Packet {
     int RELAY_TICKET_BYTES = 16;
     int MAX_CODE_BYTES = 32;
     int MAX_DEVICES = 16;
+    int DEVICE_SECRET_BYTES = 32;
     int MAX_DEVICE_NAME_BYTES = 64;
     int MAX_LINK_BYTES = 32 * 1024;
 
@@ -202,8 +203,19 @@ public sealed interface Packet {
 
     // ------------------------------------------------------------- several devices (3.6)
 
-    /** After logging in: which of the account's devices this connection is (0 for the first). */
-    record SetDevice(int deviceId, String name) implements Packet {}
+    /**
+     * After logging in: which of the account's devices this connection is (0 for the first), and
+     * the secret the server gave that device (empty the first time for device 0). The account's
+     * identity key is shared by all its devices; this secret is what tells them apart.
+     */
+    record SetDevice(int deviceId, String name, byte[] secret) implements Packet {
+        @Override public String toString() { return "SetDevice[" + deviceId + "]"; }
+    }
+
+    /** The secret for this device, issued once (device 0's first 3.6 connection); keep it. */
+    record DeviceSecret(byte[] secret) implements Packet {
+        @Override public String toString() { return "DeviceSecret[…]"; }
+    }
 
     /** The bundles of every device of a user that can receive; one one-time prekey of each is used. */
     record FetchDeviceBundles(String username) implements Packet {}
@@ -268,7 +280,7 @@ public sealed interface Packet {
     record LinkDeny(long linkId) implements Packet {}
 
     /** Pushed to the waiting computer: its device id and the sealed keys, or id -1 if refused. */
-    record LinkGranted(int deviceId, byte[] ephemeral, byte[] sealed) implements Packet {
+    record LinkGranted(int deviceId, byte[] ephemeral, byte[] sealed, byte[] secret) implements Packet {
         @Override public String toString() { return "LinkGranted[" + deviceId + "]"; }
     }
 
@@ -625,7 +637,8 @@ public sealed interface Packet {
                 writeNames(w, r.codes());
             }
             case TwoFactorState t -> w.u8(137).i64(requestId).u8(t.enabled() ? 1 : 0).i64(t.recoveryLeft());
-            case SetDevice d -> w.u8(60).i64(requestId).i64(d.deviceId()).string(d.name());
+            case SetDevice d -> w.u8(60).i64(requestId).i64(d.deviceId()).string(d.name()).bytes(d.secret());
+            case DeviceSecret d -> w.u8(145).i64(requestId).bytes(d.secret());
             case FetchDeviceBundles f -> w.u8(61).i64(requestId).string(f.username());
             case SendToDevices s -> {
                 w.u8(62).i64(requestId).string(s.recipient()).u16(s.copies().size());
@@ -655,7 +668,8 @@ public sealed interface Packet {
             }
             case LinkPending p -> w.u8(140).i64(requestId).i64(p.linkId());
             case LinkRequest l -> w.u8(141).i64(requestId).i64(l.linkId()).string(l.name()).bytes(l.ephemeral());
-            case LinkGranted g -> w.u8(142).i64(requestId).i64(g.deviceId()).bytes(g.ephemeral()).bytes(g.sealed());
+            case LinkGranted g -> w.u8(142).i64(requestId).i64(g.deviceId()).bytes(g.ephemeral()).bytes(g.sealed())
+                    .bytes(g.secret());
             case DeviceRemoved d -> w.u8(143).i64(requestId).i64(d.deviceId());
             case EnvelopeReceivedFrom e -> w.u8(144).i64(requestId).i64(e.envelope().id()).string(e.envelope().sender())
                     .i64(e.envelope().groupId()).i64(e.envelope().sentAt()).bytes(e.envelope().body()).i64(e.senderDevice());
@@ -776,7 +790,8 @@ public sealed interface Packet {
             case 135 -> new TwoFactorSecret(r.bytes(64));
             case 136 -> new RecoveryCodes(readNames(r));
             case 137 -> new TwoFactorState(bool(r.u8()), (int) r.i64());
-            case 60 -> new SetDevice(deviceId(r), r.string(MAX_DEVICE_NAME_BYTES));
+            case 60 -> new SetDevice(deviceId(r), r.string(MAX_DEVICE_NAME_BYTES), r.bytes(DEVICE_SECRET_BYTES));
+            case 145 -> new DeviceSecret(r.exactBytes(DEVICE_SECRET_BYTES));
             case 61 -> new FetchDeviceBundles(r.string(MAX_USERNAME_BYTES));
             case 62 -> {
                 String recipient = r.string(MAX_USERNAME_BYTES);
@@ -813,7 +828,7 @@ public sealed interface Packet {
             }
             case 140 -> new LinkPending(r.i64());
             case 141 -> new LinkRequest(r.i64(), r.string(MAX_DEVICE_NAME_BYTES), r.exactBytes(X25519_KEY));
-            case 142 -> new LinkGranted((int) r.i64(), r.bytes(X25519_KEY), r.bytes(MAX_LINK_BYTES));
+            case 142 -> new LinkGranted((int) r.i64(), r.bytes(X25519_KEY), r.bytes(MAX_LINK_BYTES), r.bytes(DEVICE_SECRET_BYTES));
             case 143 -> new DeviceRemoved(deviceId(r));
             case 144 -> new EnvelopeReceivedFrom(new Envelope(r.i64(), r.string(MAX_USERNAME_BYTES), r.i64(), r.i64(),
                     r.bytes(MAX_ENVELOPE_BYTES)), deviceId(r));

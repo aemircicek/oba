@@ -57,6 +57,11 @@ public final class ChatClient implements AutoCloseable {
     private static final int CONTENT_ACTION = 8;
     /** Call signalling: u8 kind ‖ 16-byte call id ‖ bytes call key (offer and answer). */
     private static final int CONTENT_CALL = 9;
+    /**
+     * 3.6, only between our own devices: something we sent from another of our computers
+     * ({@code string peer ‖ u8 content type ‖ bytes payload}), so every computer shows the chat.
+     */
+    private static final int CONTENT_SYNC = 10;
     private static final int KIND_TEXT = 1;
     private static final int KIND_FILE = 2;
     /** 3.4: a poll (see {@link com.emirchat.chat.Poll}). */
@@ -210,6 +215,18 @@ public final class ChatClient implements AutoCloseable {
 
         /** Someone changed the disappearing-message timer of a DM (groupId 0) or a group. */
         default void timerChanged(String from, long groupId, long seconds) {}
+
+        /** We sent this from another of our computers (to {@code peer}, or to the group in it). */
+        default void sentElsewhere(String peer, Incoming m) {}
+
+        /** We did this from another of our computers (in the chat with {@code peer}, or in the group). */
+        default void actionElsewhere(String peer, Action a) {}
+
+        /** This computer was removed from the account on another one: sign out. */
+        default void deviceRemoved() {}
+
+        /** Another computer asks to join the account (approve with {@link ChatClient#approveLink}). */
+        default void linkRequest(Packet.LinkRequest request) {}
 
         /** Any received chat or file message. The default forwards to the simpler callbacks above. */
         default void incoming(Incoming m) {
@@ -499,6 +516,17 @@ public final class ChatClient implements AutoCloseable {
         client.groupNames = new GroupNames(dir.resolve("e2e"));
         client.loadHandled();
         client.deviceKey = device.publicKeyBytes();
+        client.account = device;
+        client.deviceId = readDeviceId(dir);
+        if (connection.hasAccountSecurity()) {
+            // a 3.6 server: say which of the account's computers this is, before keys are published
+            byte[] secret = com.emirchat.e2e.Vault.read(dir.resolve(DEVICE_SECRET_FILE));
+            Packet answer = connection.call(new Packet.SetDevice(client.deviceId, deviceName(), secret == null ? new byte[0] : secret));
+            if (answer instanceof Packet.DeviceSecret issued) {
+                com.emirchat.e2e.Vault.write(dir.resolve(DEVICE_SECRET_FILE), issued.secret());
+            }
+            client.multi = true;
+        }
         client.calls = new com.emirchat.call.Calls(new com.emirchat.call.Calls.Transport() {
             @Override public void signal(String peer, int kind, byte[] callId, byte[] callKey) throws Exception {
                 client.sendPairwise(peer, new Content(CONTENT_CALL,
@@ -558,6 +586,7 @@ public final class ChatClient implements AutoCloseable {
             if (!client.closing) client.inbox.execute(() -> client.listener.disconnected());
         });
         client.publishKeys();
+        if (client.multi) client.refreshOwnDevices();
         client.refreshFriends();
         client.refreshGroups();
         for (Packet.GroupInfo g : client.groups()) client.maintainGroupName(g, false);
@@ -706,11 +735,259 @@ public final class ChatClient implements AutoCloseable {
 
     private Packet.EnvelopeAccepted sendPairwise(String user, int contentType, byte[] payload)
             throws IOException, ApiException, KeyChangedException {
-        byte[] key = pinnedKey(user);
         byte[] plaintext = new Wire.Writer().u8(contentType).bytes(payload).toByteArray();
-        byte[] body = messenger.encrypt(user, key, () -> fetchBundle(user), plaintext);
-        if (contentType == CONTENT_MESSAGE) lastSealed.set(body);
-        return connection.sendEnvelope(user, body);
+        if (!multi) {
+            byte[] key = pinnedKey(user);
+            byte[] body = messenger.encrypt(user, key, () -> fetchBundle(user), plaintext);
+            if (contentType == CONTENT_MESSAGE) lastSealed.set(body);
+            return connection.sendEnvelope(user, body);
+        }
+        boolean self = user.equals(username);
+        if (self && ownDevices.isEmpty()) return null; // no other computer to tell
+        byte[] key = self ? deviceKey : pinnedKey(user);
+        Packet.EnvelopeAccepted accepted = null;
+        for (int attempt = 0; accepted == null; attempt++) {
+            java.util.Set<Integer> devices = self ? ownDevices : devicesOf(user);
+            List<Packet.DeviceEnvelope> copies = new ArrayList<>();
+            for (int d : devices) {
+                byte[] body = messenger.encrypt(address(user, d), key, () -> takeBundle(user, d), plaintext);
+                if (contentType == CONTENT_MESSAGE && copies.isEmpty()) lastSealed.set(body);
+                copies.add(new Packet.DeviceEnvelope(d, body));
+            }
+            try {
+                accepted = (Packet.EnvelopeAccepted) connection.call(new Packet.SendToDevices(user, copies));
+            } catch (ApiException e) {
+                if (e.code() != ErrorCode.STALE_DEVICES || attempt > 0) throw e;
+                devicesChanged(user); // a computer was added or removed: ask again and encrypt for each
+            }
+        }
+        if (!self && SYNCED.contains(contentType) && !ownDevices.isEmpty()) {
+            try {
+                sendPairwise(username, CONTENT_SYNC, new Wire.Writer().string(user).u8(contentType).bytes(payload).toByteArray());
+            } catch (IOException | ApiException e) {
+                // the message went out; only our other computers miss it
+            }
+        }
+        return accepted;
+    }
+
+    /** What our other computers are told about when we send it. */
+    private static final java.util.Set<Integer> SYNCED = java.util.Set.of(CONTENT_CHAT, CONTENT_FILE, CONTENT_EXPIRING,
+            CONTENT_MESSAGE, CONTENT_ACTION);
+
+    // ------------------------------------------------------------------ several devices (3.6)
+
+    /** Which of the account's computers this is: 0 for the first, the number it got when linked otherwise. */
+    private int deviceId;
+    /** The server knows several devices per account (3.6): messages go to each device on their own. */
+    private volatile boolean multi;
+    /** Our own other computers. */
+    private volatile java.util.Set<Integer> ownDevices = java.util.Set.of();
+    /** Devices of other people, as last fetched. */
+    private final Map<String, java.util.Set<Integer>> knownDevices = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Bundles fetched but not used yet, by "user#device". */
+    private final Map<String, com.emirchat.e2e.PrekeyBundle> freshBundles = new java.util.concurrent.ConcurrentHashMap<>();
+    static final String DEVICE_FILE = "device";
+    static final String DEVICE_SECRET_FILE = "device-secret.bin";
+    static final String ACCOUNT_IDENTITY_FILE = "account-identity.bin";
+
+    /**
+     * The account's identity on a computer that was linked to it (it got it from another of the
+     * account's computers), or null on the account's first computer, which uses its own key.
+     * Unlocks the folder's vault with the password.
+     */
+    public static Identity linkedIdentity(Path accountDir, String user, String password) throws IOException {
+        Path dir = accountDir.resolve(user);
+        if (!Files.exists(dir.resolve(ACCOUNT_IDENTITY_FILE))) return null;
+        com.emirchat.e2e.Vault.unlock(dir, password);
+        byte[] data = com.emirchat.e2e.Vault.read(dir.resolve(ACCOUNT_IDENTITY_FILE));
+        try {
+            Wire.Reader r = new Wire.Reader(data);
+            byte[] pub = r.exactBytes(Identity.ENCODED_PUBLIC_KEY_LENGTH);
+            byte[] priv = r.bytes(256);
+            r.expectEnd();
+            return Identity.fromEncoded(pub, priv);
+        } catch (ProtocolException e) {
+            throw new IOException("The account's key on this computer is damaged", e);
+        }
+    }
+
+    /** What linking gave this computer. */
+    public record Linked(Identity account, int deviceId) {}
+
+    /**
+     * Links this computer to an account (3.6): proves the password (and code), shows {@code code}
+     * the number to compare with the computer that approves, waits for its approval, and keeps the
+     * account's identity, this device's number and its secret in the account folder. Then sign in
+     * normally with the identity returned.
+     */
+    public static Linked link(ServerConnection connection, Path accountDir, String user, String password, String twoStep,
+                              java.util.function.Consumer<String> code) throws IOException, ApiException {
+        if (!connection.hasAccountSecurity()) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST, "The server is older than 3.6: it cannot link computers.");
+        }
+        java.security.KeyPair ephemeral = com.emirchat.crypto.X25519.generate();
+        byte[] mine = com.emirchat.crypto.X25519.encode(ephemeral.getPublic());
+        java.util.concurrent.CompletableFuture<Packet.LinkGranted> granted = new java.util.concurrent.CompletableFuture<>();
+        connection.onPush(p -> {
+            if (p instanceof Packet.LinkGranted g) granted.complete(g);
+        });
+        connection.onClosed(() -> granted.completeExceptionally(new IOException("The server closed the connection")));
+        code.accept(DeviceLink.code(mine));
+        connection.call(new Packet.LinkLogin(user, password, twoStep == null ? "" : twoStep, mine, deviceName()));
+        Packet.LinkGranted g;
+        try {
+            g = granted.get(5, java.util.concurrent.TimeUnit.MINUTES);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new IOException("No computer approved in five minutes");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Stopped", e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            throw e.getCause() instanceof IOException io ? io : new IOException(e.getCause());
+        }
+        if (g.deviceId() < 1) throw new ApiException(ErrorCode.INVALID_REQUEST, "The other computer said no.");
+        Identity account = DeviceLink.open(ephemeral, g.ephemeral(), g.sealed());
+        Path dir = accountDir.resolve(AccountServiceNames.normalize(user));
+        Files.createDirectories(dir);
+        com.emirchat.e2e.Vault.unlock(dir, password);
+        com.emirchat.e2e.Vault.write(dir.resolve(ACCOUNT_IDENTITY_FILE),
+                new Wire.Writer().bytes(account.publicKeyBytes()).bytes(account.exportPrivate()).toByteArray());
+        com.emirchat.e2e.Vault.write(dir.resolve(DEVICE_SECRET_FILE), g.secret());
+        Files.writeString(dir.resolve(DEVICE_FILE), Integer.toString(g.deviceId()));
+        return new Linked(account, g.deviceId());
+    }
+
+    /** Usernames as the server keeps them (lower case, no spaces around). */
+    private static final class AccountServiceNames {
+        static String normalize(String u) {
+            return u == null ? "" : u.strip().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
+
+    /** "efe" for someone's first device, "efe#2" for another: each has sessions of its own. */
+    static String address(String user, int device) {
+        return device == 0 ? user : user + "#" + device;
+    }
+
+    static int readDeviceId(Path dir) {
+        try {
+            Path f = dir.resolve(DEVICE_FILE);
+            return Files.exists(f) ? Integer.parseInt(Files.readString(f).strip()) : 0;
+        } catch (IOException | NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /** This computer's name as other devices list it. */
+    static String deviceName() {
+        String name = System.getenv("COMPUTERNAME");
+        if (name == null) name = System.getenv("HOSTNAME");
+        if (name == null) {
+            try {
+                name = java.net.InetAddress.getLocalHost().getHostName();
+            } catch (IOException e) {
+                name = "";
+            }
+        }
+        name = name.replaceAll("\\.local$", "").strip();
+        String os = System.getProperty("os.name", "");
+        String full = (name.isEmpty() ? "" : name + " · ") + os;
+        byte[] b = full.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return b.length <= Packet.MAX_DEVICE_NAME_BYTES ? full : os;
+    }
+
+    /** Our other computers, as the server knows them. */
+    private void refreshOwnDevices() throws IOException, ApiException {
+        java.util.Set<Integer> mine = new java.util.TreeSet<>();
+        for (Packet.DeviceInfo d : ((Packet.DeviceList) connection.call(new Packet.ListDevices())).devices()) {
+            if (d.id() != deviceId) mine.add(d.id());
+        }
+        ownDevices = java.util.Set.copyOf(mine);
+    }
+
+    /** The account's computers, for the settings page (3.6 servers). */
+    public List<Packet.DeviceInfo> devices() throws IOException, ApiException {
+        if (!multi) return List.of();
+        return ((Packet.DeviceList) connection.call(new Packet.ListDevices())).devices();
+    }
+
+    public void removeDevice(int id) throws IOException, ApiException {
+        connection.call(new Packet.RemoveDevice(id));
+        refreshOwnDevices();
+        devicesChanged(username);
+    }
+
+    public int deviceId() {
+        return deviceId;
+    }
+
+    private java.util.Set<Integer> devicesOf(String user) throws IOException, ApiException {
+        java.util.Set<Integer> known = knownDevices.get(user);
+        if (known != null) return known;
+        fetchDevices(user);
+        return knownDevices.getOrDefault(user, java.util.Set.of());
+    }
+
+    private void fetchDevices(String user) throws IOException, ApiException {
+        Packet.DeviceBundles b = (Packet.DeviceBundles) connection.call(new Packet.FetchDeviceBundles(user));
+        java.util.Set<Integer> ids = new java.util.TreeSet<>();
+        for (Packet.DeviceBundle d : b.devices()) {
+            ids.add(d.deviceId());
+            freshBundles.put(address(user, d.deviceId()), d.bundle());
+        }
+        if (user.equals(username)) {
+            ids.remove(deviceId);
+            ownDevices = java.util.Set.copyOf(ids);
+        } else {
+            knownDevices.put(user, java.util.Set.copyOf(ids));
+        }
+    }
+
+    /** A bundle for starting a session with one device (fetched again when the last one was used). */
+    private com.emirchat.e2e.PrekeyBundle takeBundle(String user, int device) throws IOException {
+        com.emirchat.e2e.PrekeyBundle b = freshBundles.remove(address(user, device));
+        if (b != null) return b;
+        try {
+            fetchDevices(user);
+        } catch (ApiException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        b = freshBundles.remove(address(user, device));
+        if (b == null) throw new IOException(user + " has no keys for that computer");
+        return b;
+    }
+
+    /** Someone's computers changed: forget what we knew, and give them our group keys again. */
+    private void devicesChanged(String user) throws IOException, ApiException {
+        knownDevices.remove(user);
+        freshBundles.keySet().removeIf(k -> k.equals(user) || k.startsWith(user + "#"));
+        if (user.equals(username)) refreshOwnDevices();
+        for (Packet.GroupInfo g : groups.values()) {
+            if (!user.equals(username) && !g.hasMember(user)) continue;
+            groupKeys.unmarkDistributed(g.id(), user);
+            groupNames.unmarkDistributed(g.id(), user);
+        }
+    }
+
+    /**
+     * Approves a computer asking to join: seals the account's identity key to its one-time key,
+     * after the user compared the code shown on both ({@link DeviceLink#code}).
+     */
+    public void approveLink(Packet.LinkRequest request, Identity account) throws IOException, ApiException {
+        DeviceLink.Sealed sealed = DeviceLink.seal(account, request.ephemeral());
+        connection.call(new Packet.LinkApprove(request.linkId(), sealed.ephemeral(), sealed.ciphertext()));
+    }
+
+    /** The account's identity, as this computer signed in with it (to approve another computer). */
+    private Identity account;
+
+    public void approveLink(Packet.LinkRequest request) throws IOException, ApiException {
+        approveLink(request, account);
+    }
+
+    public void denyLink(Packet.LinkRequest request) throws IOException, ApiException {
+        connection.call(new Packet.LinkDeny(request.linkId()));
     }
 
     // ------------------------------------------------------------------ files
@@ -1114,6 +1391,15 @@ public final class ChatClient implements AutoCloseable {
                 listener.keyChanged(member);
             }
         }
+        if (multi && !ownDevices.isEmpty() && !groupKeys.needsKey(groupId, List.of(username), "").isEmpty()) {
+            // our other computers read the group too: they need our key as well
+            try {
+                sendPairwise(username, CONTENT_SENDER_KEY, groupKeys.distribution(groupId));
+                groupKeys.markDistributed(groupId, username);
+            } catch (KeyChangedException e) {
+                throw new IllegalStateException(e); // our own key never "changes" under us
+            }
+        }
         byte[] plaintext = new Wire.Writer().u8(contentType).bytes(payload).toByteArray();
         byte[] sealedBody = groupKeys.encrypt(groupId, plaintext);
         if (contentType == CONTENT_MESSAGE) lastSealed.set(sealedBody);
@@ -1205,7 +1491,10 @@ public final class ChatClient implements AutoCloseable {
 
     private void onPush(Packet packet) {
         switch (packet) {
-            case Packet.EnvelopeReceived r -> receive(r.envelope());
+            case Packet.EnvelopeReceived r -> receive(r.envelope(), 0);
+            case Packet.EnvelopeReceivedFrom r -> receive(r.envelope(), r.senderDevice());
+            case Packet.LinkRequest l -> listener.linkRequest(l);
+            case Packet.DeviceRemoved d -> listener.deviceRemoved();
             case Packet.EnvelopeDelivered d -> listener.delivered(d.id());
             case Packet.FriendAdded a -> {
                 friendKeys.put(a.friend().username(), a.friend().identityKey());
@@ -1243,7 +1532,7 @@ public final class ChatClient implements AutoCloseable {
         }
     }
 
-    private void receive(Packet.Envelope envelope) {
+    private void receive(Packet.Envelope envelope, int senderDevice) {
         if (seen.put(envelope.id(), Boolean.TRUE) != null) {
             // Live push and queue fetch can overlap; and if our acknowledgement was lost (the app
             // closed right after a message), the server delivers it again after a restart. Its
@@ -1255,11 +1544,14 @@ public final class ChatClient implements AutoCloseable {
         opening = envelope.body();
         try {
             if (envelope.groupId() != 0) {
-                receiveGroup(envelope);
+                receiveGroup(envelope, senderDevice);
                 return;
             }
-            byte[] key = pinnedKey(envelope.sender());
-            byte[] plaintext = messenger.decrypt(envelope.sender(), key, envelope.body());
+            boolean fromUs = envelope.sender().equals(username);
+            if (fromUs && senderDevice == deviceId) throw new SecurityException("A message from this very computer");
+            String from = address(envelope.sender(), senderDevice);
+            byte[] key = fromUs ? deviceKey : pinnedKey(envelope.sender());
+            byte[] plaintext = messenger.decrypt(from, key, envelope.body());
             Wire.Reader r = new Wire.Reader(plaintext);
             int contentType = r.u8();
             byte[] payload = r.bytes(MAX_CONTENT_BYTES);
@@ -1267,7 +1559,22 @@ public final class ChatClient implements AutoCloseable {
             switch (contentType) {
                 case CONTENT_CHAT, CONTENT_FILE, CONTENT_EXPIRING, CONTENT_TIMER, CONTENT_MESSAGE, CONTENT_ACTION ->
                         deliver(envelope.sender(), 0, contentType, payload, envelope.id());
-                case CONTENT_SENDER_KEY -> acceptSenderKey(envelope.sender(), payload);
+                case CONTENT_SENDER_KEY -> acceptSenderKey(envelope.sender(), from, payload);
+                case CONTENT_SYNC -> {
+                    if (!fromUs) throw new SecurityException("Only our own computers tell us what we sent");
+                    Wire.Reader sync = new Wire.Reader(payload);
+                    String peer = sync.string(Packet.MAX_USERNAME_BYTES);
+                    int type = sync.u8();
+                    byte[] inner = sync.bytes(MAX_CONTENT_BYTES);
+                    sync.expectEnd();
+                    if (!SYNCED.contains(type)) throw new ProtocolException("Not something to tell our other computers");
+                    elsewhere.set(peer);
+                    try {
+                        deliver(username, 0, type, inner, envelope.id());
+                    } finally {
+                        elsewhere.remove();
+                    }
+                }
                 case CONTENT_GROUP_NAME_KEY -> acceptGroupNameKey(envelope.sender(), payload);
                 case CONTENT_CALL -> {
                     Wire.Reader call = new Wire.Reader(payload);
@@ -1280,6 +1587,7 @@ public final class ChatClient implements AutoCloseable {
                     // Asked afresh for every call signal (there are a handful per call): the list here
                     // can be behind, for instance right after we removed someone ourselves.
                     refreshFriends();
+                    if (fromUs) return; // calls between our own computers make no sense
                     if (!friends.contains(envelope.sender())) throw new SecurityException("Call from someone who is not a friend");
                     calls.signal(envelope.sender(), kind, callId, callKey, envelope.sentAt());
                 }
@@ -1293,7 +1601,7 @@ public final class ChatClient implements AutoCloseable {
         } catch (com.emirchat.e2e.GroupKeys.MissingKeyException e) {
             // A group message overtook its sender's key: keep it (unacknowledged) until the key arrives.
             ack = false;
-            waitForSenderKey(envelope);
+            waitForSenderKey(envelope, senderDevice);
         } catch (SecurityException | IOException | ApiException e) {
             listener.undecryptable(envelope.sender(), e.getMessage());
         } finally {
@@ -1305,7 +1613,7 @@ public final class ChatClient implements AutoCloseable {
         }
     }
 
-    private void receiveGroup(Packet.Envelope envelope) throws IOException, ApiException, KeyChangedException {
+    private void receiveGroup(Packet.Envelope envelope, int senderDevice) throws IOException, ApiException, KeyChangedException {
         Packet.GroupInfo group = groups.get(envelope.groupId());
         if (group == null) {
             refreshGroups();
@@ -1314,14 +1622,22 @@ public final class ChatClient implements AutoCloseable {
         if (group == null || !group.hasMember(envelope.sender())) {
             throw new SecurityException(envelope.sender() + " is not a member of that group");
         }
-        byte[] plaintext = groupKeys.decrypt(envelope.groupId(), envelope.sender(), envelope.body());
+        boolean fromUs = envelope.sender().equals(username);
+        if (fromUs && senderDevice == deviceId) throw new SecurityException("A message from this very computer");
+        byte[] plaintext = groupKeys.decrypt(envelope.groupId(), address(envelope.sender(), senderDevice), envelope.body());
         Wire.Reader r = new Wire.Reader(plaintext);
         int contentType = r.u8();
         byte[] payload = r.bytes(MAX_CONTENT_BYTES);
         r.expectEnd();
         switch (contentType) {
-            case CONTENT_CHAT, CONTENT_FILE, CONTENT_EXPIRING, CONTENT_TIMER, CONTENT_MESSAGE, CONTENT_ACTION ->
+            case CONTENT_CHAT, CONTENT_FILE, CONTENT_EXPIRING, CONTENT_TIMER, CONTENT_MESSAGE, CONTENT_ACTION -> {
+                if (fromUs) elsewhere.set(""); // we said this in the group from another computer
+                try {
                     deliver(envelope.sender(), envelope.groupId(), contentType, payload, envelope.id());
+                } finally {
+                    elsewhere.remove();
+                }
+            }
             default -> throw new ProtocolException("Unknown group content");
         }
     }
@@ -1347,7 +1663,9 @@ public final class ChatClient implements AutoCloseable {
                 voice.acceptKey(from, groupId, value); // a malformed key throws SecurityException: reported as undecryptable
                 return;
             }
-            listener.action(new Action(from, groupId, kind, target, value));
+            Action action = new Action(from, groupId, kind, target, value);
+            if (elsewhere.get() != null) listener.actionElsewhere(elsewhere.get().isEmpty() ? null : elsewhere.get(), action);
+            else listener.action(action);
             return;
         }
         if (contentType == CONTENT_MESSAGE) {
@@ -1364,17 +1682,17 @@ public final class ChatClient implements AutoCloseable {
             if (expire < 0 || expire > MAX_TIMER_SECONDS) throw new ProtocolException("Invalid timer");
             if (replyTo.length != 0 && replyTo.length != MESSAGE_ID_BYTES) throw new ProtocolException("Bad reply id");
             switch (kind) {
-                case KIND_TEXT -> listener.incoming(new Incoming(from, groupId, id, ChatMessage.decode(body), null, expire,
+                case KIND_TEXT -> emit(new Incoming(from, groupId, id, ChatMessage.decode(body), null, expire,
                         replyTo, envelopeId));
-                case KIND_FILE -> listener.incoming(new Incoming(from, groupId, id, null, FileMessage.decode(body), expire,
+                case KIND_FILE -> emit(new Incoming(from, groupId, id, null, FileMessage.decode(body), expire,
                         replyTo, envelopeId));
-                case KIND_POLL -> listener.incoming(new Incoming(from, groupId, id, null, null, expire, replyTo, envelopeId,
+                case KIND_POLL -> emit(new Incoming(from, groupId, id, null, null, expire, replyTo, envelopeId,
                         com.emirchat.chat.Poll.decode(body), false));
-                case KIND_CAPSULE -> listener.incoming(new Incoming(from, groupId, id, null, null, expire, replyTo,
+                case KIND_CAPSULE -> emit(new Incoming(from, groupId, id, null, null, expire, replyTo,
                         envelopeId, null, false, com.emirchat.chat.Capsule.decode(body)));
                 case KIND_THREAD -> {
                     if (replyTo.length != MESSAGE_ID_BYTES) throw new ProtocolException("Thread reply without its thread");
-                    listener.incoming(new Incoming(from, groupId, id, ChatMessage.decode(body), null, expire, replyTo,
+                    emit(new Incoming(from, groupId, id, ChatMessage.decode(body), null, expire, replyTo,
                             envelopeId, null, true));
                 }
                 default -> listener.unsupported(from, groupId); // a newer kind of message: say so, not "undecryptable"
@@ -1400,16 +1718,16 @@ public final class ChatClient implements AutoCloseable {
         }
         // Older (3.1) format without a message id
         switch (contentType) {
-            case CONTENT_CHAT -> listener.incoming(new Incoming(from, groupId, randomId(), ChatMessage.decode(payload), null,
+            case CONTENT_CHAT -> emit(new Incoming(from, groupId, randomId(), ChatMessage.decode(payload), null,
                     expire, new byte[0], envelopeId));
-            case CONTENT_FILE -> listener.incoming(new Incoming(from, groupId, randomId(), null, FileMessage.decode(payload),
+            case CONTENT_FILE -> emit(new Incoming(from, groupId, randomId(), null, FileMessage.decode(payload),
                     expire, new byte[0], envelopeId));
             default -> throw new ProtocolException("Unknown content type " + contentType);
         }
     }
 
     /** A sender key arrived over the pairwise channel; only accepted from a current member of that group. */
-    private void acceptSenderKey(String sender, byte[] distribution) throws IOException, ApiException {
+    private void acceptSenderKey(String sender, String senderAddress, byte[] distribution) throws IOException, ApiException {
         long groupId;
         try {
             Wire.Reader r = new Wire.Reader(distribution);
@@ -1424,29 +1742,41 @@ public final class ChatClient implements AutoCloseable {
             group = groups.get(groupId);
         }
         if (group == null || !group.hasMember(sender)) throw new SecurityException(sender + " sent a key for a group they are not in");
-        groupKeys.acceptDistribution(groupId, sender, distribution);
-        retryWaiting(groupId, sender);
+        groupKeys.acceptDistribution(groupId, senderAddress, distribution);
+        retryWaiting(groupId, senderAddress);
     }
 
     /** Group messages waiting for their sender's key, by "groupId/sender". */
-    private final Map<String, List<Packet.Envelope>> waitingForKey = new java.util.HashMap<>();
+    private record Waiting(Packet.Envelope envelope, int senderDevice) {}
+
+    private final Map<String, List<Waiting>> waitingForKey = new java.util.HashMap<>();
     private static final int MAX_WAITING = 500;
 
-    private void waitForSenderKey(Packet.Envelope envelope) {
-        List<Packet.Envelope> list = waitingForKey.computeIfAbsent(envelope.groupId() + "/" + envelope.sender(),
+    private void waitForSenderKey(Packet.Envelope envelope, int senderDevice) {
+        List<Waiting> list = waitingForKey.computeIfAbsent(envelope.groupId() + "/" + address(envelope.sender(), senderDevice),
                 k -> new ArrayList<>());
-        if (list.size() < MAX_WAITING) list.add(envelope); // beyond that the server re-delivers them on the next login
+        if (list.size() < MAX_WAITING) list.add(new Waiting(envelope, senderDevice)); // beyond that the server re-delivers them
     }
 
     /** The key arrived: decrypt what was waiting for it, in order (runs on the inbox thread). */
-    private void retryWaiting(long groupId, String sender) {
-        List<Packet.Envelope> waiting = waitingForKey.remove(groupId + "/" + sender);
+    private void retryWaiting(long groupId, String senderAddress) {
+        List<Waiting> waiting = waitingForKey.remove(groupId + "/" + senderAddress);
         if (waiting == null) return;
-        for (Packet.Envelope e : waiting) {
-            seen.remove(e.id());
-            receive(e);
+        for (Waiting w : waiting) {
+            seen.remove(w.envelope().id());
+            receive(w.envelope(), w.senderDevice());
         }
     }
+
+    /** A message for the app: ours from another computer, or someone else's. */
+    private void emit(Incoming m) {
+        String peer = elsewhere.get();
+        if (peer == null) listener.incoming(m);
+        else listener.sentElsewhere(peer.isEmpty() ? null : peer, m);
+    }
+
+    /** Set while delivering something we sent from another computer: the peer ("" in a group). */
+    private final ThreadLocal<String> elsewhere = new ThreadLocal<>();
 
     /**
      * Logs out. Messages already being processed are finished first (stored, remembered as

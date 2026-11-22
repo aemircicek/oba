@@ -85,6 +85,16 @@ public final class Vault {
         SecureFiles.writeAtomically(keyFile, wrap(dataKey, newPassword, iterations()));
     }
 
+    /** Writes a small secret file below an unlocked account folder (encrypted like the keys). */
+    public static void write(Path file, byte[] content) throws IOException {
+        SecureFiles.writeAtomically(file, content);
+    }
+
+    /** Reads such a file, or null if there is none. */
+    public static byte[] read(Path file) throws IOException {
+        return SecureFiles.read(file);
+    }
+
     /** Forgets the data key (logging out). Files stay encrypted on disk. */
     public static void lock(Path accountDir) {
         OPEN.remove(accountDir.toAbsolutePath().normalize());

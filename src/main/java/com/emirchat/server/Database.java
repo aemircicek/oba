@@ -212,6 +212,7 @@ final class Database implements AutoCloseable {
                             name       TEXT    NOT NULL,
                             created_at INTEGER NOT NULL,
                             last_seen  INTEGER NOT NULL,
+                            secret     BLOB,
                             PRIMARY KEY (user_id, device_id)
                         )""");
                 s.execute("""
@@ -261,18 +262,38 @@ final class Database implements AutoCloseable {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT d.device_id, d.name, d.created_at, d.last_seen, "
                         + "EXISTS(SELECT 1 FROM device_keys k WHERE k.user_id = d.user_id AND k.device_id = d.device_id) "
-                        + "FROM devices d WHERE d.user_id = ? ORDER BY d.device_id")) {
+                        + "FROM devices d WHERE d.user_id = ? AND (d.secret IS NULL OR length(d.secret) <> 1) ORDER BY d.device_id")) {
             ps.setLong(1, userId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) out.add(new Device(rs.getInt(1), rs.getString(2), rs.getLong(3), rs.getLong(4), rs.getInt(5) == 1));
             }
         }
-        if (out.stream().noneMatch(d -> d.id() == 0)) {
+        if (out.stream().noneMatch(d -> d.id() == 0) && !exists("SELECT 1 FROM devices WHERE user_id = ? AND device_id = ?", userId, 0)) {
             // device 0 exists implicitly (accounts made before 3.6)
             Optional<DeviceKeysRow> k = deviceKeys(userId, 0);
             out.add(0, new Device(0, "", 0, 0, k.isPresent()));
         }
         return out;
+    }
+
+    /** The hash of the secret a device proves itself with, or null (none issued yet, or no such device). */
+    synchronized byte[] deviceSecret(long userId, int deviceId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT secret FROM devices WHERE user_id = ? AND device_id = ?")) {
+            ps.setLong(1, userId);
+            ps.setInt(2, deviceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getBytes(1) : null;
+            }
+        }
+    }
+
+    synchronized void setDeviceSecret(long userId, int deviceId, byte[] hash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE devices SET secret = ? WHERE user_id = ? AND device_id = ?")) {
+            ps.setBytes(1, hash);
+            ps.setLong(2, userId);
+            ps.setInt(3, deviceId);
+            ps.executeUpdate();
+        }
     }
 
     synchronized boolean deviceExists(long userId, int deviceId) throws SQLException {
@@ -297,10 +318,17 @@ final class Database implements AutoCloseable {
         addDevice(userId, deviceId, name, now);
     }
 
-    /** Forgets a device: its keys, prekeys and queue. */
+    /**
+     * Forgets a device: its keys, prekeys and queue. The first device's row stays as a tombstone
+     * (a one-byte "secret" no device can match), so its number cannot be claimed again.
+     */
     synchronized void removeDevice(long userId, int deviceId) throws SQLException {
+        if (deviceId == 0) {
+            addDevice(userId, 0, "", System.currentTimeMillis());
+            setDeviceSecret(userId, 0, new byte[1]);
+        }
         for (String sql : new String[] {
-                "DELETE FROM devices WHERE user_id = ? AND device_id = ?",
+                "DELETE FROM devices WHERE user_id = ? AND device_id = ? AND device_id <> 0",
                 "DELETE FROM device_keys WHERE user_id = ? AND device_id = ?",
                 "DELETE FROM one_time_prekeys WHERE user_id = ? AND device_id = ?",
                 "DELETE FROM envelopes WHERE recipient_id = ? AND device_id = ?"}) {

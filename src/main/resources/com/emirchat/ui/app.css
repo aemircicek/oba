@@ -1029,3 +1029,6 @@
 .h3 { -fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
 .fingerprint { -fx-font-family: "Monospaced"; -fx-font-size: 13px; -fx-text-fill: -sc-text; -fx-background-color: -sc-surface-2;
     -fx-background-radius: 8; -fx-padding: 6 10; }
+
+.link-code-big { -fx-font-family: "Monospaced"; -fx-font-size: 30px; -fx-font-weight: bold; -fx-text-fill: -sc-accent-text;
+    -fx-background-color: -sc-surface-2; -fx-background-radius: 10; -fx-padding: 8 18; }

@@ -660,6 +660,51 @@ final class MainView implements AccountSession.View {
         callBars.showCallBar(c.peer(), row);
     }
 
+    /** Another computer asks to join the account: compare the code it shows, then allow or refuse. */
+    @Override
+    public void linkRequest(com.emirchat.api.Packet.LinkRequest request) {
+        Tray.get().notify("Oba", I18n.t("devices.askTitle"));
+        Label who = UiKit.label(request.name().isBlank() ? I18n.t("devices.unnamed") : request.name(), "h3");
+        Label code = UiKit.label(com.emirchat.client.DeviceLink.code(request.ephemeral()), "link-code-big");
+        code.setId("link-request-code");
+        Label body = UiKit.label(I18n.t("devices.askBody"), "body");
+        body.setWrapText(true);
+        body.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        Label warn = UiKit.label(I18n.t("devices.askWarn"), "caption");
+        warn.setWrapText(true);
+        warn.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        Button allow = new Button(I18n.t("devices.allow"));
+        allow.getStyleClass().add("primary");
+        allow.setId("link-allow");
+        Button deny = new Button(I18n.t("devices.deny"));
+        deny.setId("link-deny");
+        allow.setOnAction(e -> {
+            overlay.close();
+            session.background().execute(() -> {
+                try {
+                    session.client().approveLink(request);
+                } catch (Exception ex) {
+                    Platform.runLater(() -> showError(ex.getMessage()));
+                }
+            });
+        });
+        deny.setOnAction(e -> {
+            overlay.close();
+            session.background().execute(() -> {
+                try {
+                    session.client().denyLink(request);
+                } catch (Exception ignored) {
+                    // it gives up by itself after a while
+                }
+            });
+        });
+        javafx.scene.layout.VBox box = Overlay.dialog(I18n.t("devices.askTitle"), who, body, code, warn,
+                new HBox(10, UiKit.grow(), deny, allow));
+        box.setId("link-request-dialog");
+        box.setMaxWidth(460);
+        overlay.show(box);
+    }
+
     @Override
     public void notifyIncoming(History.Message m) {
         if (!session.setting(AccountSession.NOTIFICATIONS) || !Boolean.parseBoolean(System.getProperty("securechat.notifications", "true"))) return;

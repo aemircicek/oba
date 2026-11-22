@@ -50,6 +50,9 @@ final class AppShell {
     private MainView mainView;
     private AppController direct;
 
+    /** The key the signed-in account uses here (the account's own on a linked computer). */
+    private volatile com.emirchat.crypto.Identity accountIdentity;
+
     /** Everything needed to log in again after the connection drops. */
     private record Login(String serverText, String host, int port, String user, char[] password) {
         boolean isDefault(DefaultServer d) {
@@ -199,11 +202,26 @@ final class AppShell {
             AccountSession s = null;
             try {
                 Path accounts = accountsDir(login);
+                com.emirchat.crypto.Identity as = identity;
+                if (r.link()) {
+                    // this computer joins an account another computer of ours already has
+                    try (ServerConnection c = open(login, screen)) {
+                        ChatClient.Linked linked = ChatClient.link(c, accounts, user, r.password(), r.code(),
+                                code -> Platform.runLater(() -> screen.showLinkCode(code)));
+                        as = linked.account();
+                    } finally {
+                        Platform.runLater(() -> screen.showLinkCode(null));
+                    }
+                } else {
+                    com.emirchat.crypto.Identity linked = ChatClient.linkedIdentity(accounts, user, r.password());
+                    if (linked != null) as = linked;
+                }
+                accountIdentity = as;
                 History history = History.open(accounts.resolve(user).resolve("history.db"), r.password());
                 s = new AccountSession(history);
                 s.setHome(home);
-                ChatClient client = ChatClient.start(open(login, screen), identity, accounts, user, r.password(), r.code(),
-                        r.register(), s);
+                ChatClient client = ChatClient.start(open(login, screen, as), as, accounts, user, r.password(),
+                        r.link() ? null : r.code(), r.register(), s);
                 s.attach(client);
                 rememberChoice(text, user, r.remember(), r.password());
                 AccountSession ready = s;
@@ -244,11 +262,17 @@ final class AppShell {
      */
     private ServerConnection open(Login login, LoginScreen screen) throws IOException, PeerRejectedException,
             KeyChangedException {
+        return open(login, screen, identity);
+    }
+
+    /** As above, signing in with {@code as}: this computer's key, or the account's on a linked computer. */
+    private ServerConnection open(Login login, LoginScreen screen, com.emirchat.crypto.Identity as) throws IOException,
+            PeerRejectedException, KeyChangedException {
         boolean pinned = login.isDefault(defaults) && defaults.hasFingerprint();
         KnownPeers servers = new KnownPeers(home.resolve("known_servers"), (name, fp) -> pinned
                 ? fp.replaceAll("\\s", "").equalsIgnoreCase(defaults.fingerprint())
                 : screen != null && askServerTrust(name, fp, screen));
-        return ServerConnection.open(login.host(), login.port(), identity, servers);
+        return ServerConnection.open(login.host(), login.port(), as, servers);
     }
 
     private void rememberChoice(String server, String user, boolean remember, String password) {
@@ -335,7 +359,8 @@ final class AppShell {
                 if (session != s || s.isClosed()) return;
                 try {
                     ChatClient old = s.client();
-                    ChatClient client = ChatClient.start(open(login, null), identity, accountsDir(login), login.user(),
+                    com.emirchat.crypto.Identity as = accountIdentity != null ? accountIdentity : identity;
+                    ChatClient client = ChatClient.start(open(login, null, as), as, accountsDir(login), login.user(),
                             new String((current != null && current.user().equals(login.user()) ? current : login).password()),
                             false, s);
                     s.attach(client);
@@ -344,6 +369,10 @@ final class AppShell {
                     Platform.runLater(s::reconnected);
                     return;
                 } catch (ApiException e) {
+                    if (e.code() == ErrorCode.INVALID_REQUEST) { // this computer was removed from the account
+                        Platform.runLater(() -> logout(I18n.t("devices.removedHere")));
+                        return;
+                    }
                     if (e.code() == ErrorCode.CODE_REQUIRED) { // the account moved to another computer with two-step login on
                         Platform.runLater(() -> logout(I18n.t("shell.codeNeeded")));
                         return;

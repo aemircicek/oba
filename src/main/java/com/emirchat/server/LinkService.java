@@ -80,16 +80,32 @@ final class LinkService {
             for (Database.Device d : db.devices(approver.id())) used.add(d.id());
             deviceId = 1;
             while (used.contains(deviceId)) deviceId++;
-            db.addDevice(approver.id(), deviceId, p.name(), System.currentTimeMillis());
         } catch (SQLException e) {
             throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
         }
-        p.waiting().push(new Packet.LinkGranted(deviceId, ephemeral, sealed));
+        byte[] secret = new byte[Packet.DEVICE_SECRET_BYTES];
+        random.nextBytes(secret);
+        try {
+            db.addDevice(approver.id(), deviceId, p.name(), System.currentTimeMillis());
+            db.setDeviceSecret(approver.id(), deviceId, hash(secret));
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+        p.waiting().push(new Packet.LinkGranted(deviceId, ephemeral, sealed, secret));
     }
 
     void deny(Database.User user, long linkId) throws ApiException {
         Pending p = take(user, linkId);
-        p.waiting().push(new Packet.LinkGranted(-1, new byte[0], new byte[0]));
+        p.waiting().push(new Packet.LinkGranted(-1, new byte[0], new byte[0], new byte[0]));
+    }
+
+    /** Device secrets are kept as SHA-256: the database alone does not let anyone pose as a device. */
+    static byte[] hash(byte[] secret) {
+        try {
+            return java.security.MessageDigest.getInstance("SHA-256").digest(secret);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private synchronized Pending take(Database.User user, long linkId) throws ApiException {

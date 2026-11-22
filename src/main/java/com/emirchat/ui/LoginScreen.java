@@ -23,9 +23,14 @@ import javafx.scene.layout.VBox;
  */
 final class LoginScreen {
     /** @param server empty for the default server */
-    record Request(String server, String username, String password, boolean register, boolean remember, String code) {
+    record Request(String server, String username, String password, boolean register, boolean remember, String code,
+                   boolean link) {
         Request(String server, String username, String password, boolean register, boolean remember) {
-            this(server, username, password, register, remember, null);
+            this(server, username, password, register, remember, null, false);
+        }
+
+        Request(String server, String username, String password, boolean register, boolean remember, String code) {
+            this(server, username, password, register, remember, code, false);
         }
     }
 
@@ -47,6 +52,9 @@ final class LoginScreen {
     /** Shown when the server asks this new device for a code from the authenticator app. */
     private final TextField code = new TextField();
     private final VBox codeBox = new VBox(6);
+    private CheckBox linkBox;
+    /** While linking: the number to compare with the computer that approves. */
+    private final Label linkCode = new Label();
 
     LoginScreen(String savedServer, String savedUser, String notice, DefaultServer defaults, boolean canRemember,
                 Actions actions) {
@@ -153,6 +161,12 @@ final class LoginScreen {
         }
         advanced.managedProperty().bind(advanced.visibleProperty());
 
+        CheckBox link = new CheckBox(I18n.t("login.link"));
+        link.setId("link-device");
+        link.setTooltip(new javafx.scene.control.Tooltip(I18n.t("login.linkTip")));
+        link.visibleProperty().bind(create.selectedProperty().not());
+        link.managedProperty().bind(link.visibleProperty());
+        linkBox = link;
         CheckBox remember = new CheckBox(I18n.t("login.remember"));
         remember.setId("remember");
         remember.setVisible(canRemember);
@@ -184,7 +198,8 @@ final class LoginScreen {
             }
             error.setVisible(false);
             actions.submit(new Request(server.getText().strip(), user.getText().strip(), password.getText(),
-                    create.isSelected(), remember.isSelected(), codeBox.isVisible() ? code.getText().strip() : null));
+                    create.isSelected(), remember.isSelected(), codeBox.isVisible() ? code.getText().strip() : null,
+                    !create.isSelected() && link.isSelected()));
         });
         code.setId("login-code");
         code.setPromptText("123 456");
@@ -198,7 +213,14 @@ final class LoginScreen {
         codeBox.managedProperty().bind(codeBox.visibleProperty());
 
         VBox form = new VBox(14, segmented, serverBox, serverNote, field(I18n.t("login.username"), user),
-                field(I18n.t("login.password"), passwordInput), codeBox, repeatBox, rules, new HBox(18, show, remember), error, go, advanced);
+                field(I18n.t("login.password"), passwordInput), codeBox, repeatBox, rules, new HBox(18, show, remember), link,
+                linkCode, error, go, advanced);
+        linkCode.getStyleClass().addAll("notice", "info");
+        linkCode.setId("link-code");
+        linkCode.setWrapText(true);
+        linkCode.setMaxWidth(Double.MAX_VALUE);
+        linkCode.managedProperty().bind(linkCode.visibleProperty());
+        linkCode.setVisible(false);
         form.getStyleClass().add("card");
 
         Button direct = new Button(I18n.t("login.direct"));
@@ -259,6 +281,12 @@ final class LoginScreen {
         if (wrong) showError(I18n.t("login.codeWrong"));
         else error.setVisible(false);
         Platform.runLater(code::requestFocus);
+    }
+
+    /** Linking: shows the code to compare on the computer that approves (null hides it). */
+    void showLinkCode(String code) {
+        linkCode.setText(code == null ? "" : I18n.t("login.linkWait", code));
+        linkCode.setVisible(code != null);
     }
 
     void setBusy(boolean busy) {
