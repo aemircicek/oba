@@ -662,7 +662,7 @@ final class MainView implements AccountSession.View {
 
     /** Another computer asks to join the account: compare the code it shows, then allow or refuse. */
     @Override
-    public void linkRequest(com.emirchat.client.ChatClient.LinkPrompt request) {
+    public void linkRequest(com.emirchat.client.DeviceLinking.LinkPrompt request) {
         Tray.get().notify("Oba", I18n.t("devices.askTitle"));
         Label who = UiKit.label(request.name().isBlank() ? I18n.t("devices.unnamed") : request.name(), "h3");
         Label code = UiKit.label(request.code(), "link-code-big");

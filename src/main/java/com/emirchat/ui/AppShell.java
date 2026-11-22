@@ -206,14 +206,14 @@ final class AppShell {
                 if (r.link()) {
                     // this computer joins an account another computer of ours already has
                     try (ServerConnection c = open(login, screen)) {
-                        ChatClient.Linked linked = ChatClient.link(c, accounts, user, r.password(), r.code(),
+                        com.emirchat.client.DeviceLinking.Linked linked = com.emirchat.client.DeviceLinking.link(c, accounts, user, r.password(), r.code(),
                                 code -> Platform.runLater(() -> screen.showLinkCode(code)));
                         as = linked.account();
                     } finally {
                         Platform.runLater(() -> screen.showLinkCode(null));
                     }
                 } else {
-                    com.emirchat.crypto.Identity linked = ChatClient.linkedIdentity(accounts, user, r.password());
+                    com.emirchat.crypto.Identity linked = com.emirchat.client.DeviceLinking.linkedIdentity(accounts, user, r.password());
                     if (linked != null) as = linked;
                 }
                 accountIdentity = as;

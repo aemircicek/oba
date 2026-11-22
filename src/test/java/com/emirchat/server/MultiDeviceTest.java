@@ -37,7 +37,7 @@ class MultiDeviceTest {
         final BlockingQueue<String> got = new LinkedBlockingQueue<>();
         final BlockingQueue<String> ours = new LinkedBlockingQueue<>();
         final BlockingQueue<String> problems = new LinkedBlockingQueue<>();
-        final BlockingQueue<ChatClient.LinkPrompt> links = new LinkedBlockingQueue<>();
+        final BlockingQueue<com.emirchat.client.DeviceLinking.LinkPrompt> links = new LinkedBlockingQueue<>();
         final BlockingQueue<Boolean> removed = new LinkedBlockingQueue<>();
 
         Computer(String name) throws Exception {
@@ -63,7 +63,7 @@ class MultiDeviceTest {
 
                         @Override public void undecryptable(String from, String reason) { problems.add(from + ": " + reason); }
 
-                        @Override public void linkRequest(ChatClient.LinkPrompt r) { links.add(r); }
+                        @Override public void linkRequest(com.emirchat.client.DeviceLinking.LinkPrompt r) { links.add(r); }
 
                         @Override public void deviceRemoved() { removed.add(true); }
                     });
@@ -95,18 +95,18 @@ class MultiDeviceTest {
     private Computer link(Computer laptop, String name) throws Exception {
         Computer desktop = new Computer(name);
         CompletableFuture<String> shown = new CompletableFuture<>();
-        CompletableFuture<ChatClient.Linked> linked = CompletableFuture.supplyAsync(() -> {
+        CompletableFuture<com.emirchat.client.DeviceLinking.Linked> linked = CompletableFuture.supplyAsync(() -> {
             try (ServerConnection c = desktop.connect(desktop.identity)) {
-                return ChatClient.link(c, desktop.home.resolve("accounts"), "emir", PASSWORD, null, shown::complete);
+                return com.emirchat.client.DeviceLinking.link(c, desktop.home.resolve("accounts"), "emir", PASSWORD, null, shown::complete);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
         });
-        ChatClient.LinkPrompt request = laptop.links.poll(10, TimeUnit.SECONDS);
+        com.emirchat.client.DeviceLinking.LinkPrompt request = laptop.links.poll(10, TimeUnit.SECONDS);
         assertNotNull(request, "the laptop was asked");
         assertEquals(shown.get(5, TimeUnit.SECONDS), request.code(), "both show the same code");
         laptop.client.approveLink(request, laptop.identity);
-        ChatClient.Linked result = linked.get(10, TimeUnit.SECONDS);
+        com.emirchat.client.DeviceLinking.Linked result = linked.get(10, TimeUnit.SECONDS);
         assertEquals(laptop.identity.fingerprint(), result.account().fingerprint(), "the same account key");
         desktop.identity = result.account();
         return desktop.start("emir", false);
@@ -152,7 +152,7 @@ class MultiDeviceTest {
             }
             // the removed desktop cannot come back as itself, nor as the laptop
             Computer again = new Computer("emir-desktop");
-            Identity account = ChatClient.linkedIdentity(again.home.resolve("accounts"), "emir", PASSWORD);
+            Identity account = com.emirchat.client.DeviceLinking.linkedIdentity(again.home.resolve("accounts"), "emir", PASSWORD);
             assertNotNull(account);
             again.identity = account;
             assertThrows(ApiException.class, () -> again.start("emir", false));

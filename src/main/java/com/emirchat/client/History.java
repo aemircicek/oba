@@ -782,58 +782,31 @@ public final class History implements AutoCloseable {
      * @return how many were indexed (0 when everything is)
      */
     public synchronized int indexBacklog(int max) throws IOException {
-        List<long[]> rows = new ArrayList<>();
-        try (PreparedStatement ps = db.prepareStatement(
-                "SELECT id FROM messages WHERE indexed = 0 ORDER BY id DESC LIMIT ?")) {
-            ps.setInt(1, max);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) rows.add(new long[] {rs.getLong(1)});
-            }
-            db.setAutoCommit(false);
-            try {
-                for (long[] r : rows) {
-                    Message m = get(r[0]);
-                    if (m == null) continue;
-                    index(m.id(), m.deleted() ? "" : m.text());
-                }
-                db.commit();
-            } finally {
-                db.setAutoCommit(true);
-            }
-        } catch (SQLException e) {
-            throw new IOException(e.getMessage(), e);
+        return index().backlog(max);
+    }
+
+    private SearchIndex index() {
+        return new SearchIndex(db, terms, this::getQuietly);
+    }
+
+    private Message getQuietly(long id) {
+        try {
+            return get(id);
+        } catch (IOException e) {
+            return null;
         }
-        return rows.size();
     }
 
     private void index(long id, String text) throws SQLException {
-        try (PreparedStatement ps = db.prepareStatement("INSERT INTO search_index (token, message_id) VALUES (?, ?)")) {
-            for (SearchTerms.Token t : terms.tokens(text)) {
-                ps.setBytes(1, t.bytes());
-                ps.setLong(2, id);
-                ps.addBatch();
-            }
-            ps.executeBatch();
-        }
-        try (PreparedStatement ps = db.prepareStatement("UPDATE messages SET indexed = 1 WHERE id = ?")) {
-            ps.setLong(1, id);
-            ps.executeUpdate();
-        }
+        index().add(id, text);
     }
 
     private void unindex(long id) throws SQLException {
-        try (PreparedStatement ps = db.prepareStatement("DELETE FROM search_index WHERE message_id = ?")) {
-            ps.setLong(1, id);
-            ps.executeUpdate();
-        }
+        index().remove(id);
     }
 
     private static String fileName(byte[] encoded) {
-        try {
-            return FileMessage.decode(encoded).name();
-        } catch (java.net.ProtocolException e) {
-            return "";
-        }
+        return SearchIndex.fileName(encoded);
     }
 
     /** Writes a consistent copy of the whole history (still encrypted) to {@code target}, for backups. */
