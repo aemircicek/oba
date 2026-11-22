@@ -84,6 +84,8 @@ public final class ServerConnection implements AutoCloseable {
      */
     public ServerConnection anonymous() throws IOException, PeerRejectedException {
         java.net.InetSocketAddress at = remoteAddress();
+        // Plain TCP by design, as in open(): the authenticated handshake runs on it.
+        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         Socket s = new Socket();
         try {
             s.connect(at, CONNECT_TIMEOUT_MS);
