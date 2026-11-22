@@ -220,7 +220,14 @@ final class SettingsDialogs {
         Button looks = new Button(I18n.t("appearance.title"));
         looks.setId("appearance");
         looks.setOnAction(e -> openAppearance());
-        VBox box = Overlay.dialog(I18n.t("main.settings"), toggles, new HBox(10, backup, looks, UiKit.grow(), done));
+        // the list grew longer than a small window: it scrolls, the buttons stay in view
+        javafx.scene.control.ScrollPane scroll = new javafx.scene.control.ScrollPane(toggles);
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.getStyleClass().add("dialog-scroll");
+        scroll.setPrefViewportHeight(430);
+        scroll.setMaxHeight(470);
+        VBox box = Overlay.dialog(I18n.t("main.settings"), scroll, new HBox(10, backup, looks, UiKit.grow(), done));
         box.setId("settings-dialog");
         main.overlay.show(box);
     }
@@ -273,7 +280,9 @@ final class SettingsDialogs {
         drawSwatches[0].run();
         javafx.scene.control.ColorPicker picker = new javafx.scene.control.ColorPicker(javafx.scene.paint.Color.web(AppPrefs.customAccent()));
         picker.setId("appearance-custom");
-        picker.getStyleClass().add("small");
+        picker.getStyleClass().addAll("small", "accent-picker");
+        picker.setPrefWidth(52);
+        picker.setStyle("-fx-color-label-visible: false;");
         picker.setTooltip(new Tooltip(I18n.t("appearance.customTip")));
         picker.setOnAction(e -> {
             AppPrefs.setCustomAccent(AccentMaker.hex(picker.getValue()));

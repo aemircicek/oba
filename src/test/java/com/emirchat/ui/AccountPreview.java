@@ -232,7 +232,7 @@ public final class AccountPreview {
         fx(() -> { ((Button) find("#media-button")).fire(); return null; });
         Thread.sleep(1200);
         snap("05t-media");
-        fx(() -> { ((Button) find("#media-tab-1")).fire(); return null; });
+        fx(() -> { ((javafx.scene.control.ToggleButton) find("#media-tab-1")).fire(); return null; });
         Thread.sleep(600);
         snap("05u-media-files");
         fx(() -> { ((Button) find("#side-close")).fire(); return null; });
@@ -544,14 +544,19 @@ public final class AccountPreview {
         fx(() -> { ((Button) find("#members-button")).fire(); return null; });
         Thread.sleep(400);
         snap("15e-members");
-        fx(() -> { ((Button) find("#threads-button")).fire(); return null; });
-        Thread.sleep(400);
-        snap("15m-threads");
         // the contact page, opened from the member list
         fx(() -> { click(find("#member-ayse")); return null; });
         waitFor("#contact-dialog");
         pause();
         snap("15k-contact-from-members");
+        fx(() -> {
+            Node layer = scene.lookup(".overlay");
+            if (layer != null) ((StackPane) layer.getParent()).getChildren().remove(layer);
+            return null;
+        });
+        fx(() -> { ((Button) find("#threads-button")).fire(); return null; });
+        Thread.sleep(400);
+        snap("15m-threads");
         fx(() -> {
             Node layer = scene.lookup(".overlay");
             if (layer != null) ((StackPane) layer.getParent()).getChildren().remove(layer);
@@ -586,11 +591,18 @@ public final class AccountPreview {
         ayse.client.voice().startVideo(new com.emirchat.video.PatternSource(1280, 800, 5, true));
         Thread.sleep(3500);
         snap("15l-campfire-screen");
-        // efe turns on a camera too: the pictures sit side by side
-        efeNew.client.voice().startVideo(new com.emirchat.video.PatternSource(640, 480, 10, false));
+        // emir turns on a camera too: the pictures sit side by side
+        fx(() -> {
+            ((MainView) find(".main-view").getUserData()).session.client().voice()
+                    .startVideo(new com.emirchat.video.PatternSource(640, 480, 10, false));
+            return null;
+        });
         Thread.sleep(3000);
         snap("15n-campfire-grid");
-        efeNew.client.voice().stopVideo();
+        fx(() -> {
+            ((MainView) find(".main-view").getUserData()).session.client().voice().stopVideo();
+            return null;
+        });
         ayse.client.voice().stopVideo();
         Thread.sleep(800);
         fx(() -> { ((Button) find("#campfire-back")).fire(); return null; });

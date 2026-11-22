@@ -33,8 +33,18 @@ final class ConversationHeader {
 
     void refreshHeader() {
         ChatClient client = chat.session.client();
-        HBox header = new HBox(12);
+        HBox header = new HBox(10);
         header.getStyleClass().add("chat-header");
+        // buttons keep their size; when the window is narrow the title gives way
+        header.getChildren().addListener((javafx.collections.ListChangeListener<Node>) change -> {
+            while (change.next()) {
+                for (Node n : change.getAddedSubList()) {
+                    if (n instanceof javafx.scene.control.ButtonBase || n instanceof MenuButton) {
+                        ((javafx.scene.layout.Region) n).setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+                    }
+                }
+            }
+        });
         header.setAlignment(Pos.CENTER_LEFT);
         VBox titles = new VBox(2);
         if (chat.peer != null) {

@@ -26,6 +26,7 @@ import javafx.util.Duration;
 final class IntroScenes {
     static final double W = 340;
     static final double H = 130;
+    private static final double NUMBER_W = 150;
 
     private IntroScenes() {}
 
@@ -53,7 +54,9 @@ final class IntroScenes {
             timeline.setCycleCount(Animation.INDEFINITE);
             timeline.play();
         } else {
-            timeline.jumpTo(timeline.getTotalDuration().subtract(Duration.millis(1)));
+            // the last frame only: run the final millisecond once, so every value is applied
+            timeline.setCycleCount(1);
+            timeline.playFrom(timeline.getTotalDuration().subtract(Duration.millis(1)));
         }
         return holder;
     }
@@ -146,8 +149,8 @@ final class IntroScenes {
 
     private static Timeline verification(Pane p) {
         String[] groups = {"3815", "0927", "6640", "1172"};
-        Label left = number(groups, 30);
-        Label right = number(groups, W - 30 - 120);
+        Label left = number(groups, 12);
+        Label right = number(groups, W - 12 - NUMBER_W);
         Label check = new Label("✓");
         check.getStyleClass().add("intro-check");
         check.setLayoutX(W / 2 - 14);
@@ -157,12 +160,12 @@ final class IntroScenes {
         same.setOpacity(0);
         Rectangle scan = new Rectangle(0, 20, 4, 70);
         scan.getStyleClass().add("intro-scan");
-        p.getChildren().addAll(left, right, scan, check, same, caption(I18n.t("intro.you"), 90, 100),
-                caption(I18n.t("intro.friend"), W - 90, 100));
+        p.getChildren().addAll(left, right, scan, check, same, caption(I18n.t("intro.you"), 12 + NUMBER_W / 2, 100),
+                caption(I18n.t("intro.friend"), W - 12 - NUMBER_W / 2, 100));
         Timeline t = new Timeline(
-                new KeyFrame(Duration.millis(300), new KeyValue(scan.xProperty(), 26), new KeyValue(scan.opacityProperty(), 0)),
+                new KeyFrame(Duration.millis(300), new KeyValue(scan.xProperty(), 12), new KeyValue(scan.opacityProperty(), 0)),
                 new KeyFrame(Duration.millis(400), new KeyValue(scan.opacityProperty(), 0.8)),
-                new KeyFrame(Duration.millis(2600), new KeyValue(scan.xProperty(), W - 30), new KeyValue(scan.opacityProperty(), 0.8)),
+                new KeyFrame(Duration.millis(2600), new KeyValue(scan.xProperty(), W - 12), new KeyValue(scan.opacityProperty(), 0.8)),
                 new KeyFrame(Duration.millis(2800), new KeyValue(scan.opacityProperty(), 0), new KeyValue(check.opacityProperty(), 0),
                         new KeyValue(check.scaleXProperty(), 0.5), new KeyValue(check.scaleYProperty(), 0.5),
                         new KeyValue(same.opacityProperty(), 0)),
@@ -207,7 +210,9 @@ final class IntroScenes {
         l.getStyleClass().add("intro-number");
         l.setLayoutX(x);
         l.setLayoutY(40);
-        l.setPrefWidth(120);
+        l.setPrefWidth(NUMBER_W);
+        l.setMinWidth(NUMBER_W);
+        l.setAlignment(Pos.CENTER);
         return l;
     }
 

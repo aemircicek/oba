@@ -988,6 +988,8 @@
 /* the media panel: pictures in square tiles, files and links in rows */
 .media-tile { -fx-background-color: -sc-surface-2; -fx-background-radius: 8; -fx-cursor: hand; }
 .media-tile:hover { -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.25), 8, 0, 0, 1); }
+.media-tab { -fx-background-color: -sc-surface-2; -fx-text-fill: -sc-text; -fx-background-radius: 999; -fx-padding: 3 10; }
+.media-tab:hover { -fx-background-color: -sc-surface-3; }
 .media-tab:selected { -fx-background-color: -sc-accent; -fx-text-fill: -sc-on-accent; }
 .media-link-row { -fx-padding: 4 0 8 0; -fx-border-color: transparent transparent -sc-surface-2 transparent; }
 .media-link { -fx-text-overrun: center-ellipsis; }
@@ -1004,7 +1006,7 @@
 .intro-scene { -fx-background-color: -sc-surface-2; -fx-background-radius: 12; -fx-padding: 8; }
 .intro-tent { -fx-fill: -sc-accent; }
 .intro-road { -fx-stroke: -sc-border; -fx-stroke-width: 2; -fx-stroke-dash-array: 4 5; }
-.intro-server { -fx-fill: -sc-surface-3; -fx-stroke: -sc-border; }
+.intro-server { -fx-fill: -sc-surface-3; -fx-stroke: -sc-text-3; -fx-stroke-width: 1.5; }
 .intro-caption { -fx-text-fill: -sc-text-2; -fx-font-size: 11px; }
 .intro-message { -fx-background-color: -sc-own-bubble; -fx-text-fill: -sc-on-own-bubble; -fx-background-radius: 10;
     -fx-padding: 3 8; -fx-font-size: 12px; -fx-min-width: 70; -fx-alignment: center; }
@@ -1015,8 +1017,10 @@
 .intro-orb-onetime { -fx-fill: -sc-read; }
 .intro-key { -fx-fill: -sc-accent; }
 .intro-key-hole { -fx-fill: -sc-surface-2; }
-.intro-number { -fx-font-family: "Monospaced"; -fx-font-size: 13px; -fx-text-fill: -sc-text; -fx-wrap-text: true; }
+.intro-number { -fx-font-family: "Monospaced"; -fx-font-size: 12px; -fx-text-fill: -sc-text; }
 .intro-scan { -fx-fill: -sc-accent; -fx-arc-width: 4; -fx-arc-height: 4; }
 .intro-check { -fx-text-fill: -sc-success; -fx-font-size: 40px; -fx-font-weight: bold; }
 .intro-dot { -fx-fill: -sc-surface-3; }
 .intro-dot-on { -fx-fill: -sc-accent; }
+
+.dialog-scroll, .dialog-scroll > .viewport { -fx-background-color: transparent; -fx-background: transparent; -fx-padding: 0 6 0 0; }
