@@ -9,17 +9,21 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.EnumSet;
 
-/** Owner-only, crash-safe storage for key and session files. */
+/**
+ * Owner-only, crash-safe storage for key and session files; encrypted under the account's
+ * password once its {@link Vault} is unlocked.
+ */
 final class SecureFiles {
     private SecureFiles() {}
 
     /** @return the file's content, or null if it does not exist */
     static byte[] read(Path file) throws IOException {
-        return Files.exists(file) ? Files.readAllBytes(file) : null;
+        return Files.exists(file) ? Vault.open(file, Files.readAllBytes(file)) : null;
     }
 
     /** Writes to a temporary file and renames it, so a crash never leaves a half-written key file. */
-    static void writeAtomically(Path file, byte[] data) throws IOException {
+    static void writeAtomically(Path file, byte[] content) throws IOException {
+        byte[] data = Vault.seal(file, content);
         Path dir = file.toAbsolutePath().getParent();
         boolean posix = dir.getFileSystem().supportedFileAttributeViews().contains("posix");
         if (!Files.isDirectory(dir)) {

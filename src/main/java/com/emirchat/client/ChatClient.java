@@ -478,6 +478,8 @@ public final class ChatClient implements AutoCloseable {
         Packet.LoggedIn loggedIn = register ? connection.register(user, password) : connection.login(user, password);
         Path dir = accountDir.resolve(loggedIn.username());
         Files.createDirectories(dir);
+        // keys and sessions are encrypted at rest under the password the server just accepted
+        com.emirchat.e2e.Vault.unlock(dir, password);
         Messenger messenger = Messenger.open(dir.resolve("e2e"), device);
         KnownPeers contacts = new KnownPeers(dir.resolve("contacts"), (name, fp) -> true); // TOFU, verify later
         ChatClient client = new ChatClient(connection, messenger, new com.emirchat.e2e.GroupKeys(dir.resolve("e2e")),

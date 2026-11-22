@@ -204,6 +204,12 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.2</version>
+        <configuration>
+          <systemPropertyVariables>
+            <!-- tests start many accounts: a cheap key derivation for their vaults (the stored count is used to open them) -->
+            <oba.vault.iterations>1000</oba.vault.iterations>
+          </systemPropertyVariables>
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
