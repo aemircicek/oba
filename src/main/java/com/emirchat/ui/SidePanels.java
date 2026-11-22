@@ -304,6 +304,38 @@ final class SidePanels {
         return false;
     }
 
+    /** Every thread of this channel or group, most recently active first, with unread replies marked. */
+    void showThreads() {
+        VBox list = new VBox(6);
+        List<History.ThreadSummary> threads;
+        try {
+            threads = chat.session.history().threads(chat.conversation);
+        } catch (IOException e) {
+            threads = List.of();
+        }
+        if (threads.isEmpty()) list.getChildren().add(wrapLabel(I18n.t("thread.none"), "caption"));
+        for (History.ThreadSummary t : threads) {
+            History.Message root = t.root();
+            Label who = UiKit.label(root.outgoing() ? I18n.t("conv.you") : root.sender(), "row-title");
+            Label text = wrapLabel(previewOf(root), "row-sub");
+            text.setMaxHeight(40);
+            HBox top = new HBox(6, who, UiKit.grow());
+            if (t.unread() > 0) top.getChildren().add(UiKit.label(String.valueOf(t.unread()), "unread-badge"));
+            top.setAlignment(Pos.CENTER_LEFT);
+            String replies = t.replies() == 1 ? I18n.t("thread.oneReply") : I18n.t("thread.replies", t.replies());
+            Label meta = UiKit.label(replies + " · " + I18n.t("thread.last", UiKit.time(t.lastAt())) + " · "
+                    + String.join(", ", t.people()), "row-time");
+            VBox card = new VBox(3, top, text, meta);
+            card.getStyleClass().add("pin-card");
+            if (t.unread() > 0) card.getStyleClass().add("unread");
+            card.setId("thread-card-" + root.id());
+            A11y.clickable(card, who.getText() + ": " + previewOf(root) + ", " + replies);
+            card.setOnMouseClicked(e -> openThread(root));
+            list.getChildren().add(card);
+        }
+        showSide("threads", I18n.t("thread.all"), list);
+    }
+
     /** The thread panel: the first message, its replies, and a composer that answers in the thread. */
     void openThread(History.Message rootMessage) {
         threadRoot = rootMessage;

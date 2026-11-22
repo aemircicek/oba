@@ -667,7 +667,17 @@ final class MainView implements AccountSession.View {
                 && stack.getScene().getWindow().isFocused();
         boolean visible = current != null && current.conversation().equals(m.conversation());
         if (focused && visible) return;
-        boolean mentioned = m.file() == null && Markdown.mentions(m.text(), session.client().username());
+        String me = session.client().username();
+        boolean mentioned = m.file() == null && Markdown.mentions(m.text(), me);
+        if (!mentioned && m.replyTo().length > 0) {
+            // an answer to something we wrote (in a thread or as a reply) is for us, like a mention
+            try {
+                History.Message answered = session.history().find(m.conversation(), m.replyTo());
+                mentioned = answered != null && answered.outgoing();
+            } catch (IOException ignored) {
+                // treated as not for us
+            }
+        }
         NotifyRules.Decision decision = session.notifyRules().decide(m.conversation(),
                 mentioned || m.conversation().startsWith("dm:"), NotifyRules.now());
         if (decision == NotifyRules.Decision.NONE) return;

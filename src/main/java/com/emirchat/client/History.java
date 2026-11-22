@@ -373,6 +373,44 @@ public final class History implements AutoCloseable {
         return ids;
     }
 
+    /** A thread of a conversation: its first message, how many replies, the newest, and how many are unread. */
+    public record ThreadSummary(Message root, int replies, long lastAt, int unread, List<String> people) {}
+
+    /** The threads of a conversation, most recently active first (threads whose first message is gone are left out). */
+    public synchronized List<ThreadSummary> threads(String conversation) throws IOException {
+        record Row(byte[] root, int replies, long lastAt, int unread) {}
+        List<Row> rows = new ArrayList<>();
+        try (PreparedStatement ps = db.prepareStatement(
+                "SELECT reply_to, COUNT(*), MAX(sent_at), SUM(unread), MAX(id) FROM messages "
+                        + "WHERE conversation = ? AND thread = 1 AND deleted = 0 GROUP BY reply_to ORDER BY MAX(id) DESC")) {
+            ps.setString(1, conversation);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) rows.add(new Row(rs.getBytes(1), rs.getInt(2), rs.getLong(3), rs.getInt(4)));
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        List<ThreadSummary> out = new ArrayList<>();
+        for (Row r : rows) {
+            Message root = find(conversation, r.root());
+            if (root == null || root.deleted()) continue;
+            List<String> people = new ArrayList<>();
+            try (PreparedStatement ps = db.prepareStatement(
+                    "SELECT sender FROM messages WHERE conversation = ? AND thread = 1 AND reply_to = ? "
+                            + "GROUP BY sender ORDER BY MAX(id) DESC LIMIT 5")) {
+                ps.setString(1, conversation);
+                ps.setBytes(2, r.root());
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) people.add(rs.getString(1));
+                }
+            } catch (SQLException e) {
+                throw new IOException(e.getMessage(), e);
+            }
+            out.add(new ThreadSummary(root, r.replies(), r.lastAt(), r.unread(), List.copyOf(people)));
+        }
+        return out;
+    }
+
     /**
      * Records {@code voter}'s choice in a poll (one vote per person; a negative choice takes it back).
      *

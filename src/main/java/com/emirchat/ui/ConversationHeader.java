@@ -113,6 +113,16 @@ final class ConversationHeader {
             Tooltip.install(chip, new Tooltip(I18n.t("sky.theirTime", chat.peer, Sky.city(theirZone))));
             header.getChildren().add(chip);
         }
+        if (chat.groupId != 0) {
+            Button threadsButton = new Button();
+            threadsButton.setGraphic(Icons.of(Icons.MESSAGE, 15, "muted"));
+            threadsButton.getStyleClass().addAll("small", "timer-button");
+            if ("threads".equals(chat.side.sideMode)) threadsButton.getStyleClass().add("active");
+            threadsButton.setTooltip(new Tooltip(I18n.t("thread.all")));
+            threadsButton.setId("threads-button");
+            threadsButton.setOnAction(e -> chat.side.toggleSide("threads", chat.side::showThreads));
+            header.getChildren().add(threadsButton);
+        }
         Button media = new Button();
         media.setGraphic(Icons.of(Icons.IMAGE, 15, "muted"));
         media.getStyleClass().addAll("small", "timer-button");

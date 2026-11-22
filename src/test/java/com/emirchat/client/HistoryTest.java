@@ -207,6 +207,26 @@ class HistoryTest {
     }
 
     @Test
+    void threadsAreListedByLatestActivityWithUnreadReplies() throws Exception {
+        try (History h = History.open(dir.resolve("h.db"), "pw", 1000)) {
+            h.add("g:5", "ayse", "plan nedir?", 1, false, History.RECEIVED, 1, 0, uid(1), null);
+            h.add("g:5", "emir", "kamp yeri", 2, true, History.SENT, 2, 0, uid(2), null);
+            h.markRead("g:5");
+            long r1 = h.add("g:5", "efe", "cuma", 3, false, History.RECEIVED, 3, 0, uid(3), uid(1));
+            long r2 = h.add("g:5", "emir", "olur", 4, true, History.SENT, 4, 0, uid(4), uid(1));
+            long r3 = h.add("g:5", "efe", "göl kenarı", 5, false, History.RECEIVED, 5, 0, uid(5), uid(2));
+            for (long id : new long[] {r1, r2, r3}) h.markThread(id);
+            List<History.ThreadSummary> threads = h.threads("g:5");
+            assertEquals(List.of("kamp yeri", "plan nedir?"), threads.stream().map(t -> t.root().text()).toList());
+            assertEquals(1, threads.get(0).replies());
+            assertEquals(2, threads.get(1).replies());
+            assertEquals(1, threads.get(1).unread(), "efe's reply is unread, ours is not");
+            assertEquals(List.of("emir", "efe"), threads.get(1).people());
+            assertTrue(h.threads("g:6").isEmpty());
+        }
+    }
+
+    @Test
     void settingsPersist() throws Exception {
         Path file = dir.resolve("h.db");
         try (History h = History.open(file, "pw", 1000)) {
