@@ -14,7 +14,10 @@ import java.util.TreeMap;
  *   CHUNK          u8 1 ‖ u32 frame ‖ u8 index ‖ u8 count ‖ u8 flags ‖ data
  *   KEYFRAME_PLEASE u8 2           (the receiver lost something: start again from a whole picture)
  *   VIDEO_OFF      u8 3            (the sender stopped its camera or its screen)
+ *   REPORT         u8 4 ‖ u16 loss (the receiver's loss over the last second, per mille; 3.6)
  * </pre>
+ *
+ * Versions before 3.6 skip REPORT, so their pictures simply stay at the full rate.
  *
  * flags: 1 = key frame (decodable on its own), 2 = a screen rather than a camera.
  */
@@ -22,6 +25,7 @@ public final class VideoPackets {
     public static final byte CHUNK = 1;
     public static final byte KEYFRAME_PLEASE = 2;
     public static final byte VIDEO_OFF = 3;
+    public static final byte REPORT = 4;
     public static final int FLAG_KEY = 1;
     public static final int FLAG_SCREEN = 2;
     static final int HEADER = 8;
@@ -48,6 +52,29 @@ public final class VideoPackets {
                     .put((byte) flags).put(encoded, from, n).array());
         }
         return out;
+    }
+
+    /** A loss report: {@code lossPerMille} (0-1000) of last second's packets did not arrive. */
+    public static byte[] report(int lossPerMille) {
+        int l = Math.max(0, Math.min(1000, lossPerMille));
+        return new byte[] {REPORT, (byte) (l >> 8), (byte) l};
+    }
+
+    /** The loss in a report, or -1 if it is not one. */
+    public static int reportedLoss(byte[] body) {
+        if (body.length < 3 || body[0] != REPORT) return -1;
+        return Math.min(1000, ((body[1] & 0xff) << 8) | (body[2] & 0xff));
+    }
+
+    /** {frame, count} of a chunk, or null if it is not a well-formed one. */
+    public static int[] chunkInfo(byte[] chunk) {
+        if (chunk.length < HEADER || chunk[0] != CHUNK) return null;
+        ByteBuffer b = ByteBuffer.wrap(chunk);
+        b.get();
+        int frame = b.getInt();
+        b.get();
+        int count = b.get() & 0xff;
+        return frame < 0 || count == 0 ? null : new int[] {frame, count};
     }
 
     /** A whole encoded frame. */

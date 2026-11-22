@@ -3,6 +3,7 @@ package com.emirchat.call;
 import com.emirchat.video.Pacer;
 import com.emirchat.video.VideoFrame;
 import com.emirchat.video.VideoPackets;
+import com.emirchat.video.VideoRate;
 import com.emirchat.video.VideoSource;
 import com.emirchat.video.Vp8;
 import java.util.List;
@@ -23,6 +24,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>The relay passes at most 100 call packets a second from one device. Opus audio takes 50,
  * so video gets {@link #PACKETS_PER_SECOND}: about 300 kbit/s, enough for a 480x360 camera at
  * 15 frames a second or a shared screen at 5.
+ *
+ * <p>The receiver reports every second how much of the video was lost; the sender then uses less
+ * of its room (down to a quarter, and half the frame rate) and climbs back while nothing is lost,
+ * see {@link VideoRate}.
  */
 public final class CallVideo implements AutoCloseable {
     static final int PACKETS_PER_SECOND = 40;
@@ -73,6 +78,9 @@ public final class CallVideo implements AutoCloseable {
     private final ThreadPoolExecutor decoderThread = single("video-decode");
     private final AtomicReference<VideoFrame> nextFrame = new AtomicReference<>();
     private final AtomicBoolean keyWanted = new AtomicBoolean();
+    private final VideoRate rate = new VideoRate();
+    private final VideoRate.Loss loss = new VideoRate.Loss();
+    private int sourceFrames;
 
     // sending (encoder thread)
     private volatile VideoSource source;
@@ -138,6 +146,7 @@ public final class CallVideo implements AutoCloseable {
         });
         source = s;
         keyWanted.set(true);
+        rate.reset();
     }
 
     /** Stops sending and tells the other side. */
@@ -150,7 +159,13 @@ public final class CallVideo implements AutoCloseable {
         if (direct == on) return;
         direct = on;
         pacer.rate(on ? DIRECT_PACKETS_PER_SECOND : PACKETS_PER_SECOND);
+        rate.reset();
         rebuild = true; // a new encoder at the new bit rate, starting with a key frame
+    }
+
+    /** The share of the full bit rate in use now (1 = all of it), for tests and the picture's label. */
+    public double quality() {
+        return rate.share();
     }
 
     /** True while our camera or screen is being sent. */
@@ -179,12 +194,15 @@ public final class CallVideo implements AutoCloseable {
     private void encodeNext(VideoSource s) {
         VideoFrame frame = nextFrame.getAndSet(null);
         if (frame == null || closed || source != s) return;
+        boolean half = rate.halfFrameRate();
+        if (half && (sourceFrames++ & 1) == 1 && !keyWanted.get()) return; // a weak connection: every other picture
         try {
             if (encoder == null || rebuild || encoder.width() != frame.width() || encoder.height() != frame.height()) {
                 rebuild = false;
                 closeEncoder();
-                int bitrate = (s.screen() ? SCREEN_BITRATE : CAMERA_BITRATE) * (direct ? DIRECT_FACTOR : 1);
-                encoder = new Vp8.Encoder(frame.width(), frame.height(), s.fps(), bitrate);
+                int full = (s.screen() ? SCREEN_BITRATE : CAMERA_BITRATE) * (direct ? DIRECT_FACTOR : 1);
+                int fps = half ? Math.max(1, s.fps() / 2) : s.fps();
+                encoder = new Vp8.Encoder(frame.width(), frame.height(), fps, (int) (full * rate.share()));
             }
             if (keyWanted.getAndSet(false)) encoder.keyFrame();
             Vp8.Packet packet = encoder.encode(frame);
@@ -194,6 +212,7 @@ public final class CallVideo implements AutoCloseable {
             long[] delays = pacer.book(chunks.size(), System.nanoTime());
             if (delays == null) {
                 keyWanted.set(true); // dropped: the next frame must stand on its own
+                if (rate.localDrop(System.currentTimeMillis())) rebuild = true;
                 return;
             }
             frameNumber++;
@@ -242,7 +261,13 @@ public final class CallVideo implements AutoCloseable {
         switch (body[0]) {
             case VideoPackets.KEYFRAME_PLEASE -> keyWanted.set(true);
             case VideoPackets.VIDEO_OFF -> remoteOff();
+            case VideoPackets.REPORT -> {
+                int l = VideoPackets.reportedLoss(body);
+                if (l >= 0 && source != null && rate.report(l, System.currentTimeMillis())) rebuild = true;
+            }
             case VideoPackets.CHUNK -> {
+                int[] info = VideoPackets.chunkInfo(body);
+                if (info != null) loss.chunk(info[0], info[1]);
                 for (VideoPackets.Frame f : assembler.add(body)) show(f);
                 long now = System.currentTimeMillis();
                 if (assembler.needKeyFrame() && now - lastKeyRequest > KEY_REQUEST_GAP_MS) {
@@ -273,6 +298,7 @@ public final class CallVideo implements AutoCloseable {
 
     private void remoteOff() {
         assembler.reset();
+        loss.reset();
         if (remoteShowing) {
             remoteShowing = false;
             view.remoteStopped();
@@ -283,6 +309,9 @@ public final class CallVideo implements AutoCloseable {
         if (remoteShowing && System.currentTimeMillis() - lastRemoteAt > REMOTE_TIMEOUT_MS) {
             decoderThread.execute(this::remoteOff);
         }
+        // tell the sender how much of the last second's video was lost
+        int l = loss.take();
+        if (l >= 0 && !closed) sendNow(VideoPackets.report(l));
     }
 
     /** True while pictures from the other side are arriving. */

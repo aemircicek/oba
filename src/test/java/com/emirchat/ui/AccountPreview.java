@@ -179,7 +179,13 @@ public final class AccountPreview {
         waitFor("#welcome-dialog");
         pause();
         snap("03a-welcome");
-        for (int i = 0; i < 3; i++) fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
+        fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
+        pause();
+        snap("03b-welcome-x3dh");
+        fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
+        pause();
+        snap("03c-welcome-verify");
+        fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
         pause();
         snap("03-main-empty");
 
@@ -222,6 +228,14 @@ public final class AccountPreview {
         efe.client.sendFile("emir", "MobilCAD-sunum.pdf", "application/pdf", new byte[184_320]);
         Thread.sleep(1500);
         snap("05b-files");
+        // everything shared in the chat, in the media panel
+        fx(() -> { ((Button) find("#media-button")).fire(); return null; });
+        Thread.sleep(1200);
+        snap("05t-media");
+        fx(() -> { ((Button) find("#media-tab-1")).fire(); return null; });
+        Thread.sleep(600);
+        snap("05u-media-files");
+        fx(() -> { ((Button) find("#side-close")).fire(); return null; });
 
         // A voice message from efe (synthetic "speech": tones in syllable-like bursts)
         efe.client.sendFile("emir", "voice-20261103-140210.wav", com.emirchat.call.VoiceNotes.MIME,
@@ -530,6 +544,9 @@ public final class AccountPreview {
         fx(() -> { ((Button) find("#members-button")).fire(); return null; });
         Thread.sleep(400);
         snap("15e-members");
+        fx(() -> { ((Button) find("#threads-button")).fire(); return null; });
+        Thread.sleep(400);
+        snap("15m-threads");
         // the contact page, opened from the member list
         fx(() -> { click(find("#member-ayse")); return null; });
         waitFor("#contact-dialog");
@@ -569,6 +586,11 @@ public final class AccountPreview {
         ayse.client.voice().startVideo(new com.emirchat.video.PatternSource(1280, 800, 5, true));
         Thread.sleep(3500);
         snap("15l-campfire-screen");
+        // efe turns on a camera too: the pictures sit side by side
+        efeNew.client.voice().startVideo(new com.emirchat.video.PatternSource(640, 480, 10, false));
+        Thread.sleep(3000);
+        snap("15n-campfire-grid");
+        efeNew.client.voice().stopVideo();
         ayse.client.voice().stopVideo();
         Thread.sleep(800);
         fx(() -> { ((Button) find("#campfire-back")).fire(); return null; });
@@ -622,6 +644,27 @@ public final class AccountPreview {
         waitFor("#appearance-dialog");
         Thread.sleep(400);
         snap("20-appearance");
+        fx(() -> {
+            AppPrefs.setCustomAccent("#14b1ab");
+            AppPrefs.setAccent(Appearance.CUSTOM);
+            Theme.refreshAll();
+            return null;
+        });
+        Thread.sleep(300);
+        snap("20b-custom-accent");
+        fx(() -> {
+            AppPrefs.setHighContrast("on");
+            Theme.refreshAll();
+            return null;
+        });
+        Thread.sleep(300);
+        snap("20c-high-contrast");
+        fx(() -> {
+            AppPrefs.setHighContrast("system");
+            AppPrefs.setAccent("amber");
+            Theme.refreshAll();
+            return null;
+        });
         fx(() -> { ((Button) find("#appearance-done")).fire(); return null; });
         Thread.sleep(300);
 
