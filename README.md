@@ -52,6 +52,11 @@ gh attestation verify Oba-3.4.0-windows-x64.exe -R aemircicek/oba
 The packages are not code-signed (that needs paid certificates), so Windows SmartScreen and macOS
 Gatekeeper warn on first start.
 
+From 3.6 on the app **updates itself** when a new release is out: it downloads the installer for
+its system, checks it against the release's `SHA256SUMS`, which is signed with the release key
+whose public half is built into the app (`SHA256SUMS.sig`), installs it and starts again. A copy
+started from the jar or the portable zip only opens the download page.
+
 ```sh
 java -jar secure-chat.jar server                    # run a server on port 5056 (or see docs/deploy.md)
 java -jar secure-chat.jar                           # desktop app: register or log in
@@ -494,14 +499,52 @@ community channel only the owner and admins may pin messages or set the topic; r
 this against the member list. A thread reply is a message kind that names its first message and
 is shown in the thread instead of the channel.
 
+### Several computers (3.6)
+
+The account's identity key is shared by its computers; everything else is per device. Each
+device has its own X25519 identity, signed prekey and one-time prekeys, signed by the account's
+identity key, and its own Double Ratchet sessions, so `efe` and `efe#2` are separate sessions.
+A message is encrypted once for each of the recipient's devices and once for each of the
+sender's other devices (which show it as sent); the server refuses a message that does not cover
+exactly the devices it knows, so a sender always learns about a new device. A server cannot add a
+device of its own: its keys would have to be signed by the account's identity key.
+
+Linking moves the identity key: the new computer commits to a one-time X25519 key, a signed-in
+computer answers with its own, the new one reveals its key, and both show a six-digit code from
+both keys (ZRTP-style numeric comparison). After the user compares the codes, the identity key
+is sealed to the new computer (X25519, HKDF-SHA256, AES-256-GCM). Each device also gets a random
+secret from the server, kept hashed there, that it shows when it signs in, so one device cannot
+pose as another.
+
+### Sealed sender and padding (3.6)
+
+Friends give each other a random access key inside the end-to-end encryption; its hash is on the
+server. A message to a friend whose key we have is sent over a second connection made with a
+one-time key that never logs in. The server checks the access key and that every device of the
+recipient is covered, and stores the message with no sender. Inside, encrypted to the receiving
+device's X25519 identity key, are the sender's name and device and an Ed25519 signature over this
+envelope, which the recipient checks against the key it knows for that name before opening the
+Double Ratchet message. A friend who is removed gets a new key they do not have. Contents between
+3.6 apps are padded to powers of two from 256 bytes.
+
+### Keys at rest and two-step login (3.6)
+
+An account's folder has a random data key wrapped with PBKDF2-HMAC-SHA256 (600,000 iterations)
+of the password; key and session files are AES-256-GCM under it, with their path as associated
+data. Two-step login is TOTP (RFC 6238) for computers the account is not bound to, with hashed
+one-time recovery codes; codes are limited like passwords and never accepted twice.
+
 ## Limitations
 
 Honest notes on what this project does **not** do:
 
 - **Not audited.** It is a learning and portfolio project. For real-world secrecy use Signal.
-- **The server sees metadata**: who is friends with whom, who messages whom and when, group
-  member lists, online status, and the approximate size of each file. It cannot see message
-  content, group names, file names or file content. For calls it sees who calls whom, when and
+- **The server sees metadata**: who is friends with whom, group member lists, online status, when
+  each account gets messages, and the approximate size of each file. Between friends on 3.6 the
+  sender of a direct message is sealed (the server stores it without knowing who sent it), and
+  messages are padded to powers of two; but the server still sees which address a sealed message
+  comes from, which can tie it to the sender's own connection, and who sends to a group. It
+  cannot see message content, group names, file names or file content. For calls it sees who calls whom, when and
   for how long, but not what is said.
 - **The server decides who is in a community.** Channel names and messages are encrypted for the
   members the server lists, so a malicious server could add a member (who would then appear in
@@ -512,8 +555,9 @@ Honest notes on what this project does **not** do:
   telephone (8 kHz μ-law).
 - **Video takes room**: in a small window the picture leaves space for only a few messages.
 - **Video is small**: the relay's limit leaves about 300 kbit/s, enough for a 480x360 camera or a
-  readable screen at a few frames a second, not for full-screen HD. Video is for one-to-one calls
-  only, not voice rooms. The server sees how much a call sends, so it can tell video from voice.
+  readable screen at a few frames a second, not for full-screen HD (direct calls, and the UDP
+  relay, have about three times the room). The server sees how much a call sends, so it can tell
+  video from voice.
 - **Video uses native code** (FFmpeg, through JavaCPP), unlike the rest of the app; the installers
   are about 25 MB larger for it. On macOS sharing the screen needs the "Screen Recording"
   permission, without which only the desktop picture is shared.
@@ -531,10 +575,15 @@ Honest notes on what this project does **not** do:
   shows a key-change warning; users must compare fingerprints to detect a fake key.
 - **TOFU trusts first contact.** Until friends compare fingerprints, a malicious server could
   present a fake key on the very first exchange.
-- **One device per account.** Logging in on a new device replaces the old key.
-- **The password is the account.** Whoever knows it can log in from their own device and take the
-  account over (friends then see a key-change warning). There is no second factor, and the
-  password cannot be changed yet.
+- **Several computers share one identity key.** A linked computer holds the account's key, so
+  removing it stops its messages but does not take the key back: if a computer was stolen, also
+  change the password, and to be sure start the account again on a new key (sign in on a computer
+  that was never linked; friends then see a key change). Friends still on 3.5 reach only the
+  first computer. History is not copied to a newly linked computer.
+- **The password is the account, unless two-step login is on.** Without it, whoever knows the
+  password can log in from their own computer and take the account over (friends then see a
+  key-change warning). With it, a new computer also needs a code from your phone or a recovery
+  code.
 - **Limits count addresses.** People behind one address (a campus, a mobile carrier) share its
   limits, and a server placed behind a proxy sees only the proxy's address: run it directly on its
   port, as the Docker and systemd set-ups do. Connections from the server's own computer are not
@@ -542,8 +591,10 @@ Honest notes on what this project does **not** do:
 - **Voice room audio is authenticated with keys the whole room knows.** The server names the
   speaker of each packet, so a room member working together with the server could speak under
   another member's name. Text messages do not have this weakness (they are signed).
-- **Keys at rest are not encrypted**: identity keys and ratchet sessions are protected only by
-  owner-only file permissions (message history is encrypted).
+- **Keys at rest are encrypted under the password**, but the first computer's own identity key
+  (in the app's data folder, used before you sign in) is protected only by owner-only file
+  permissions; a linked computer keeps the account's key in the encrypted folder. The password
+  protects nothing against malware running as you while the app is open.
 - **Disappearing messages rely on the other side's app.** They protect against a device being
   lost or seized later, not against a recipient who takes a screenshot or runs a modified client.
   The terminal client keeps no history at all.
@@ -560,11 +611,14 @@ Honest notes on what this project does **not** do:
 
 ## Roadmap
 
-- Passphrase-encrypted identity keys and session state
-- Fuzzing the decoders (Jazzer) and a written security report
-- Sealed sender and message-size padding (less metadata for the server)
-- A formal model of the handshake and X3DH (ProVerif or Tamarin)
-- Multiple devices per account; video in voice rooms
+- A formal model of the handshake, X3DH and device linking (ProVerif or Tamarin)
+- Taking a linked computer's key back (a new identity key for the account, handed to the
+  remaining computers)
+- Copying history to a newly linked computer
+- A phone app
+
+Done in 3.6: keys encrypted at rest, fuzzing and a security report (docs/security-report.md),
+sealed sender and padding, several computers per account, video in voice rooms.
 
 ## Security
 

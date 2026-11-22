@@ -21,7 +21,7 @@ dpkg-reconfigure -plow unattended-upgrades    # security updates install themsel
 ufw default deny incoming
 ufw allow OpenSSH
 ufw allow 5056/tcp                            # secure-chat
-ufw allow 5056/udp                            # optional: lets calls go directly between users
+ufw allow 5056/udp                            # calls: direct paths, and the UDP relay when there is none
 ufw enable
 ```
 

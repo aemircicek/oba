@@ -1,15 +1,87 @@
 # Changelog
 
-## Unreleased
+## 3.6.0 (2026-11-22)
 
-Life at the camp: cameras and screens at the fire, amber messages, nudges, a sandstorm curtain,
-a scorpion for every key, the constellation of trust, and a look at what the server actually
-carries. The server needs no update. 3.5 shows the new kinds of message as "update to see it";
-versions before 3.5 report them as messages that could not be decrypted.
+One account on several computers, two-step login, keys locked under your password, sealed
+sender, a server that installs and updates with one command, and an app that updates itself.
+Also: life at the camp, with cameras and screens at the fire, amber messages, nudges, a
+sandstorm curtain, a scorpion for every key and the constellation of trust.
 
-### Added
+**Update the server too** (`sudo deploy/oba-server.sh update`, see docs/deploy.md): several
+computers per account, two-step login, password changes, sealed sender and the UDP call relay
+need a 3.6 server. Everything else works with a 3.4 or 3.5 server as before, and 3.6 apps keep
+talking to 3.5 ones. 3.5 shows the new kinds of message as "update to see it"; versions before
+3.5 report them as messages that could not be decrypted.
+
+### Several computers, one account
+- **Link a second computer** from the sign-in screen ("This account is already on another
+  computer"). A computer already signed in asks you to allow it, after you compared a six-digit
+  code shown on both. The account's identity key moves over sealed end to end, so friends see
+  no key change; the codes come from both computers' one-time keys, which are committed to
+  before either is shown, so a server in the middle cannot pick keys that give matching codes.
+- **Every message reaches every computer**, each encrypted on its own (every device has its own
+  prekeys and Double Ratchet sessions). What you send from one shows on the others. The server
+  refuses a message that leaves out one of the recipient's computers, and cannot add a computer
+  of its own: device keys must be signed by the account's identity key.
+- **Settings → Account security → Computers** lists them; remove one you no longer use. Each
+  device proves itself with a secret of its own, so a removed computer cannot come back as
+  another one.
+- Friends still on 3.5 reach only your first computer.
+
+### Security
+- **Keys and sessions are encrypted at rest** under your password (a random data key wrapped
+  with PBKDF2; older plain files are encrypted at the first login). A copied disk shows no
+  ratchet state, prekeys or group keys any more, only that an account exists.
+- **Two-step login** (Settings → Account security): a code from an authenticator app (TOTP) when
+  a new computer signs in, with eight one-time recovery codes. The computer you use is not asked.
+- **Change the password** (Settings → Account security); keys and history on this computer are
+  locked again under the new one.
+- **Sealed sender**: once two friends have exchanged access keys (inside end-to-end encryption,
+  with the first message), their messages go over a second connection that never logs in, with
+  the sender's name and signature inside the encryption: the server stores and delivers them
+  without knowing who sent them. It still sees the recipient, the time, and the address the
+  connection comes from. A friend you remove gets a new key they do not have.
+- **Padding**: messages between 3.6 apps are padded to powers of two (from 256 bytes), so their
+  length says less.
+- **Fuzzing**: Jazzer fuzz tests for the wire format, every message format, video packets, call
+  candidates, the UDP relay, Markdown, pictures and voice notes, and the decryption paths; their
+  saved inputs run with every build. About 70 million inputs found nothing (docs/security-report.md).
+
+### Server
+- **A ready-made image** (ghcr.io/aemircicek/oba-server, amd64 and arm64, with a signed
+  provenance attestation) and **deploy/oba-server.sh**: install, update (backs up first and checks
+  the server key did not change), backup, restore, status.
+- **Counters at /metrics** (Prometheus) with `--metrics`: connections, accounts online, logins,
+  envelopes, call and voice packets, limits hit. Totals only: no names, groups or addresses.
+- **UDP call relay**: when two computers cannot reach each other directly, calls go through the
+  server over UDP instead of TCP: less delay, and room for the better video of direct calls.
+  Neither side sees the other's address, so it is used even with direct calls turned off.
+- The server names its version in its (signed) handshake, so apps know which requests it takes.
+
+### App
+- **Updates itself**: downloads the installer, checks it against the release's list of files
+  signed with the release key, installs and restarts (macOS, Windows installer, Linux .deb).
+- **Search** every chat through an encrypted index of keyed word tokens: fast, matches the start
+  of words in any case or spelling (`isik` finds `Işık`), filters `from:`, `in:`, `has:file`,
+  `has:link`, highlights what matched.
+- **Notifications per chat**: everything, only mentions, or nothing; mute for an hour, eight
+  hours, until the morning or for good; **quiet hours** for the night. Answers to you count as
+  mentions.
+- **Shared in this chat**: every picture, file and link of a chat in one panel.
+- **Threads**: a list of all threads in a channel, with replies, people and unread counts.
+- **Your own accent colour**, adjusted so text stays readable, and **high contrast** (or
+  Windows' own setting).
+- **Video adapts** to the connection: receivers report loss every second, senders step down at
+  once and back up slowly.
+- **Every camera and screen at the fire** at once, in a grid; click one to make it large.
+- **A first-start tour** with moving pictures: what the server sees, how X3DH agrees on a key,
+  why to compare safety numbers.
+- Benchmarks (JMH) of encryption, history and the wire format; pull requests compare them with
+  the base.
+
+### Life at the camp
 - **Cameras and screens in voice rooms**: anyone at the fire can turn on their camera or share
-  their screen; it shows large in the middle of the scene. End-to-end encrypted under the room's
+  their screen; the pictures sit in the middle of the scene. End-to-end encrypted under the room's
   keys, paced to fit beside the voice in the relay's limit, so **no server change**. Versions
   without it skip the pictures and keep hearing everyone.
 - **Amber messages** (`/amber 2027-01-01 text`, `/amber 3d text`, or `/kehribar` in Turkish):

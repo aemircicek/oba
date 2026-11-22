@@ -361,6 +361,16 @@ public final class AccountPreview {
         pause();
         snap("05w-two-step-qr");
         fx(() -> { ((Button) find("#security-close")).fire(); return null; });
+        // another computer asks to join: the code to compare
+        fx(() -> {
+            ((MainView) find(".main-view").getUserData()).linkRequest(
+                    new com.emirchat.client.DeviceLinking.LinkPrompt(7, "Efe-Masaustu · Windows 11", "482 913"));
+            return null;
+        });
+        waitFor("#link-request-dialog");
+        pause();
+        snap("05x-link-request");
+        fx(() -> { ((Button) find("#link-deny")).fire(); return null; });
         fx(() -> { ((Button) find("#settings")).fire(); return null; });
         waitFor("#settings-dialog");
         // making a backup: the passphrase form, filled in (saving would open a file chooser)
