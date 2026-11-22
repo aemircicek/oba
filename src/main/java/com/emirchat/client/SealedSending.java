@@ -22,6 +22,26 @@ final class SealedSending {
         this.client = client;
     }
 
+    /**
+     * Someone is no longer a friend: a new access key, so the old one (which they have) stops
+     * working; current friends get the new one with our next message to each.
+     */
+    synchronized void friendLeft() {
+        if (accessKey == null) return;
+        try {
+            byte[] key = new byte[Packet.ACCESS_KEY_BYTES];
+            new java.security.SecureRandom().nextBytes(key);
+            client.connection.call(new Packet.SetAccessKey(java.security.MessageDigest.getInstance("SHA-256").digest(key)));
+            com.emirchat.e2e.Vault.write(client.dataDir.resolve(ACCESS_KEY_FILE), key);
+            accessKey = key;
+            gaveAccessKey.clear();
+            friendAccessKeys.keySet().retainAll(client.friends);
+            saveAccessKeys();
+        } catch (IOException | ApiException | java.security.NoSuchAlgorithmException e) {
+            // tried again when the next friend leaves; the client drops sealed messages from non-friends meanwhile
+        }
+    }
+
     /** Closes the anonymous connection. */
     void close() {
         ServerConnection a = anonymous;

@@ -98,6 +98,35 @@ class SealedSenderTest {
         }
     }
 
+    private byte[] accessKeyHash(String user) throws Exception {
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + dir.resolve("server/server.db"));
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("SELECT a.key_hash FROM access_keys a JOIN users u ON u.id = a.user_id WHERE u.username = '"
+                     + user + "'")) {
+            return rs.next() ? rs.getBytes(1) : null;
+        }
+    }
+
+    @Test
+    void aRemovedFriendsAccessKeyStopsWorking() throws Exception {
+        Client emir = start("emir", true);
+        Client efe = start("efe", true);
+        try {
+            emir.client().connection().sendFriendRequest("efe");
+            efe.client().connection().respondFriendRequest("emir", true);
+            emir.client().sendText("efe", "merhaba");
+            next(efe.got());
+            byte[] before = accessKeyHash("efe");
+            assertNotNull(before);
+            emir.client().connection().removeFriend("efe"); // efe is told, and changes the key emir holds
+            Thread.sleep(500);
+            assertTrue(!java.util.Arrays.equals(before, accessKeyHash("efe")), "efe's access key was replaced");
+        } finally {
+            emir.client().close();
+            efe.client().close();
+        }
+    }
+
     @Test
     void contentIsPaddedToPowersOfTwo() throws Exception {
         var pad = ChatClient.class.getDeclaredMethod("pad", byte[].class);

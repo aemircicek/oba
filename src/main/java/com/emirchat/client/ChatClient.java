@@ -643,9 +643,11 @@ public final class ChatClient implements AutoCloseable {
             online.put(f.username(), f.online());
             current.add(f.username());
         }
+        boolean someoneLeft = !current.containsAll(friends) && !friends.isEmpty();
         friends.addAll(current);
         friends.retainAll(current);
         lastFriends = list;
+        if (someoneLeft) sealed.friendLeft(); // a removed friend must not keep sending us sealed messages
         return list;
     }
 
@@ -896,7 +898,12 @@ public final class ChatClient implements AutoCloseable {
             ids.add(d.deviceId());
             freshBundles.put(address(user, d.deviceId()), d.bundle());
             deviceMulti.put(address(user, d.deviceId()), d.multi());
-            sealed.deviceDh.put(address(user, d.deviceId()), d.bundle().dhIdentity());
+            // sealed messages go to this key: only if the account's identity key signed it (as X3DH checks too)
+            byte[] identity = user.equals(username) ? deviceKey : knownKey(user);
+            if (identity != null && Identity.verify(identity, com.emirchat.e2e.DeviceKeys.dhIdentitySignedData(d.bundle().dhIdentity()),
+                    d.bundle().dhIdentitySignature())) {
+                sealed.deviceDh.put(address(user, d.deviceId()), d.bundle().dhIdentity());
+            }
         }
         if (user.equals(username)) {
             ids.remove(deviceId);
@@ -1474,6 +1481,7 @@ public final class ChatClient implements AutoCloseable {
             }
             case Packet.FriendRemoved f -> {
                 friends.remove(f.username());
+                sealed.friendLeft();
                 listener.push(packet);
             }
             case Packet.GroupUpdated g -> groupChanged(g.group());
