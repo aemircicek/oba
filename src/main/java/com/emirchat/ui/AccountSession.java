@@ -202,6 +202,17 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     AccountSession(History history) {
         this.history = history;
         sweeper.scheduleWithFixedDelay(this::deleteExpired, 0, 2, java.util.concurrent.TimeUnit.SECONDS);
+        sweeper.schedule(this::indexBacklog, 3, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /** Adds messages from before 3.6 to the search index, a few hundred at a time. */
+    private void indexBacklog() {
+        try {
+            if (history.indexBacklog(300) > 0) sweeper.schedule(this::indexBacklog, 200, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (IOException | RuntimeException e) {
+            // searching still scans what is not indexed; try again later
+            sweeper.schedule(this::indexBacklog, 1, java.util.concurrent.TimeUnit.MINUTES);
+        }
     }
 
     /** Deletes disappearing messages whose time is up, with their cached files. */

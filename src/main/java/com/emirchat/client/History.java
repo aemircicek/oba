@@ -102,11 +102,17 @@ public final class History implements AutoCloseable {
     private final Connection db;
     private final SecretKey key;
     private final Path file;
+    private final SearchTerms terms;
 
     private History(Connection db, SecretKey key, Path file) {
         this.db = db;
         this.key = key;
         this.file = file;
+        byte[] raw = key.getEncoded();
+        byte[] indexKey = com.emirchat.crypto.Hkdf.expand(raw, "oba history search index".getBytes(StandardCharsets.UTF_8), 32);
+        Arrays.fill(raw, (byte) 0);
+        this.terms = new SearchTerms(indexKey);
+        Arrays.fill(indexKey, (byte) 0);
     }
 
     /** The database file (for backups). */
@@ -182,6 +188,12 @@ public final class History implements AutoCloseable {
                             pinned_at  INTEGER NOT NULL
                         )""");
                 s.execute("CREATE TABLE IF NOT EXISTS topics (conversation TEXT PRIMARY KEY, body BLOB NOT NULL)");
+                // 3.6: search index of keyed word tokens (see SearchTerms); rows not yet indexed are scanned
+                if (!columns.contains("indexed")) s.execute("ALTER TABLE messages ADD COLUMN indexed INTEGER NOT NULL DEFAULT 0");
+                s.execute("CREATE TABLE IF NOT EXISTS search_index (token BLOB NOT NULL, message_id INTEGER NOT NULL)");
+                s.execute("CREATE INDEX IF NOT EXISTS search_token ON search_index(token)");
+                s.execute("CREATE INDEX IF NOT EXISTS search_message ON search_index(message_id)");
+                s.execute("CREATE INDEX IF NOT EXISTS messages_unindexed ON messages(indexed) WHERE indexed = 0");
             }
             byte[] salt = meta(db, "salt");
             if (salt == null) {
@@ -272,6 +284,8 @@ public final class History implements AutoCloseable {
             ps.setBytes(1, seal(newText.getBytes(StandardCharsets.UTF_8)));
             ps.setLong(2, m.id());
             ps.executeUpdate();
+            unindex(m.id());
+            index(m.id(), newText);
         } catch (SQLException e) {
             throw new IOException(e.getMessage(), e);
         }
@@ -295,6 +309,7 @@ public final class History implements AutoCloseable {
             ps.executeUpdate();
             r.setLong(1, m.id());
             r.executeUpdate();
+            unindex(m.id());
         } catch (SQLException e) {
             throw new IOException(e.getMessage(), e);
         }
@@ -557,23 +572,166 @@ public final class History implements AutoCloseable {
     }
 
     /**
-     * Finds messages whose text or file name contains {@code query} (ignoring case), newest first.
-     * Texts are encrypted at rest, so every message is decrypted here, in memory.
+     * Finds messages, newest first. The query is words, each matching the start of a word in a
+     * message or file name (ignoring case, accents and Turkish letters: "isik" finds "Işık"), plus
+     * any of these filters: {@code from:name}, {@code in:dm:name} or {@code in:g:42},
+     * {@code has:file}, {@code has:link}.
+     *
+     * <p>Words are looked up in the encrypted index (see {@link SearchTerms}); only the candidates
+     * it returns, and messages not indexed yet, are decrypted, here in memory.
      */
     public synchronized List<Message> search(String query, int limit) throws IOException {
+        Query q = Query.parse(query);
         List<Message> result = new ArrayList<>();
-        String needle = query.strip().toLowerCase(java.util.Locale.ROOT);
-        if (needle.isEmpty()) return result;
-        try (Statement s = db.createStatement();
-             ResultSet rs = s.executeQuery("SELECT " + COLUMNS + " FROM messages WHERE deleted = 0 ORDER BY id DESC")) {
-            while (rs.next() && result.size() < limit) {
-                Message m = row(rs);
-                if (m.text().toLowerCase(java.util.Locale.ROOT).contains(needle)) result.add(m);
+        if (q.isEmpty()) return result;
+        try {
+            java.util.Set<Long> candidates = null; // null: no words, filters only
+            for (String w : q.words()) {
+                java.util.Set<Long> ids = new java.util.HashSet<>();
+                try (PreparedStatement ps = db.prepareStatement("SELECT message_id FROM search_index WHERE token = ?")) {
+                    ps.setBytes(1, terms.token(w).bytes());
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) ids.add(rs.getLong(1));
+                    }
+                }
+                if (candidates == null) candidates = ids;
+                else candidates.retainAll(ids);
+            }
+            StringBuilder where = new StringBuilder("deleted = 0");
+            List<Object> args = new ArrayList<>();
+            if (q.from() != null) {
+                where.append(" AND sender = ? COLLATE NOCASE");
+                args.add(q.from());
+            }
+            if (q.in() != null) {
+                where.append(" AND conversation = ?");
+                args.add(q.in());
+            }
+            if (q.hasFile()) where.append(" AND kind = ").append(KIND_FILE);
+            List<Long> ids = new ArrayList<>();
+            String sql = candidates == null
+                    ? "SELECT id FROM messages WHERE " + where + " ORDER BY id DESC"
+                    : "SELECT id FROM messages WHERE " + where + " AND indexed = 0 ORDER BY id DESC";
+            try (PreparedStatement ps = db.prepareStatement(sql)) {
+                for (int i = 0; i < args.size(); i++) ps.setObject(i + 1, args.get(i));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) ids.add(rs.getLong(1));
+                }
+            }
+            if (candidates != null) {
+                ids.addAll(candidates);
+                ids = new ArrayList<>(new java.util.TreeSet<>(ids).descendingSet());
+            }
+            for (long id : ids) {
+                if (result.size() >= limit) break;
+                Message m = get(id);
+                if (m != null && q.matches(m)) result.add(m);
             }
         } catch (SQLException e) {
             throw new IOException(e.getMessage(), e);
         }
         return result;
+    }
+
+    /** A parsed search: words to find (folded) and filters. */
+    public record Query(List<String> words, String from, String in, boolean hasFile, boolean hasLink) {
+        public static Query parse(String text) {
+            List<String> plain = new ArrayList<>();
+            String from = null;
+            String in = null;
+            boolean file = false;
+            boolean link = false;
+            for (String part : text.strip().split("\\s+")) {
+                String lower = part.toLowerCase(java.util.Locale.ROOT);
+                if (lower.startsWith("from:") && part.length() > 5) from = part.substring(5).replaceFirst("^@", "");
+                else if (lower.startsWith("in:") && part.length() > 3) in = part.substring(3);
+                else if (lower.equals("has:file")) file = true;
+                else if (lower.equals("has:link")) link = true;
+                else plain.add(part);
+            }
+            List<String> words = new ArrayList<>(SearchTerms.words(String.join(" ", plain)));
+            // one-letter words are not indexed; they cannot narrow a search much anyway
+            return new Query(List.copyOf(words), from, in, file, link);
+        }
+
+        public boolean isEmpty() {
+            return words.isEmpty() && from == null && in == null && !hasFile && !hasLink;
+        }
+
+        boolean matches(Message m) {
+            if (m.deleted()) return false;
+            if (from != null && !m.sender().equalsIgnoreCase(from)) return false;
+            if (in != null && !m.conversation().equals(in)) return false;
+            if (hasFile && m.file() == null) return false;
+            if (hasLink && !m.text().matches("(?s).*\\bhttps?://.*")) return false;
+            if (words.isEmpty()) return true;
+            java.util.Set<String> have = SearchTerms.words(m.text());
+            for (String w : words) {
+                if (have.stream().noneMatch(h -> h.startsWith(w))) return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Indexes up to {@code max} messages stored before the index existed (newest first), so a
+     * long history becomes searchable quickly without one long pause.
+     *
+     * @return how many were indexed (0 when everything is)
+     */
+    public synchronized int indexBacklog(int max) throws IOException {
+        List<long[]> rows = new ArrayList<>();
+        try (PreparedStatement ps = db.prepareStatement(
+                "SELECT id FROM messages WHERE indexed = 0 ORDER BY id DESC LIMIT ?")) {
+            ps.setInt(1, max);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) rows.add(new long[] {rs.getLong(1)});
+            }
+            db.setAutoCommit(false);
+            try {
+                for (long[] r : rows) {
+                    Message m = get(r[0]);
+                    if (m == null) continue;
+                    index(m.id(), m.deleted() ? "" : m.text());
+                }
+                db.commit();
+            } finally {
+                db.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+        return rows.size();
+    }
+
+    private void index(long id, String text) throws SQLException {
+        try (PreparedStatement ps = db.prepareStatement("INSERT INTO search_index (token, message_id) VALUES (?, ?)")) {
+            for (SearchTerms.Token t : terms.tokens(text)) {
+                ps.setBytes(1, t.bytes());
+                ps.setLong(2, id);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+        try (PreparedStatement ps = db.prepareStatement("UPDATE messages SET indexed = 1 WHERE id = ?")) {
+            ps.setLong(1, id);
+            ps.executeUpdate();
+        }
+    }
+
+    private void unindex(long id) throws SQLException {
+        try (PreparedStatement ps = db.prepareStatement("DELETE FROM search_index WHERE message_id = ?")) {
+            ps.setLong(1, id);
+            ps.executeUpdate();
+        }
+    }
+
+    private static String fileName(byte[] encoded) {
+        try {
+            return FileMessage.decode(encoded).name();
+        } catch (java.net.ProtocolException e) {
+            return "";
+        }
     }
 
     /** Writes a consistent copy of the whole history (still encrypted) to {@code target}, for backups. */
@@ -626,9 +784,10 @@ public final class History implements AutoCloseable {
             try (PreparedStatement del = db.prepareStatement("DELETE FROM messages WHERE expires_at > 0 AND expires_at <= ?");
                  PreparedStatement r = db.prepareStatement("DELETE FROM reactions WHERE message_id = ?");
                  PreparedStatement v = db.prepareStatement("DELETE FROM votes WHERE message_id = ?");
-                 PreparedStatement p = db.prepareStatement("DELETE FROM pins WHERE message_id = ?")) {
+                 PreparedStatement p = db.prepareStatement("DELETE FROM pins WHERE message_id = ?");
+                 PreparedStatement x = db.prepareStatement("DELETE FROM search_index WHERE message_id = ?")) {
                 for (Expired e : expired) {
-                    for (PreparedStatement st : new PreparedStatement[] {r, v, p}) {
+                    for (PreparedStatement st : new PreparedStatement[] {r, v, p, x}) {
                         st.setLong(1, e.id());
                         st.executeUpdate();
                     }
@@ -661,10 +820,13 @@ public final class History implements AutoCloseable {
             ps.setInt(9, kind);
             ps.setLong(10, expiresAt);
             ps.executeUpdate();
+            long id;
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 keys.next();
-                return keys.getLong(1);
+                id = keys.getLong(1);
             }
+            index(id, kind == KIND_FILE ? fileName(content) : new String(content, StandardCharsets.UTF_8));
+            return id;
         } catch (SQLException e) {
             throw new IOException(e.getMessage(), e);
         }

@@ -352,6 +352,9 @@
 .list-row.selected { -fx-background-color: -sc-accent-weak; }
 .row-title { -fx-font-size: 13.5px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
 .row-sub { -fx-font-size: 12px; -fx-text-fill: -sc-text-2; }
+/* search results: the matched starts of words stand out */
+.row-sub .search-plain { -fx-fill: -sc-text-2; -fx-font-size: 12px; }
+.row-sub .search-hit { -fx-fill: -sc-accent-text; -fx-font-size: 12px; -fx-font-weight: bold; }
 .row-time { -fx-font-size: 11px; -fx-text-fill: -sc-text-3; }
 .list-heading { -fx-padding: 12 14 4 14; }
 

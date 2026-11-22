@@ -331,7 +331,7 @@ public final class AccountPreview {
         snap("05m-sand-after");
 
         fx(() -> { ((TextField) find("#search")).setText("sunum"); return null; });
-        Thread.sleep(400);
+        Thread.sleep(800);
         snap("05e-search");
         fx(() -> { ((TextField) find("#search")).setText(""); return null; });
         fx(() -> { ((Button) find("#settings")).fire(); return null; });
