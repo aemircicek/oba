@@ -115,38 +115,113 @@ final class Sidebar {
         else buildChats();
     }
 
-    /** Search results across all conversations (decrypted locally; nothing is sent anywhere). */
+    /** The query the last search was started for; results of an older one are thrown away. */
+    private String searching = "";
+    private final javafx.animation.PauseTransition searchPause = new javafx.animation.PauseTransition(javafx.util.Duration.millis(160));
+
+    /**
+     * Search results across all conversations, looked up in the encrypted index off the UI thread
+     * (a moment after the last key press) and decrypted locally; nothing is sent anywhere.
+     */
     private void buildSearch(String query) {
         main.list.getChildren().add(heading(I18n.t("main.results")));
-        List<History.Message> found;
-        try {
-            found = main.session.history().search(query, 50);
-        } catch (IOException e) {
-            found = List.of();
-        }
+        Label hint = UiKit.label(I18n.t("main.searchHint"), "caption");
+        hint.setId("search-hint");
+        hint.setWrapText(true);
+        hint.setPadding(new Insets(0, 14, 4, 14));
+        main.list.getChildren().add(hint);
+        Label wait = UiKit.label(I18n.t("main.searching"), "caption");
+        wait.setPadding(new Insets(6, 14, 0, 14));
+        main.list.getChildren().add(wait);
+        searching = query;
+        searchPause.setOnFinished(e -> main.session.downloads().execute(() -> {
+            if (!query.equals(searching)) return;
+            List<History.Message> found;
+            try {
+                found = main.session.history().search(query, 100);
+            } catch (IOException ex) {
+                found = List.of();
+            }
+            List<History.Message> results = found;
+            javafx.application.Platform.runLater(() -> {
+                if (!query.equals(searching) || !main.list.getChildren().contains(wait)) return;
+                main.list.getChildren().remove(wait);
+                showResults(query, results);
+            });
+        }));
+        searchPause.playFromStart();
+    }
+
+    private void showResults(String query, List<History.Message> found) {
         if (found.isEmpty()) {
             Label none = UiKit.label(I18n.t("main.noResults", query.strip()), "caption");
+            none.setId("no-results");
             none.setPadding(new Insets(6, 14, 0, 14));
             main.list.getChildren().add(none);
         }
+        List<String> words = History.Query.parse(query).words();
         for (History.Message m : found) {
             String where = m.conversation().startsWith("g:") ? groupName(Long.parseLong(m.conversation().substring(2)))
                     : m.conversation().substring(3);
-            Label sub = UiKit.label((m.outgoing() ? "You: " : m.conversation().startsWith("g:") ? m.sender() + ": " : "")
-                    + (m.file() != null ? "📎 " : "") + Markdown.plain(m.text()), "row-sub");
+            String prefix = (m.outgoing() ? I18n.t("conv.you") + ": " : m.conversation().startsWith("g:") ? m.sender() + ": " : "")
+                    + (m.file() != null ? "📎 " : "");
+            javafx.scene.text.TextFlow sub = highlighted(prefix, Markdown.plain(m.text()), words);
+            sub.getStyleClass().add("row-sub");
+            sub.setMaxHeight(36);
             VBox text = new VBox(2, UiKit.label(where, "row-title"), sub);
             text.setMinWidth(0);
             HBox row = new HBox(10, text, UiKit.grow(), UiKit.label(UiKit.time(m.sentAt()), "row-time"));
             row.getStyleClass().add("list-row");
             row.setAlignment(Pos.CENTER_LEFT);
             row.setId("result-" + m.id());
-            A11y.clickable(row, null);
+            A11y.clickable(row, where + ": " + prefix + Markdown.plain(m.text()));
             row.setOnMouseClicked(e -> {
                 main.open(m.conversation());
                 if (main.current != null) main.current.reveal(m.id());
             });
             main.list.getChildren().add(row);
         }
+    }
+
+    /** The text with the starts of matching words in bold (matched as the search matches them). */
+    static javafx.scene.text.TextFlow highlighted(String prefix, String text, List<String> words) {
+        String shown = text.length() > 160 ? text.substring(0, 160) + "…" : text;
+        javafx.scene.text.TextFlow flow = new javafx.scene.text.TextFlow();
+        if (!prefix.isEmpty()) flow.getChildren().add(styled(prefix, "search-plain"));
+        int plainFrom = 0;
+        for (int[] span : matches(shown, words)) {
+            if (span[0] > plainFrom) flow.getChildren().add(styled(shown.substring(plainFrom, span[0]), "search-plain"));
+            flow.getChildren().add(styled(shown.substring(span[0], span[1]), "search-hit"));
+            plainFrom = span[1];
+        }
+        if (plainFrom < shown.length()) flow.getChildren().add(styled(shown.substring(plainFrom), "search-plain"));
+        return flow;
+    }
+
+    /** [start, end) of each word start in {@code text} that a query word matches. */
+    static List<int[]> matches(String text, List<String> words) {
+        List<int[]> spans = new java.util.ArrayList<>();
+        int i = 0;
+        while (i < text.length()) {
+            if (!Character.isLetterOrDigit(text.codePointAt(i))) {
+                i += Character.charCount(text.codePointAt(i));
+                continue;
+            }
+            int end = i;
+            while (end < text.length() && Character.isLetterOrDigit(text.codePointAt(end))) end += Character.charCount(text.codePointAt(end));
+            String word = com.emirchat.client.SearchFold.fold(text.substring(i, end));
+            int best = 0;
+            for (String w : words) if (word.startsWith(w)) best = Math.max(best, w.length());
+            if (best > 0) spans.add(new int[] {i, Math.min(end, i + best)});
+            i = end;
+        }
+        return spans;
+    }
+
+    private static javafx.scene.text.Text styled(String s, String style) {
+        javafx.scene.text.Text t = new javafx.scene.text.Text(s);
+        t.getStyleClass().add(style);
+        return t;
     }
 
     String groupName(long id) {
@@ -162,10 +237,12 @@ final class Sidebar {
         return root == null ? I18n.t("main.formerGroup") : ConversationView.groupName(root);
     }
 
+    /** Unread messages of a chat that should draw attention (none for a muted chat). */
     int unread(String conversation, Map<String, History.Summary> summaries) {
         History.Summary s = summaries.get(conversation);
         boolean open = main.current != null && main.current.conversation().equals(conversation);
-        return s == null || open ? 0 : s.unread();
+        if (s == null || open) return 0;
+        return main.session.notifyRules().muted(conversation, System.currentTimeMillis()) ? 0 : s.unread();
     }
 
     Map<String, History.Summary> summaries() {
@@ -396,7 +473,18 @@ final class Sidebar {
             int inVoice = main.voiceRooms.getOrDefault(Long.parseLong(conversation.substring(2)), List.of()).size();
             if (inVoice > 0) right.getChildren().add(UiKit.label("🔊 " + inVoice, "voice-badge"));
         }
-        if (s != null && s.unread() > 0 && !open) right.getChildren().add(UiKit.label(String.valueOf(s.unread()), "unread-badge"));
+        boolean muted = main.session.notifyRules().muted(conversation, System.currentTimeMillis());
+        if (muted) {
+            javafx.scene.Node bell = Icons.of(Icons.BELL_OFF, 13, "muted");
+            bell.setId("muted-" + conversation.replace(':', '-'));
+            Tooltip.install(bell, new Tooltip(I18n.t("notify.mutedTip")));
+            right.getChildren().add(bell);
+        }
+        if (s != null && s.unread() > 0 && !open) {
+            Label badge = UiKit.label(String.valueOf(s.unread()), "unread-badge");
+            if (muted) badge.getStyleClass().add("quiet");
+            right.getChildren().add(badge);
+        }
         if (avatar instanceof javafx.scene.layout.Region r) r.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         HBox row = new HBox(avatar, text, UiKit.grow(), right);
         row.getStyleClass().add("list-row");

@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write      # upload release assets
+  packages: write      # push the server image to ghcr.io
   id-token: write      # sign attestations with the workflow's identity
   attestations: write
 
@@ -89,6 +90,48 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name || inputs.tag }}" dist/* --clobber
 
+  server-image:
+    # The server as a ready-made image (amd64 and arm64), for deploy/oba-server.sh.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Tags
+        id: tags
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          PRERELEASE: ${{ github.event.release.prerelease || false }}
+        run: |
+          set -euo pipefail
+          V="${TAG#v}"
+          TAGS="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/oba-server:$V"
+          # pre-releases never become "latest"
+          if [ "$PRERELEASE" != "true" ] && [[ "$V" != *-* ]]; then TAGS="$TAGS,ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/oba-server:latest"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        id: push
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: OBA_VERSION=${{ steps.tags.outputs.version }}
+          tags: ${{ steps.tags.outputs.tags }}
+      - name: Attest the image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/oba-server
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
   checksums:
     needs: package
     runs-on: ubuntu-latest
@@ -104,3 +147,25 @@ jobs:
           sha256sum Oba-* > SHA256SUMS
           cat SHA256SUMS
           gh release upload "$TAG" SHA256SUMS -R "${{ github.repository }}" --clobber
+      - name: Sign SHA256SUMS for the app's own updater
+        # The app installs an update only if SHA256SUMS carries a signature by this key (its public
+        # half is built into the app, see ui/Updater.java) and the download matches its line.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          SIGNING_KEY: ${{ secrets.OBA_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::warning::OBA_RELEASE_SIGNING_KEY is not set: apps will offer this release as a download, not install it"
+            exit 0
+          fi
+          cd assets
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > key.pem
+          openssl pkeyutl -sign -inkey key.pem -rawin -in SHA256SUMS -out sig.bin
+          openssl pkey -in key.pem -pubout > pub.pem
+          rm -f key.pem
+          base64 -w0 sig.bin > SHA256SUMS.sig
+          openssl pkeyutl -verify -pubin -inkey pub.pem -rawin -in SHA256SUMS -sigfile sig.bin
+          gh release upload "$TAG" SHA256SUMS.sig -R "${{ github.repository }}" --clobber

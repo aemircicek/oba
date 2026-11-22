@@ -16,7 +16,7 @@ import java.util.Optional;
  * synchronized: one connection, serialised writes, which is plenty for a self-hosted server.
  */
 final class Database implements AutoCloseable {
-    private static final int SCHEMA_VERSION = 7;
+    private static final int SCHEMA_VERSION = 9;
 
     record User(long id, String username, PasswordHasher.Hash password, byte[] identityKey) {}
 
@@ -181,6 +181,268 @@ final class Database implements AutoCloseable {
                         )""");
                 s.execute("PRAGMA user_version = 7");
             }
+        }
+        if (version < 8) {
+            try (Statement s = connection.createStatement()) {
+                // 3.6: two-step login. The secret must be readable to check codes; recovery codes are hashed.
+                s.execute("""
+                        CREATE TABLE two_factor (
+                            user_id   INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                            secret    BLOB    NOT NULL,
+                            enabled   INTEGER NOT NULL,
+                            last_step INTEGER NOT NULL
+                        )""");
+                s.execute("""
+                        CREATE TABLE recovery_codes (
+                            user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            code_hash BLOB    NOT NULL,
+                            PRIMARY KEY (user_id, code_hash)
+                        )""");
+                s.execute("PRAGMA user_version = 8");
+            }
+        }
+        if (version < 9) {
+            try (Statement s = connection.createStatement()) {
+                // 3.6: several devices per account. The first device keeps id 0, so everything a
+                // device before 3.6 knows (its keys, prekeys and queue) stays as it was.
+                s.execute("""
+                        CREATE TABLE devices (
+                            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            device_id  INTEGER NOT NULL,
+                            name       TEXT    NOT NULL,
+                            created_at INTEGER NOT NULL,
+                            last_seen  INTEGER NOT NULL,
+                            secret     BLOB,
+                            PRIMARY KEY (user_id, device_id)
+                        )""");
+                s.execute("""
+                        CREATE TABLE device_keys_v9 (
+                            user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            device_id   INTEGER NOT NULL,
+                            dh_identity BLOB    NOT NULL,
+                            dh_sig      BLOB    NOT NULL,
+                            spk_id      INTEGER NOT NULL,
+                            spk         BLOB    NOT NULL,
+                            spk_sig     BLOB    NOT NULL,
+                            updated_at  INTEGER NOT NULL,
+                            multi       INTEGER NOT NULL DEFAULT 0,
+                            PRIMARY KEY (user_id, device_id)
+                        )""");
+                s.execute("INSERT INTO device_keys_v9 (user_id, device_id, dh_identity, dh_sig, spk_id, spk, spk_sig, updated_at) "
+                        + "SELECT user_id, 0, dh_identity, dh_sig, spk_id, spk, spk_sig, updated_at FROM device_keys");
+                s.execute("DROP TABLE device_keys");
+                s.execute("ALTER TABLE device_keys_v9 RENAME TO device_keys");
+                s.execute("""
+                        CREATE TABLE one_time_prekeys_v9 (
+                            user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            device_id INTEGER NOT NULL,
+                            key_id    INTEGER NOT NULL,
+                            pub       BLOB    NOT NULL,
+                            PRIMARY KEY (user_id, device_id, key_id)
+                        )""");
+                s.execute("INSERT INTO one_time_prekeys_v9 (user_id, device_id, key_id, pub) SELECT user_id, 0, key_id, pub FROM one_time_prekeys");
+                s.execute("DROP TABLE one_time_prekeys");
+                s.execute("ALTER TABLE one_time_prekeys_v9 RENAME TO one_time_prekeys");
+                s.execute("ALTER TABLE envelopes ADD COLUMN device_id INTEGER NOT NULL DEFAULT 0");
+                s.execute("ALTER TABLE envelopes ADD COLUMN sender_device INTEGER NOT NULL DEFAULT 0");
+                s.execute("ALTER TABLE envelopes ADD COLUMN batch_id INTEGER NOT NULL DEFAULT 0");
+                s.execute("CREATE INDEX envelopes_device ON envelopes(recipient_id, device_id, id)");
+                // sealed sender: the server does not know who sent these (sender_id is the recipient's own)
+                s.execute("ALTER TABLE envelopes ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0");
+                s.execute("CREATE TABLE access_keys (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, "
+                        + "key_hash BLOB NOT NULL)");
+                s.execute("PRAGMA user_version = 9");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ devices (3.6)
+
+    record Device(int id, String name, long createdAt, long lastSeen, boolean hasKeys) {}
+
+    /** The account's devices: 0 (the first, always there once it has keys) and the linked ones. */
+    synchronized List<Device> devices(long userId) throws SQLException {
+        List<Device> out = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT d.device_id, d.name, d.created_at, d.last_seen, "
+                        + "EXISTS(SELECT 1 FROM device_keys k WHERE k.user_id = d.user_id AND k.device_id = d.device_id) "
+                        + "FROM devices d WHERE d.user_id = ? AND (d.secret IS NULL OR length(d.secret) <> 1) ORDER BY d.device_id")) {
+            ps.setLong(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) out.add(new Device(rs.getInt(1), rs.getString(2), rs.getLong(3), rs.getLong(4), rs.getInt(5) == 1));
+            }
+        }
+        if (out.stream().noneMatch(d -> d.id() == 0) && !exists("SELECT 1 FROM devices WHERE user_id = ? AND device_id = ?", userId, 0)) {
+            // device 0 exists implicitly (accounts made before 3.6)
+            Optional<DeviceKeysRow> k = deviceKeys(userId, 0);
+            out.add(0, new Device(0, "", 0, 0, k.isPresent()));
+        }
+        return out;
+    }
+
+    /** The hash of the secret a device proves itself with, or null (none issued yet, or no such device). */
+    synchronized byte[] deviceSecret(long userId, int deviceId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT secret FROM devices WHERE user_id = ? AND device_id = ?")) {
+            ps.setLong(1, userId);
+            ps.setInt(2, deviceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getBytes(1) : null;
+            }
+        }
+    }
+
+    synchronized void setDeviceSecret(long userId, int deviceId, byte[] hash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE devices SET secret = ? WHERE user_id = ? AND device_id = ?")) {
+            ps.setBytes(1, hash);
+            ps.setLong(2, userId);
+            ps.setInt(3, deviceId);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized boolean deviceExists(long userId, int deviceId) throws SQLException {
+        if (deviceId == 0) return true;
+        return exists("SELECT 1 FROM devices WHERE user_id = ? AND device_id = ?", userId, deviceId);
+    }
+
+    synchronized void addDevice(long userId, int deviceId, String name, long now) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO devices (user_id, device_id, name, created_at, last_seen) VALUES (?, ?, ?, ?, ?) "
+                        + "ON CONFLICT(user_id, device_id) DO UPDATE SET name = excluded.name, last_seen = excluded.last_seen")) {
+            ps.setLong(1, userId);
+            ps.setInt(2, deviceId);
+            ps.setString(3, name);
+            ps.setLong(4, now);
+            ps.setLong(5, now);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized void deviceSeen(long userId, int deviceId, String name, long now) throws SQLException {
+        addDevice(userId, deviceId, name, now);
+    }
+
+    /**
+     * Forgets a device: its keys, prekeys and queue. The first device's row stays as a tombstone
+     * (a one-byte "secret" no device can match), so its number cannot be claimed again.
+     */
+    synchronized void removeDevice(long userId, int deviceId) throws SQLException {
+        if (deviceId == 0) {
+            addDevice(userId, 0, "", System.currentTimeMillis());
+            setDeviceSecret(userId, 0, new byte[1]);
+        }
+        for (String sql : new String[] {
+                "DELETE FROM devices WHERE user_id = ? AND device_id = ? AND device_id <> 0",
+                "DELETE FROM device_keys WHERE user_id = ? AND device_id = ?",
+                "DELETE FROM one_time_prekeys WHERE user_id = ? AND device_id = ?",
+                "DELETE FROM envelopes WHERE recipient_id = ? AND device_id = ?"}) {
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setLong(1, userId);
+                ps.setInt(2, deviceId);
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /** Devices that can receive (they have published keys), with whether they are 3.6 (multi-device) apps. */
+    synchronized java.util.Map<Integer, Boolean> receivingDevices(long userId) throws SQLException {
+        java.util.Map<Integer, Boolean> out = new java.util.TreeMap<>();
+        try (PreparedStatement ps = connection.prepareStatement("SELECT device_id, multi FROM device_keys WHERE user_id = ?")) {
+            ps.setLong(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) out.put(rs.getInt(1), rs.getInt(2) == 1);
+            }
+        }
+        return out;
+    }
+
+    // ------------------------------------------------------------------ two-step login
+
+    record TwoFactor(byte[] secret, boolean enabled, long lastStep, int recoveryLeft) {}
+
+    synchronized Optional<TwoFactor> twoFactor(long userId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT secret, enabled, last_step, (SELECT COUNT(*) FROM recovery_codes r WHERE r.user_id = t.user_id) "
+                        + "FROM two_factor t WHERE user_id = ?")) {
+            ps.setLong(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(new TwoFactor(rs.getBytes(1), rs.getInt(2) == 1, rs.getLong(3), rs.getInt(4)));
+            }
+        }
+    }
+
+    /** A new secret waiting for its first code (replaces one that was waiting; never an enabled one). */
+    synchronized void setPendingTwoFactor(long userId, byte[] secret) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO two_factor (user_id, secret, enabled, last_step) VALUES (?, ?, 0, -1) "
+                        + "ON CONFLICT(user_id) DO UPDATE SET secret = excluded.secret, last_step = -1 WHERE enabled = 0")) {
+            ps.setLong(1, userId);
+            ps.setBytes(2, secret);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized void enableTwoFactor(long userId, long step, java.util.List<byte[]> recoveryHashes) throws SQLException {
+        boolean auto = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try (PreparedStatement en = connection.prepareStatement("UPDATE two_factor SET enabled = 1, last_step = ? WHERE user_id = ?");
+             PreparedStatement del = connection.prepareStatement("DELETE FROM recovery_codes WHERE user_id = ?");
+             PreparedStatement add = connection.prepareStatement("INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)")) {
+            en.setLong(1, step);
+            en.setLong(2, userId);
+            en.executeUpdate();
+            del.setLong(1, userId);
+            del.executeUpdate();
+            for (byte[] h : recoveryHashes) {
+                add.setLong(1, userId);
+                add.setBytes(2, h);
+                add.executeUpdate();
+            }
+            connection.commit();
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(auto);
+        }
+    }
+
+    synchronized void setTwoFactorStep(long userId, long step) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE two_factor SET last_step = ? WHERE user_id = ?")) {
+            ps.setLong(1, step);
+            ps.setLong(2, userId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Uses up a recovery code. @return true if it was one of the user's (it is gone now) */
+    synchronized boolean useRecoveryCode(long userId, byte[] hash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM recovery_codes WHERE user_id = ? AND code_hash = ?")) {
+            ps.setLong(1, userId);
+            ps.setBytes(2, hash);
+            return ps.executeUpdate() == 1;
+        }
+    }
+
+    synchronized void disableTwoFactor(long userId) throws SQLException {
+        try (PreparedStatement a = connection.prepareStatement("DELETE FROM two_factor WHERE user_id = ?");
+             PreparedStatement b = connection.prepareStatement("DELETE FROM recovery_codes WHERE user_id = ?")) {
+            a.setLong(1, userId);
+            a.executeUpdate();
+            b.setLong(1, userId);
+            b.executeUpdate();
+        }
+    }
+
+    synchronized void updatePassword(long userId, PasswordHasher.Hash hash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE users SET password_hash = ?, password_salt = ?, iterations = ? WHERE id = ?")) {
+            ps.setBytes(1, hash.hash());
+            ps.setBytes(2, hash.salt());
+            ps.setInt(3, hash.iterations());
+            ps.setLong(4, userId);
+            ps.executeUpdate();
         }
     }
 
@@ -530,28 +792,76 @@ final class Database implements AutoCloseable {
 
     record DeviceKeysRow(byte[] dhIdentity, byte[] dhSig, int spkId, byte[] spk, byte[] spkSig) {}
 
-    record QueuedEnvelope(long id, long senderId, String sender, long groupId, long sentAt, byte[] body) {}
+    record QueuedEnvelope(long id, long senderId, String sender, long groupId, long sentAt, byte[] body, int senderDevice,
+                          long batchId, boolean sealed) {
+        QueuedEnvelope(long id, long senderId, String sender, long groupId, long sentAt, byte[] body) {
+            this(id, senderId, sender, groupId, sentAt, body, 0, id, false);
+        }
+    }
+
+    /** The hash of the key friends present to send sealed messages to this user, or null. */
+    synchronized byte[] accessKey(long userId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT key_hash FROM access_keys WHERE user_id = ?")) {
+            ps.setLong(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getBytes(1) : null;
+            }
+        }
+    }
+
+    synchronized void setAccessKey(long userId, byte[] hash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO access_keys (user_id, key_hash) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET key_hash = excluded.key_hash")) {
+            ps.setLong(1, userId);
+            ps.setBytes(2, hash);
+            ps.executeUpdate();
+        }
+    }
+
+    /** A sealed envelope: who sent it is inside, encrypted; the server records the recipient in its place. */
+    synchronized long queueSealed(long recipientId, int deviceId, long sentAt, byte[] body, long batchId) throws SQLException {
+        long id = queueEnvelope(recipientId, deviceId, recipientId, 0, 0, sentAt, body, batchId);
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE envelopes SET sealed = 1 WHERE id = ?")) {
+            ps.setLong(1, id);
+            ps.executeUpdate();
+        }
+        return id;
+    }
 
     synchronized void putDeviceKeys(long userId, DeviceKeysRow k) throws SQLException {
+        putDeviceKeys(userId, 0, false, k);
+    }
+
+    /** @param multi the device is a 3.6 app: it reads messages that name the sending device */
+    synchronized void putDeviceKeys(long userId, int deviceId, boolean multi, DeviceKeysRow k) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO device_keys (user_id, dh_identity, dh_sig, spk_id, spk, spk_sig, updated_at) VALUES (?,?,?,?,?,?,?) "
-                        + "ON CONFLICT(user_id) DO UPDATE SET dh_identity=excluded.dh_identity, dh_sig=excluded.dh_sig, "
-                        + "spk_id=excluded.spk_id, spk=excluded.spk, spk_sig=excluded.spk_sig, updated_at=excluded.updated_at")) {
+                "INSERT INTO device_keys (user_id, device_id, dh_identity, dh_sig, spk_id, spk, spk_sig, updated_at, multi) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?) "
+                        + "ON CONFLICT(user_id, device_id) DO UPDATE SET dh_identity=excluded.dh_identity, dh_sig=excluded.dh_sig, "
+                        + "spk_id=excluded.spk_id, spk=excluded.spk, spk_sig=excluded.spk_sig, updated_at=excluded.updated_at, "
+                        + "multi=excluded.multi")) {
             ps.setLong(1, userId);
-            ps.setBytes(2, k.dhIdentity());
-            ps.setBytes(3, k.dhSig());
-            ps.setInt(4, k.spkId());
-            ps.setBytes(5, k.spk());
-            ps.setBytes(6, k.spkSig());
-            ps.setLong(7, System.currentTimeMillis());
+            ps.setInt(2, deviceId);
+            ps.setBytes(3, k.dhIdentity());
+            ps.setBytes(4, k.dhSig());
+            ps.setInt(5, k.spkId());
+            ps.setBytes(6, k.spk());
+            ps.setBytes(7, k.spkSig());
+            ps.setLong(8, System.currentTimeMillis());
+            ps.setInt(9, multi ? 1 : 0);
             ps.executeUpdate();
         }
     }
 
     synchronized Optional<DeviceKeysRow> deviceKeys(long userId) throws SQLException {
+        return deviceKeys(userId, 0);
+    }
+
+    synchronized Optional<DeviceKeysRow> deviceKeys(long userId, int deviceId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT dh_identity, dh_sig, spk_id, spk, spk_sig FROM device_keys WHERE user_id = ?")) {
+                "SELECT dh_identity, dh_sig, spk_id, spk, spk_sig FROM device_keys WHERE user_id = ? AND device_id = ?")) {
             ps.setLong(1, userId);
+            ps.setInt(2, deviceId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
                 return Optional.of(new DeviceKeysRow(rs.getBytes(1), rs.getBytes(2), rs.getInt(3), rs.getBytes(4), rs.getBytes(5)));
@@ -560,32 +870,54 @@ final class Database implements AutoCloseable {
     }
 
     synchronized void addPrekey(long userId, int keyId, byte[] pub) throws SQLException {
+        addPrekey(userId, 0, keyId, pub);
+    }
+
+    synchronized void addPrekey(long userId, int deviceId, int keyId, byte[] pub) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT OR REPLACE INTO one_time_prekeys (user_id, key_id, pub) VALUES (?, ?, ?)")) {
+                "INSERT OR REPLACE INTO one_time_prekeys (user_id, device_id, key_id, pub) VALUES (?, ?, ?, ?)")) {
             ps.setLong(1, userId);
-            ps.setInt(2, keyId);
-            ps.setBytes(3, pub);
+            ps.setInt(2, deviceId);
+            ps.setInt(3, keyId);
+            ps.setBytes(4, pub);
             ps.executeUpdate();
         }
     }
 
     synchronized int prekeyCount(long userId) throws SQLException {
-        return count("SELECT COUNT(*) FROM one_time_prekeys WHERE user_id = ?", userId);
+        return prekeyCount(userId, 0);
     }
 
-    /** Removes and returns the oldest one-time prekey, if any (each is handed out exactly once). */
-    synchronized Optional<java.util.Map.Entry<Integer, byte[]>> takePrekey(long userId) throws SQLException {
+    synchronized int prekeyCount(long userId, int deviceId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT key_id, pub FROM one_time_prekeys WHERE user_id = ? ORDER BY key_id LIMIT 1")) {
+                "SELECT COUNT(*) FROM one_time_prekeys WHERE user_id = ? AND device_id = ?")) {
             ps.setLong(1, userId);
+            ps.setInt(2, deviceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    synchronized Optional<java.util.Map.Entry<Integer, byte[]>> takePrekey(long userId) throws SQLException {
+        return takePrekey(userId, 0);
+    }
+
+    /** Removes and returns the oldest one-time prekey of a device, if any (each is handed out exactly once). */
+    synchronized Optional<java.util.Map.Entry<Integer, byte[]>> takePrekey(long userId, int deviceId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT key_id, pub FROM one_time_prekeys WHERE user_id = ? AND device_id = ? ORDER BY key_id LIMIT 1")) {
+            ps.setLong(1, userId);
+            ps.setInt(2, deviceId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
                 int id = rs.getInt(1);
                 byte[] pub = rs.getBytes(2);
                 try (PreparedStatement del = connection.prepareStatement(
-                        "DELETE FROM one_time_prekeys WHERE user_id = ? AND key_id = ?")) {
+                        "DELETE FROM one_time_prekeys WHERE user_id = ? AND device_id = ? AND key_id = ?")) {
                     del.setLong(1, userId);
-                    del.setInt(2, id);
+                    del.setInt(2, deviceId);
+                    del.setInt(3, id);
                     del.executeUpdate();
                 }
                 return Optional.of(java.util.Map.entry(id, pub));
@@ -593,12 +925,16 @@ final class Database implements AutoCloseable {
         }
     }
 
-    /** Forgets everything bound to the previous device: keys, prekeys, undeliverable envelopes. */
+    /**
+     * The account moved to a new identity key (a login from an unlinked computer): every device's
+     * keys, prekeys and queued envelopes, and the linked devices themselves, are gone.
+     */
     synchronized void resetDevice(long userId) throws SQLException {
         for (String sql : new String[] {
                 "DELETE FROM device_keys WHERE user_id = ?",
                 "DELETE FROM one_time_prekeys WHERE user_id = ?",
-                "DELETE FROM envelopes WHERE recipient_id = ?"}) {
+                "DELETE FROM envelopes WHERE recipient_id = ?",
+                "DELETE FROM devices WHERE user_id = ?"}) {
             try (PreparedStatement ps = connection.prepareStatement(sql)) {
                 ps.setLong(1, userId);
                 ps.executeUpdate();
@@ -608,20 +944,41 @@ final class Database implements AutoCloseable {
 
     synchronized long queueEnvelope(long recipientId, long senderId, long groupId, long sentAt, byte[] body)
             throws SQLException {
+        return queueEnvelope(recipientId, 0, senderId, 0, groupId, sentAt, body, 0);
+    }
+
+    /**
+     * @param batchId the id of the first copy of the same message (for its delivery receipt), or 0
+     *                to make this one the first
+     */
+    synchronized long queueEnvelope(long recipientId, int deviceId, long senderId, int senderDevice, long groupId, long sentAt,
+                                    byte[] body, long batchId) throws SQLException {
+        long id;
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO envelopes (recipient_id, sender_id, group_id, sent_at, body) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO envelopes (recipient_id, device_id, sender_id, sender_device, group_id, sent_at, body, batch_id) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 Statement.RETURN_GENERATED_KEYS)) {
             ps.setLong(1, recipientId);
-            ps.setLong(2, senderId);
-            ps.setLong(3, groupId);
-            ps.setLong(4, sentAt);
-            ps.setBytes(5, body);
+            ps.setInt(2, deviceId);
+            ps.setLong(3, senderId);
+            ps.setInt(4, senderDevice);
+            ps.setLong(5, groupId);
+            ps.setLong(6, sentAt);
+            ps.setBytes(7, body);
+            ps.setLong(8, batchId);
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 keys.next();
-                return keys.getLong(1);
+                id = keys.getLong(1);
             }
         }
+        if (batchId == 0) {
+            try (PreparedStatement ps = connection.prepareStatement("UPDATE envelopes SET batch_id = id WHERE id = ?")) {
+                ps.setLong(1, id);
+                ps.executeUpdate();
+            }
+        }
+        return id;
     }
 
     synchronized int queuedCount(long recipientId) throws SQLException {
@@ -629,16 +986,22 @@ final class Database implements AutoCloseable {
     }
 
     synchronized List<QueuedEnvelope> queuedFor(long recipientId, int limit) throws SQLException {
+        return queuedFor(recipientId, 0, limit);
+    }
+
+    synchronized List<QueuedEnvelope> queuedFor(long recipientId, int deviceId, int limit) throws SQLException {
         List<QueuedEnvelope> result = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT e.id, e.sender_id, u.username, e.group_id, e.sent_at, e.body FROM envelopes e JOIN users u ON u.id = e.sender_id "
-                        + "WHERE e.recipient_id = ? ORDER BY e.id LIMIT ?")) {
+                "SELECT e.id, e.sender_id, u.username, e.group_id, e.sent_at, e.body, e.sender_device, e.batch_id, e.sealed "
+                        + "FROM envelopes e JOIN users u ON u.id = e.sender_id "
+                        + "WHERE e.recipient_id = ? AND e.device_id = ? ORDER BY e.id LIMIT ?")) {
             ps.setLong(1, recipientId);
-            ps.setInt(2, limit);
+            ps.setInt(2, deviceId);
+            ps.setInt(3, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     result.add(new QueuedEnvelope(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getLong(4), rs.getLong(5),
-                            rs.getBytes(6)));
+                            rs.getBytes(6), rs.getInt(7), rs.getLong(8), rs.getInt(9) == 1));
                 }
             }
         }
@@ -647,21 +1010,35 @@ final class Database implements AutoCloseable {
 
     /** Deletes an envelope addressed to {@code recipientId}; returns its sender id, or -1 if none. */
     synchronized long deleteEnvelope(long recipientId, long envelopeId) throws SQLException {
+        long[] r = deleteEnvelope(recipientId, 0, envelopeId);
+        return r == null ? -1 : r[0];
+    }
+
+    /**
+     * Deletes an envelope addressed to this device.
+     *
+     * @return {sender id, batch id (the message id its sender knows)}, or null if none
+     */
+    synchronized long[] deleteEnvelope(long recipientId, int deviceId, long envelopeId) throws SQLException {
         long sender;
+        long batch;
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT sender_id FROM envelopes WHERE id = ? AND recipient_id = ?")) {
+                "SELECT sender_id, batch_id, sealed FROM envelopes WHERE id = ? AND recipient_id = ? AND device_id = ?")) {
             ps.setLong(1, envelopeId);
             ps.setLong(2, recipientId);
+            ps.setInt(3, deviceId);
             try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return -1;
-                sender = rs.getLong(1);
+                if (!rs.next()) return null;
+                // a sealed envelope has no sender to tell: as if it came from the recipient itself
+                sender = rs.getInt(3) == 1 ? recipientId : rs.getLong(1);
+                batch = rs.getLong(2);
             }
         }
         try (PreparedStatement ps = connection.prepareStatement("DELETE FROM envelopes WHERE id = ?")) {
             ps.setLong(1, envelopeId);
             ps.executeUpdate();
         }
-        return sender;
+        return new long[] {sender, batch == 0 ? envelopeId : batch};
     }
 
     // ------------------------------------------------------------------ friends

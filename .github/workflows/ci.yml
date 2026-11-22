@@ -91,3 +91,38 @@ jobs:
       - uses: actions/checkout@v4
       - name: Semgrep security scan
         run: semgrep scan --metrics=off --error --config p/java --config p/secrets --config p/security-audit --config p/owasp-top-ten src/main
+
+  # Pull requests: the benchmarks on the base and on the change, one after the other on the same
+  # machine, so the comparison is fair. Fails if something became more than 30 % slower.
+  bench:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: head/pom.xml
+      - name: Benchmarks of the change
+        working-directory: head
+        run: mvn -B -q -Pbench test -Dbench.args=quick
+      - name: Benchmarks of the base (with the change's benchmark code)
+        working-directory: base
+        run: |
+          set -euo pipefail
+          rm -rf src/bench && cp -r ../head/src/bench src/bench
+          # the base may not have the bench profile yet: borrow the change's pom for the run
+          cp ../head/pom.xml pom.xml
+          mvn -B -q -Pbench test -Dbench.args=quick || echo "::warning::the base could not run the benchmarks"
+      - name: Compare
+        run: |
+          if [ ! -f base/target/jmh-result.json ]; then echo "No base results; nothing to compare." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          python3 head/src/bench/compare.py base/target/jmh-result.json head/target/jmh-result.json | tee -a "$GITHUB_STEP_SUMMARY"

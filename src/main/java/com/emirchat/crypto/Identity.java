@@ -80,6 +80,28 @@ public final class Identity {
         }
     }
 
+    /**
+     * The private key (PKCS#8), only to hand the account's identity to a computer being linked to
+     * it, sealed for that computer (see the client's device linking). Never written in plain form.
+     */
+    public byte[] exportPrivate() {
+        return keyPair.getPrivate().getEncoded();
+    }
+
+    /** An identity from {@link #publicKeyBytes()} and {@link #exportPrivate()}; checked to be a pair. */
+    public static Identity fromEncoded(byte[] publicKey, byte[] privateKey) throws IOException {
+        try {
+            KeyFactory factory = KeyFactory.getInstance(ALGORITHM);
+            Identity identity = new Identity(new KeyPair(factory.generatePublic(new X509EncodedKeySpec(publicKey)),
+                    factory.generatePrivate(new PKCS8EncodedKeySpec(privateKey))));
+            byte[] probe = "identity-self-test".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if (!verify(identity.publicKeyBytes(), probe, identity.sign(probe))) throw new IOException("Not a key pair");
+            return identity;
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            throw new IOException("Damaged identity", e);
+        }
+    }
+
     public byte[] publicKeyBytes() {
         return keyPair.getPublic().getEncoded();
     }

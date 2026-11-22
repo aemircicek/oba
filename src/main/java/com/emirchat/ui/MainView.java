@@ -205,14 +205,62 @@ final class MainView implements AccountSession.View {
         AppLog.info("Update available: " + version);
         Label text = UiKit.label(I18n.t("update.available", version), "row-sub");
         text.setWrapText(true);
-        Button get = new Button(I18n.t("update.download"));
+        Updater.Kind kind = Updater.kind();
+        Button get = new Button(I18n.t(kind == Updater.Kind.MANUAL ? "update.download" : "update.install"));
         get.getStyleClass().addAll("small", "primary");
         get.setId("update-download");
-        get.setOnAction(e -> browse(UpdateCheck.RELEASES));
+        if (kind == Updater.Kind.MANUAL) {
+            get.setOnAction(e -> browse(UpdateCheck.RELEASES));
+        } else {
+            get.setTooltip(new javafx.scene.control.Tooltip(I18n.t("update.installTip")));
+            get.setOnAction(e -> installUpdate(version, kind, text, get));
+        }
         updateBanner.getChildren().setAll(Icons.of(Icons.DOWNLOAD, 16, "accent"), text, UiKit.grow(), get);
         updateBanner.getStyleClass().setAll("update-banner");
         updateBanner.setAlignment(Pos.CENTER_LEFT);
         updateBanner.setVisible(true);
+    }
+
+    /** Downloads, checks the signature and hash, then hands over to the installer and quits. */
+    private void installUpdate(String version, Updater.Kind kind, Label text, Button button) {
+        button.setDisable(true);
+        text.setText(I18n.t("update.downloading", 0));
+        java.nio.file.Path folder = com.emirchat.AppInfo.defaultHome().resolve("updates");
+        session.downloads().execute(() -> {
+            try {
+                Updater.Ready ready = Updater.download(version, kind, folder,
+                        p -> Platform.runLater(() -> text.setText(I18n.t("update.downloading", (int) Math.round(p * 100)))));
+                Platform.runLater(() -> {
+                    text.setText(I18n.t("update.ready", version));
+                    button.setText(I18n.t("update.restart"));
+                    button.setDisable(false);
+                    button.setOnAction(e -> {
+                        button.setDisable(true);
+                        session.downloads().execute(() -> {
+                            try {
+                                Updater.install(ready);
+                                AppLog.info("Installing " + version + "; quitting");
+                                SecureChatApp.quitApp();
+                            } catch (java.io.IOException ex) {
+                                updateFailed(ex, text, button);
+                            }
+                        });
+                    });
+                });
+            } catch (java.io.IOException ex) {
+                updateFailed(ex, text, button);
+            }
+        });
+    }
+
+    private void updateFailed(Exception e, Label text, Button button) {
+        AppLog.warn("Update failed", e);
+        Platform.runLater(() -> {
+            text.setText(I18n.t("update.failed"));
+            button.setText(I18n.t("update.download"));
+            button.setDisable(false);
+            button.setOnAction(ev -> browse(UpdateCheck.RELEASES));
+        });
     }
 
     /** Opens a web page in the default browser (off the UI thread: AWT may need a moment). */
@@ -289,6 +337,10 @@ final class MainView implements AccountSession.View {
             @Override public void openContact(String user) { MainView.this.contacts.openContact(user); }
 
             @Override public void openGroupInfo(long groupId) { MainView.this.contacts.openGroupInfo(groupId); }
+
+            @Override public void sidebarChanged() {
+                sidebarUi.refreshSidebar();
+            }
 
             @Override public void dialog(java.util.function.Function<Runnable, javafx.scene.layout.VBox> build) {
                 overlay.show(build.apply(overlay::close));
@@ -476,8 +528,10 @@ final class MainView implements AccountSession.View {
     @Override
     public void nudged(String user) {
         boolean focused = stack.getScene() != null && stack.getScene().getWindow() != null && stack.getScene().getWindow().isFocused();
-        Sounds.play();
-        if (!focused) Tray.get().notify("Oba", "🦂 " + I18n.t("nudge.received", user));
+        // a muted chat or quiet hours keep a nudge silent too
+        NotifyRules.Decision decision = session.notifyRules().decide(AccountSession.dm(user), true, NotifyRules.now());
+        if (decision == NotifyRules.Decision.NOTIFY) Sounds.play();
+        if (!focused && decision != NotifyRules.Decision.NONE) Tray.get().notify("Oba", "🦂 " + I18n.t("nudge.received", user));
         if (current != null && user.equals(current.peer())) {
             Nudge.play(current.layer, current.input); // waits on screen for when they look back, too
             return;
@@ -606,6 +660,51 @@ final class MainView implements AccountSession.View {
         callBars.showCallBar(c.peer(), row);
     }
 
+    /** Another computer asks to join the account: compare the code it shows, then allow or refuse. */
+    @Override
+    public void linkRequest(com.emirchat.client.DeviceLinking.LinkPrompt request) {
+        Tray.get().notify("Oba", I18n.t("devices.askTitle"));
+        Label who = UiKit.label(request.name().isBlank() ? I18n.t("devices.unnamed") : request.name(), "h3");
+        Label code = UiKit.label(request.code(), "link-code-big");
+        code.setId("link-request-code");
+        Label body = UiKit.label(I18n.t("devices.askBody"), "body");
+        body.setWrapText(true);
+        body.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        Label warn = UiKit.label(I18n.t("devices.askWarn"), "caption");
+        warn.setWrapText(true);
+        warn.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        Button allow = new Button(I18n.t("devices.allow"));
+        allow.getStyleClass().add("primary");
+        allow.setId("link-allow");
+        Button deny = new Button(I18n.t("devices.deny"));
+        deny.setId("link-deny");
+        allow.setOnAction(e -> {
+            overlay.close();
+            session.background().execute(() -> {
+                try {
+                    session.client().approveLink(request);
+                } catch (Exception ex) {
+                    Platform.runLater(() -> showError(ex.getMessage()));
+                }
+            });
+        });
+        deny.setOnAction(e -> {
+            overlay.close();
+            session.background().execute(() -> {
+                try {
+                    session.client().denyLink(request);
+                } catch (Exception ignored) {
+                    // it gives up by itself after a while
+                }
+            });
+        });
+        javafx.scene.layout.VBox box = Overlay.dialog(I18n.t("devices.askTitle"), who, body, code, warn,
+                new HBox(10, UiKit.grow(), deny, allow));
+        box.setId("link-request-dialog");
+        box.setMaxWidth(460);
+        overlay.show(box);
+    }
+
     @Override
     public void notifyIncoming(History.Message m) {
         if (!session.setting(AccountSession.NOTIFICATIONS) || !Boolean.parseBoolean(System.getProperty("securechat.notifications", "true"))) return;
@@ -613,6 +712,20 @@ final class MainView implements AccountSession.View {
                 && stack.getScene().getWindow().isFocused();
         boolean visible = current != null && current.conversation().equals(m.conversation());
         if (focused && visible) return;
+        String me = session.client().username();
+        boolean mentioned = m.file() == null && Markdown.mentions(m.text(), me);
+        if (!mentioned && m.replyTo().length > 0) {
+            // an answer to something we wrote (in a thread or as a reply) is for us, like a mention
+            try {
+                History.Message answered = session.history().find(m.conversation(), m.replyTo());
+                mentioned = answered != null && answered.outgoing();
+            } catch (IOException ignored) {
+                // treated as not for us
+            }
+        }
+        NotifyRules.Decision decision = session.notifyRules().decide(m.conversation(),
+                mentioned || m.conversation().startsWith("dm:"), NotifyRules.now());
+        if (decision == NotifyRules.Decision.NONE) return;
         String where = m.conversation().startsWith("g:") ? sidebarUi.groupName(Long.parseLong(m.conversation().substring(2)))
                 : m.sender();
         String title = m.conversation().startsWith("g:") ? I18n.t("notify.inGroup", m.sender(), where) : where;
@@ -622,7 +735,7 @@ final class MainView implements AccountSession.View {
                         : Markdown.plain(m.text()))
                 : I18n.t("notify.newMessage");
         Tray.get().notify(title, body);
-        Sounds.play();
+        if (decision == NotifyRules.Decision.NOTIFY) Sounds.play();
     }
 
     /** Called once the view is in a window: report reads when the window comes back into focus. */
@@ -657,8 +770,10 @@ final class MainView implements AccountSession.View {
     void showUnread() {
         int unread = 0;
         try {
+            long now = System.currentTimeMillis();
             for (History.Summary s : session.history().summaries()) {
-                if (current == null || !current.conversation().equals(s.conversation())) unread += s.unread();
+                if ((current == null || !current.conversation().equals(s.conversation()))
+                        && session.notifyRules().counts(s.conversation(), now)) unread += s.unread();
             }
         } catch (IOException ignored) {
             // leave the title as it is

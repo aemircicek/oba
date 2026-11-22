@@ -110,6 +110,16 @@ final class VoiceRooms {
         return roomOf.getOrDefault(connection, 0L);
     }
 
+    /** Rooms with someone in them (for metrics). */
+    synchronized int activeRooms() {
+        return (int) rooms.values().stream().filter(r -> !r.isEmpty()).count();
+    }
+
+    /** People in rooms (for metrics). */
+    synchronized int seated() {
+        return roomOf.size();
+    }
+
     /** Usernames in the room, each once (someone on two devices is still one person). */
     synchronized List<String> participants(long groupId) {
         LinkedHashMap<ClientConnection, Seat> room = rooms.get(groupId);

@@ -365,6 +365,43 @@ class CallIntegrationTest {
     }
 
     @Test
+    void withoutADirectPathTheCallUsesTheUdpRelayAndShowsNoAddress() throws Exception {
+        try (Device emir = new Device("emir"); Device efe = new Device("efe")) {
+            befriend(emir, efe, "efe", "emir");
+            emir.client.calls().directAllowed(u -> false);
+            efe.client.calls().directAllowed(u -> false);
+            java.util.concurrent.atomic.AtomicBoolean talking = new java.util.concurrent.atomic.AtomicBoolean(true);
+            java.util.concurrent.atomic.AtomicInteger said = new java.util.concurrent.atomic.AtomicInteger();
+            Thread voices = connectTalking(emir, efe, talking, said);
+            try {
+                long until = System.currentTimeMillis() + 10_000;
+                while (!(emir.client.calls().udpRelayed() && efe.client.calls().udpRelayed()) && System.currentTimeMillis() < until) {
+                    Thread.sleep(50);
+                }
+                assertTrue(emir.client.calls().udpRelayed() && efe.client.calls().udpRelayed(), "both on the UDP relay");
+                assertFalse(emir.client.calls().direct(), "which is not a direct call");
+                long[] before = emir.client.calls().packetsSent();
+                int saidBefore = said.get();
+                efe.audio.speaker.clear();
+                long deadline = System.currentTimeMillis() + 8000;
+                while (said.get() - saidBefore < 30 && System.currentTimeMillis() < deadline) Thread.sleep(50);
+                Thread.sleep(200);
+                long[] after = emir.client.calls().packetsSent();
+                int saidIn = said.get() - saidBefore;
+                assertTrue(saidIn >= 15, "the test spoke: " + saidIn);
+                assertEquals(0, after[0] - before[0], "nothing went directly");
+                assertTrue(after[2] - before[2] >= saidIn * 0.9 - 2, "audio goes over the UDP relay: " + (after[2] - before[2]));
+                assertTrue(after[1] - before[1] <= 2, "not over TCP: " + (after[1] - before[1]));
+                assertTrue(efe.audio.speaker.size() >= saidIn * 0.9 - 2, "efe hears emir: " + efe.audio.speaker.size());
+                assertTrue(server.metrics().render().matches("(?s).*oba_udp_relayed_packets_total [1-9].*"), "the server counted it");
+            } finally {
+                talking.set(false);
+                voices.join();
+            }
+        }
+    }
+
+    @Test
     void rejectedAndBusyCalls() throws Exception {
         try (Device emir = new Device("emir"); Device efe = new Device("efe"); Device ayse = new Device("ayse")) {
             befriend(emir, efe, "efe", "emir");

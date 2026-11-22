@@ -102,6 +102,17 @@ public final class RoomVideo implements AutoCloseable {
             if (o != null && whose.equals(me)) o.receive(new byte[] {VideoPackets.KEYFRAME_PLEASE});
             return;
         }
+        if (body[0] == VideoPackets.REPORT) {
+            // [REPORT][u16 loss][whose stream]: how our pictures reach one of the others
+            if (body.length < 3) return;
+            String whose = new String(body, 3, body.length - 3, StandardCharsets.UTF_8);
+            CallVideo o;
+            synchronized (this) {
+                o = outgoing;
+            }
+            if (o != null && whose.equals(me)) o.receive(new byte[] {body[0], body[1], body[2]});
+            return;
+        }
         CallVideo in;
         synchronized (this) {
             if (closed) return;
@@ -114,10 +125,12 @@ public final class RoomVideo implements AutoCloseable {
         byte[] name = who.getBytes(StandardCharsets.UTF_8);
         CallVideo v = new CallVideo(new CallVideo.Crypto() {
             @Override public byte[] seal(byte[] body) {
-                if (body.length == 1 && body[0] == VideoPackets.KEYFRAME_PLEASE) {
-                    byte[] ask = new byte[1 + name.length];
-                    ask[0] = VideoPackets.KEYFRAME_PLEASE;
-                    System.arraycopy(name, 0, ask, 1, name.length);
+                if (body.length == 1 && body[0] == VideoPackets.KEYFRAME_PLEASE
+                        || body.length == 3 && body[0] == VideoPackets.REPORT) {
+                    // name whose stream it is about, so only that sender acts on it
+                    byte[] ask = new byte[body.length + name.length];
+                    System.arraycopy(body, 0, ask, 0, body.length);
+                    System.arraycopy(name, 0, ask, body.length, name.length);
                     return ask;
                 }
                 return body;

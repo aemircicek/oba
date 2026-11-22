@@ -55,6 +55,9 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         /** A voice call changed (started, rang, connected, muted or ended). */
         default void call(com.emirchat.call.Calls.Call call) {}
 
+        /** Another computer asks to join the account. */
+        default void linkRequest(com.emirchat.client.DeviceLinking.LinkPrompt prompt) {}
+
         /** A reply arrived in the thread of {@code rootId} (local id of the first message). */
         default void threadReply(History.Message reply, long rootId) {}
 
@@ -143,6 +146,41 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     static final String NOTIFICATIONS = "notifications";
     static final String NOTIFICATION_PREVIEW = "notification-preview";
 
+    private volatile java.util.function.Consumer<String> passwordChanged = p -> {};
+
+    void onPasswordChanged(java.util.function.Consumer<String> listener) {
+        passwordChanged = listener == null ? p -> {} : listener;
+    }
+
+    /**
+     * Changes the password: on the server, for this computer's keys, and for the local history;
+     * then tells the shell (remembered password, reconnects). Runs off the UI thread.
+     */
+    void changePassword(String oldPassword, String newPassword) throws IOException, com.emirchat.api.ApiException {
+        client().changePassword(oldPassword, newPassword);
+        history.changePassword(newPassword);
+        passwordChanged.accept(newPassword);
+    }
+
+    private NotifyRules notifyRules;
+
+    /** Per-chat notification levels, mutes and quiet hours. */
+    synchronized NotifyRules notifyRules() {
+        if (notifyRules == null) {
+            notifyRules = new NotifyRules(k -> {
+                String v = history.setting(k, "");
+                return v.isEmpty() ? null : v;
+            }, (k, v) -> {
+                try {
+                    history.setSetting(k, v);
+                } catch (IOException ignored) {
+                    // kept as it was
+                }
+            });
+        }
+        return notifyRules;
+    }
+
     boolean setting(String key) {
         return Boolean.parseBoolean(history.setting(key, "true"));
     }
@@ -202,6 +240,17 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     AccountSession(History history) {
         this.history = history;
         sweeper.scheduleWithFixedDelay(this::deleteExpired, 0, 2, java.util.concurrent.TimeUnit.SECONDS);
+        sweeper.schedule(this::indexBacklog, 3, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /** Adds messages from before 3.6 to the search index, a few hundred at a time. */
+    private void indexBacklog() {
+        try {
+            if (history.indexBacklog(300) > 0) sweeper.schedule(this::indexBacklog, 200, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (IOException | RuntimeException e) {
+            // searching still scans what is not indexed; try again later
+            sweeper.schedule(this::indexBacklog, 1, java.util.concurrent.TimeUnit.MINUTES);
+        }
     }
 
     /** Deletes disappearing messages whose time is up, with their cached files. */
@@ -304,7 +353,44 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
 
     @Override
     public void incoming(ChatClient.Incoming m) {
-        String conversation = m.groupId() == 0 ? dm(m.from()) : group(m.groupId());
+        incoming(m, m.groupId() == 0 ? dm(m.from()) : group(m.groupId()));
+    }
+
+    /** True while storing what we sent from another computer: stored as ours, nothing to notify. */
+    private boolean ours;
+
+    /** Something we sent from another of our computers: shown here as ours too. */
+    @Override
+    public void sentElsewhere(String peer, ChatClient.Incoming m) {
+        ours = true;
+        try {
+            incoming(m, peer != null ? dm(peer) : group(m.groupId()));
+        } finally {
+            ours = false;
+        }
+    }
+
+    @Override
+    public void actionElsewhere(String peer, ChatClient.Action a) {
+        if (a.kind() == ChatClient.ActionKind.TYPING || a.kind() == ChatClient.ActionKind.NUDGE
+                || a.kind() == ChatClient.ActionKind.READ || a.kind() == ChatClient.ActionKind.CLOCK) {
+            return; // about the other person's screen, not ours
+        }
+        action(a, peer != null ? dm(peer) : group(a.groupId()));
+    }
+
+    @Override
+    public void deviceRemoved() {
+        // the server cuts this computer off; reconnecting is refused and signs out (AppShell)
+        fx(v -> v.problem(I18n.t("devices.removedHere")));
+    }
+
+    @Override
+    public void linkRequest(com.emirchat.client.DeviceLinking.LinkPrompt prompt) {
+        fx(v -> v.linkRequest(prompt));
+    }
+
+    private void incoming(ChatClient.Incoming m, String conversation) {
         if (m.capsule() != null) {
             com.emirchat.chat.Capsule clean;
             try {
@@ -342,7 +428,10 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
      */
     @Override
     public void action(ChatClient.Action a) {
-        String conversation = a.groupId() == 0 ? dm(a.from()) : group(a.groupId());
+        action(a, a.groupId() == 0 ? dm(a.from()) : group(a.groupId()));
+    }
+
+    private void action(ChatClient.Action a, String conversation) {
         try {
             switch (a.kind()) {
                 case REACT -> {
@@ -495,12 +584,13 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         try {
             // A disappearing message's clock starts when it arrives (clocks of different devices may differ).
             long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
-            long id = history.addFile(conversation, from, file, file.sentAtMillis(), false, History.RECEIVED, envelopeId,
-                    expiresAt, uid, replyTo);
+            boolean mine = ours;
+            long id = history.addFile(conversation, from, file, file.sentAtMillis(), mine, mine ? History.SENT : History.RECEIVED,
+                    envelopeId, expiresAt, uid, replyTo);
             History.Message stored = history.get(id);
             fx(v -> {
                 v.messageStored(stored);
-                v.notifyIncoming(stored);
+                if (!mine) v.notifyIncoming(stored);
             });
         } catch (IOException e) {
             fx(v -> v.problem(I18n.t("session.saveFailed", e.getMessage())));
@@ -513,8 +603,9 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
             // a poll was sanitized field by field above (its marker is a control character)
             String text = poll ? message.text() : TerminalSanitizer.sanitizeMultiline(message.text());
             long expiresAt = expiresAt(System.currentTimeMillis(), expireSeconds);
-            long id = history.add(conversation, from, text, message.sentAtMillis(), false, History.RECEIVED, envelopeId,
-                    expiresAt, uid, replyTo);
+            boolean mine = ours;
+            long id = history.add(conversation, from, text, message.sentAtMillis(), mine, mine ? History.SENT : History.RECEIVED,
+                    envelopeId, expiresAt, uid, replyTo);
             if (thread) {
                 History.Message root = history.find(conversation, replyTo);
                 if (root != null) {
@@ -522,7 +613,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
                     History.Message stored = history.get(id);
                     fx(v -> {
                         v.threadReply(stored, root.id());
-                        v.notifyIncoming(stored);
+                        if (!mine) v.notifyIncoming(stored);
                     });
                     return;
                 }
@@ -531,7 +622,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
             History.Message stored = history.get(id);
             fx(v -> {
                 v.messageStored(stored);
-                v.notifyIncoming(stored);
+                if (!mine) v.notifyIncoming(stored);
             });
         } catch (IOException e) {
             fx(v -> v.problem(I18n.t("session.saveFailed", e.getMessage())));

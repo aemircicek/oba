@@ -22,6 +22,8 @@ final class AccountCli {
     static final String USAGE = String.join("\n",
             "Server mode:",
             "  secure-chat server   [--port " + ChatServer.DEFAULT_PORT + "] [--bind 0.0.0.0] [--data ~/.securechat-server]",
+            "                       [--metrics [host:]port]   (Prometheus counters; host defaults to 127.0.0.1)",
+            "  secure-chat server-fingerprint [--data ~/.securechat-server]   (prints it without starting)",
             "  secure-chat register --server <host[:port]> --username <name> [--home <dir>]",
             "  secure-chat login    --server <host[:port]> --username <name> [--home <dir>]",
             "  secure-chat client   --server <host[:port]> --username <name> [--home <dir>]   (interactive)",
@@ -30,7 +32,7 @@ final class AccountCli {
     private AccountCli() {}
 
     static boolean handles(String command) {
-        return command.equals("server") || command.equals("register") || command.equals("login")
+        return command.equals("server") || command.equals("server-fingerprint") || command.equals("register") || command.equals("login")
                 || command.equals("client");
     }
 
@@ -43,6 +45,7 @@ final class AccountCli {
         Path home = SecureChat.Options.defaultHome();
         Path data = Path.of(System.getProperty("user.home"), ".securechat-server");
         boolean passwordStdin = false;
+        String metrics = null;
         for (int i = 1; i < args.length; i++) {
             String a = args[i];
             if (a.equals("--password-stdin")) {
@@ -58,12 +61,22 @@ final class AccountCli {
                 case "--port" -> port = SecureChat.Options.parsePort(v);
                 case "--home" -> home = Path.of(v);
                 case "--data" -> data = Path.of(v);
+                case "--metrics" -> metrics = v;
                 default -> throw new IllegalArgumentException("Unknown option: " + a);
             }
             i++;
         }
         try {
-            if (command.equals("server")) return serve(data, bind, port);
+            if (command.equals("server")) return serve(data, bind, port, metrics);
+            if (command.equals("server-fingerprint")) {
+                java.nio.file.Path key = data.resolve("identity");
+                if (!java.nio.file.Files.exists(key)) {
+                    System.err.println("No server key in " + data.toAbsolutePath() + " yet; start the server once.");
+                    return 1;
+                }
+                System.out.println(Identity.pretty(Identity.loadOrCreate(key).fingerprint()));
+                return 0;
+            }
             if (server == null) throw new IllegalArgumentException("--server is required");
             if (username == null) throw new IllegalArgumentException("--username is required");
             return account(command, server, username, home, passwordStdin);
@@ -73,8 +86,15 @@ final class AccountCli {
         }
     }
 
-    private static int serve(Path data, String bind, int port) throws IOException {
+    private static int serve(Path data, String bind, int port, String metrics) throws IOException {
         ChatServer server = new ChatServer(ChatServer.defaultConfig(data, bind, port)).start();
+        if (metrics != null) {
+            int colon = metrics.lastIndexOf(':');
+            String host = colon > 0 ? metrics.substring(0, colon) : "127.0.0.1";
+            int metricsPort = SecureChat.Options.parsePort(colon >= 0 ? metrics.substring(colon + 1) : metrics);
+            server.metrics().serve(host, metricsPort);
+            System.out.println("Metrics at http://" + host + ":" + server.metrics().port() + "/metrics");
+        }
         System.out.println("secure-chat server listening on " + bind + ":" + server.port());
         for (String address : LocalAddresses.lan()) {
             System.out.println("  reachable at " + address + ":" + server.port());

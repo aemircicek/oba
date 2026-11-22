@@ -179,7 +179,13 @@ public final class AccountPreview {
         waitFor("#welcome-dialog");
         pause();
         snap("03a-welcome");
-        for (int i = 0; i < 3; i++) fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
+        fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
+        pause();
+        snap("03b-welcome-x3dh");
+        fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
+        pause();
+        snap("03c-welcome-verify");
+        fx(() -> { ((Button) find("#welcome-next")).fire(); return null; });
         pause();
         snap("03-main-empty");
 
@@ -222,6 +228,14 @@ public final class AccountPreview {
         efe.client.sendFile("emir", "MobilCAD-sunum.pdf", "application/pdf", new byte[184_320]);
         Thread.sleep(1500);
         snap("05b-files");
+        // everything shared in the chat, in the media panel
+        fx(() -> { ((Button) find("#media-button")).fire(); return null; });
+        Thread.sleep(1200);
+        snap("05t-media");
+        fx(() -> { ((javafx.scene.control.ToggleButton) find("#media-tab-1")).fire(); return null; });
+        Thread.sleep(600);
+        snap("05u-media-files");
+        fx(() -> { ((Button) find("#side-close")).fire(); return null; });
 
         // A voice message from efe (synthetic "speech": tones in syllable-like bursts)
         efe.client.sendFile("emir", "voice-20261103-140210.wav", com.emirchat.call.VoiceNotes.MIME,
@@ -331,13 +345,34 @@ public final class AccountPreview {
         snap("05m-sand-after");
 
         fx(() -> { ((TextField) find("#search")).setText("sunum"); return null; });
-        Thread.sleep(400);
+        Thread.sleep(800);
         snap("05e-search");
         fx(() -> { ((TextField) find("#search")).setText(""); return null; });
         fx(() -> { ((Button) find("#settings")).fire(); return null; });
         waitFor("#settings-dialog");
         pause();
         snap("05f-settings");
+        fx(() -> { ((Button) find("#security")).fire(); return null; });
+        waitFor("#two-step-on");
+        pause();
+        snap("05v-security");
+        fx(() -> { ((Button) find("#two-step-on")).fire(); return null; });
+        waitFor("#two-step-qr");
+        pause();
+        snap("05w-two-step-qr");
+        fx(() -> { ((Button) find("#security-close")).fire(); return null; });
+        // another computer asks to join: the code to compare
+        fx(() -> {
+            ((MainView) find(".main-view").getUserData()).linkRequest(
+                    new com.emirchat.client.DeviceLinking.LinkPrompt(7, "Efe-Masaustu · Windows 11", "482 913"));
+            return null;
+        });
+        waitFor("#link-request-dialog");
+        pause();
+        snap("05x-link-request");
+        fx(() -> { ((Button) find("#link-deny")).fire(); return null; });
+        fx(() -> { ((Button) find("#settings")).fire(); return null; });
+        waitFor("#settings-dialog");
         // making a backup: the passphrase form, filled in (saving would open a file chooser)
         fx(() -> { ((Button) find("#backup")).fire(); return null; });
         waitFor("#backup-dialog");
@@ -540,6 +575,14 @@ public final class AccountPreview {
             if (layer != null) ((StackPane) layer.getParent()).getChildren().remove(layer);
             return null;
         });
+        fx(() -> { ((Button) find("#threads-button")).fire(); return null; });
+        Thread.sleep(400);
+        snap("15m-threads");
+        fx(() -> {
+            Node layer = scene.lookup(".overlay");
+            if (layer != null) ((StackPane) layer.getParent()).getChildren().remove(layer);
+            return null;
+        });
         fx(() -> { ((Button) find("#side-close")).fire(); return null; });
         fx(() -> {
             javafx.scene.control.TextInputControl box = (javafx.scene.control.TextInputControl) find("#composer");
@@ -569,6 +612,18 @@ public final class AccountPreview {
         ayse.client.voice().startVideo(new com.emirchat.video.PatternSource(1280, 800, 5, true));
         Thread.sleep(3500);
         snap("15l-campfire-screen");
+        // emir turns on a camera too: the pictures sit side by side
+        fx(() -> {
+            ((MainView) find(".main-view").getUserData()).session.client().voice()
+                    .startVideo(new com.emirchat.video.PatternSource(640, 480, 10, false));
+            return null;
+        });
+        Thread.sleep(3000);
+        snap("15n-campfire-grid");
+        fx(() -> {
+            ((MainView) find(".main-view").getUserData()).session.client().voice().stopVideo();
+            return null;
+        });
         ayse.client.voice().stopVideo();
         Thread.sleep(800);
         fx(() -> { ((Button) find("#campfire-back")).fire(); return null; });
@@ -622,6 +677,27 @@ public final class AccountPreview {
         waitFor("#appearance-dialog");
         Thread.sleep(400);
         snap("20-appearance");
+        fx(() -> {
+            AppPrefs.setCustomAccent("#14b1ab");
+            AppPrefs.setAccent(Appearance.CUSTOM);
+            Theme.refreshAll();
+            return null;
+        });
+        Thread.sleep(300);
+        snap("20b-custom-accent");
+        fx(() -> {
+            AppPrefs.setHighContrast("on");
+            Theme.refreshAll();
+            return null;
+        });
+        Thread.sleep(300);
+        snap("20c-high-contrast");
+        fx(() -> {
+            AppPrefs.setHighContrast("system");
+            AppPrefs.setAccent("amber");
+            Theme.refreshAll();
+            return null;
+        });
         fx(() -> { ((Button) find("#appearance-done")).fire(); return null; });
         Thread.sleep(300);
 

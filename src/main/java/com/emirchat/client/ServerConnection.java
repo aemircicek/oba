@@ -77,13 +77,90 @@ public final class ServerConnection implements AutoCloseable {
         }
     }
 
+    /**
+     * A second connection to the same server that never logs in, made with a one-time key, for
+     * sealed messages (3.6): the server sees an anonymous sender. It accepts only the very server
+     * key of this connection.
+     */
+    public ServerConnection anonymous() throws IOException, PeerRejectedException {
+        java.net.InetSocketAddress at = remoteAddress();
+        // Plain TCP by design, as in open(): the authenticated handshake runs on it.
+        // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
+        Socket s = new Socket();
+        try {
+            s.connect(at, CONNECT_TIMEOUT_MS);
+            s.setSoTimeout(Connector.HANDSHAKE_TIMEOUT_MS);
+            s.setTcpNoDelay(true);
+            FrameIO io = new FrameIO(s.getInputStream(), s.getOutputStream());
+            String expected = serverFingerprint;
+            Session session = Handshake.asClient(io, Identity.generate(), CLIENT_NAME, (name, fingerprint) -> {
+                if (!fingerprint.equalsIgnoreCase(expected)) throw new PeerRejectedException("Another server key");
+            });
+            s.setSoTimeout(0);
+            ServerConnection c = new ServerConnection(s, session);
+            c.startReader();
+            return c;
+        } catch (IOException | PeerRejectedException | RuntimeException e) {
+            Connector.closeQuietly(s);
+            throw e;
+        }
+    }
+
     /** The server's address as connected to (its UDP address service listens on the same port). */
     public java.net.InetSocketAddress remoteAddress() {
         return (java.net.InetSocketAddress) socket.getRemoteSocketAddress();
     }
 
+    public boolean isClosed() {
+        return closed;
+    }
+
     public String serverFingerprint() {
         return serverFingerprint;
+    }
+
+    /**
+     * The server's version as it named itself in the (signed) handshake, as major * 100 + minor
+     * (306 for 3.6), or 0 for servers before 3.6, which call themselves just "server". Requests
+     * newer than a server must not be sent: it would close the connection on them.
+     */
+    public int serverLevel() {
+        return level(session.peerName());
+    }
+
+    static int level(String name) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("server-(\\d{1,3})\\.(\\d{1,3}).*").matcher(name == null ? "" : name);
+        return m.matches() ? Integer.parseInt(m.group(1)) * 100 + Integer.parseInt(m.group(2)) : 0;
+    }
+
+    /** Two-step login, password changes and the like (3.6). */
+    public boolean hasAccountSecurity() {
+        return serverLevel() >= 306;
+    }
+
+    public Packet.LoggedIn login(String username, String password, String code) throws IOException, ApiException {
+        if (code == null || code.isBlank()) return login(username, password);
+        return expect(call(new Packet.LoginWithCode(username, password, code)), Packet.LoggedIn.class);
+    }
+
+    public byte[] setUpTwoFactor() throws IOException, ApiException {
+        return expect(call(new Packet.SetUpTwoFactor()), Packet.TwoFactorSecret.class).secret();
+    }
+
+    public java.util.List<String> enableTwoFactor(String code) throws IOException, ApiException {
+        return expect(call(new Packet.EnableTwoFactor(code)), Packet.RecoveryCodes.class).codes();
+    }
+
+    public void disableTwoFactor(String password) throws IOException, ApiException {
+        expect(call(new Packet.DisableTwoFactor(password)), Packet.Ok.class);
+    }
+
+    public Packet.TwoFactorState twoFactorState() throws IOException, ApiException {
+        return expect(call(new Packet.TwoFactorStatus()), Packet.TwoFactorState.class);
+    }
+
+    public void changePassword(String oldPassword, String newPassword) throws IOException, ApiException {
+        expect(call(new Packet.ChangePassword(oldPassword, newPassword)), Packet.Ok.class);
     }
 
     /** Server-initiated packets (incoming messages, presence...) are delivered here. */

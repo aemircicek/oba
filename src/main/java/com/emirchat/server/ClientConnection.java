@@ -24,12 +24,18 @@ final class ClientConnection {
     /** Unauthenticated connections must log in quickly; this bounds idle half-open sockets. */
     private static final int PRE_AUTH_TIMEOUT_MS = 60_000;
     private static final int OUTBOUND_CAPACITY = 1024;
-    private static final String SERVER_NAME = "server";
+    /**
+     * How the server names itself in the handshake (signed with its key). Clients before 3.6 do
+     * not look at it; 3.6 reads the version from it, to know which requests it may send without an
+     * older server closing the connection on an unknown one.
+     */
+    static final String SERVER_NAME = "server-3.6";
     private static final byte[] CLOSE = new byte[0];
 
     /** Everything a connection needs from the server. */
     record Services(Identity identity, AccountService accounts, FriendService friends, MessageService messages,
-                    GroupService groups, AttachmentService attachments, Presence presence, VoiceRooms voice) {}
+                    GroupService groups, AttachmentService attachments, Presence presence, VoiceRooms voice,
+                    ServerMetrics metrics, UdpRelay relay, LinkService links) {}
 
     private final Socket socket;
     private final Services services;
@@ -39,6 +45,36 @@ final class ClientConnection {
     private final BlockingQueue<byte[]> outbound = new ArrayBlockingQueue<>(OUTBOUND_CAPACITY);
     private Session session;
     private volatile Database.User user;
+    /** Which of the account's devices this is (0 for the first, and for apps before 3.6). */
+    private volatile int deviceId;
+    /** Said SetDevice: a 3.6 app, which is told which device each envelope came from. */
+    private volatile boolean multiDevice;
+
+    int deviceId() {
+        return deviceId;
+    }
+
+    boolean multiDevice() {
+        return multiDevice;
+    }
+
+    /** Pushes an envelope in the form this app reads. */
+    void pushEnvelope(Packet.Envelope envelope, int senderDevice) {
+        push(multiDevice ? new Packet.EnvelopeReceivedFrom(envelope, senderDevice) : new Packet.EnvelopeReceived(envelope));
+    }
+
+    /** The account removed this device: it is told, then cut off. */
+    void removed() {
+        push(new Packet.DeviceRemoved(deviceId));
+        Thread.ofVirtual().start(() -> {
+            try {
+                Thread.sleep(500);
+                socket.close();
+            } catch (IOException | InterruptedException ignored) {
+                // gone
+            }
+        });
+    }
 
     ClientConnection(Socket socket, Services services) {
         this.socket = socket;
@@ -72,8 +108,12 @@ final class ClientConnection {
                 try {
                     response = handle(frame.packet());
                 } catch (ApiException e) {
+                    if (frame.packet() instanceof Packet.Login || frame.packet() instanceof Packet.LoginWithCode) {
+                        services.metrics().loginFailures.increment();
+                    }
                     response = new Packet.Error(e.code(), e.getMessage());
                 }
+                services.metrics().requests.increment();
                 enqueue(Packet.encode(frame.requestId(), response));
             }
         } catch (SocketTimeoutException e) {
@@ -88,6 +128,7 @@ final class ClientConnection {
             if (u != null) leaveVoice();
             if (u != null && services.presence().remove(u.id(), this)) {
                 services.friends().onlineChanged(u, false);
+                services.relay().forget(u.id()); // no calls without a connection
             }
         }
     }
@@ -130,6 +171,7 @@ final class ClientConnection {
         requestTokens = Math.min(REQUEST_BURST, requestTokens + (now - requestTokensAt) / 1e9 * REQUESTS_PER_SECOND);
         requestTokensAt = now;
         if (requestTokens < 1) {
+            services.metrics().throttled.increment();
             try {
                 Thread.sleep((long) Math.ceil((1 - requestTokens) * 1000 / REQUESTS_PER_SECOND));
             } catch (InterruptedException e) {
@@ -159,7 +201,10 @@ final class ClientConnection {
             audioWindowStart = now;
             audioInWindow = 0;
         }
-        if (++audioInWindow > AUDIO_PER_SECOND) return;
+        if (++audioInWindow > AUDIO_PER_SECOND) {
+            services.metrics().callPacketsDropped.increment();
+            return;
+        }
         try {
             if (!audio.peer().equals(audioPeer) || now - audioPeerCheckedAt > FRIEND_CHECK_MS) {
                 audioPeer = null;
@@ -172,6 +217,7 @@ final class ClientConnection {
         } catch (java.sql.SQLException e) {
             return;
         }
+        services.metrics().callPackets.increment();
         services.presence().pushDroppable(audioPeerId, new Packet.CallAudioIn(u.username(), audio.data()));
     }
 
@@ -218,7 +264,10 @@ final class ClientConnection {
             voiceWindowStart = now;
             voiceInWindow = 0;
         }
-        if (++voiceInWindow > AUDIO_PER_SECOND) return;
+        if (++voiceInWindow > AUDIO_PER_SECOND) {
+            services.metrics().voicePacketsDropped.increment();
+            return;
+        }
         if (now - voiceCheckedAt > FRIEND_CHECK_MS) {
             voiceCheckedAt = now;
             if (!services.groups().isMemberOf(audio.groupId(), u.id())) {
@@ -226,6 +275,7 @@ final class ClientConnection {
                 return;
             }
         }
+        services.metrics().voicePackets.increment();
         Packet.VoiceAudioIn out = new Packet.VoiceAudioIn(audio.groupId(), u.username(), audio.data());
         for (ClientConnection other : services.voice().others(audio.groupId(), this)) other.pushDroppable(out);
     }
@@ -242,6 +292,7 @@ final class ClientConnection {
 
     private void enqueue(byte[] frame) {
         if (!outbound.offer(frame)) {
+            services.metrics().slowClients.increment();
             try {
                 socket.close(); // too far behind: disconnect rather than buffer without limit
             } catch (IOException ignored) {
@@ -271,6 +322,17 @@ final class ClientConnection {
     private Packet handle(Packet packet) throws ApiException, IOException {
         return switch (packet) {
             case Packet.Ping p -> new Packet.Pong();
+            case Packet.OpenRelay o -> {
+                Database.User u = me();
+                long peer;
+                try {
+                    peer = services.friends().friendId(u, o.peer());
+                } catch (java.sql.SQLException e) {
+                    throw new ApiException(ErrorCode.INTERNAL, "Try again.");
+                }
+                if (peer == 0) throw new ApiException(ErrorCode.NOT_FRIENDS, "You can only call friends.");
+                yield new Packet.RelayTicket(services.relay().open(u.id(), peer));
+            }
             case Packet.VoiceJoin j -> {
                 voiceAware = true;
                 yield joinVoice(j.groupId());
@@ -294,6 +356,7 @@ final class ClientConnection {
                 Database.User created = services.accounts().register(r.username(), r.password(), session.peerIdentityKey(),
                         local ? null : address);
                 loggedIn(created, false);
+                services.metrics().registrations.increment();
                 yield new Packet.LoggedIn(created.username(), false);
             }
             case Packet.Login l -> {
@@ -301,7 +364,114 @@ final class ClientConnection {
                 AccountService.LoginResult result = services.accounts().login(l.username(), l.password(),
                         session.peerIdentityKey(), address);
                 loggedIn(result.user(), result.newDevice());
+                services.metrics().logins.increment();
                 yield new Packet.LoggedIn(result.user().username(), result.newDevice());
+            }
+            case Packet.LoginWithCode l -> {
+                requireLoggedOut();
+                AccountService.LoginResult result = services.accounts().login(l.username(), l.password(), l.code(),
+                        session.peerIdentityKey(), address);
+                loggedIn(result.user(), result.newDevice());
+                services.metrics().logins.increment();
+                yield new Packet.LoggedIn(result.user().username(), result.newDevice());
+            }
+            case Packet.SetDevice d -> {
+                Database.User u = me();
+                byte[] issued = null;
+                try {
+                    byte[] known = services.accounts().deviceSecret(u, d.deviceId());
+                    if (known == null) {
+                        // only the first device may get its secret on first use: the others got theirs when linked
+                        if (d.deviceId() != 0 || services.accounts().deviceExists0(u)) {
+                            throw new ApiException(ErrorCode.INVALID_REQUEST, "This computer is not one of the account's devices.");
+                        }
+                        issued = new byte[Packet.DEVICE_SECRET_BYTES];
+                        new java.security.SecureRandom().nextBytes(issued);
+                        services.accounts().deviceSeen(u, 0, d.name());
+                        services.accounts().setDeviceSecret(u, 0, LinkService.hash(issued));
+                    } else if (!java.security.MessageDigest.isEqual(known, LinkService.hash(d.secret()))) {
+                        throw new ApiException(ErrorCode.INVALID_REQUEST, "This computer is not one of the account's devices.");
+                    } else {
+                        services.accounts().deviceSeen(u, d.deviceId(), d.name());
+                    }
+                } catch (java.sql.SQLException e) {
+                    throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+                }
+                deviceId = d.deviceId();
+                multiDevice = true;
+                yield issued != null ? new Packet.DeviceSecret(issued) : new Packet.Ok();
+            }
+            case Packet.FetchDeviceBundles f -> services.messages().deviceBundles(me(), deviceId, f.username());
+            case Packet.SendToDevices s -> {
+                services.metrics().envelopes.increment();
+                yield services.messages().sendToDevices(me(), deviceId, s.recipient(), s.copies());
+            }
+            case Packet.ListDevices l -> {
+                Database.User u = me();
+                List<Packet.DeviceInfo> list = new java.util.ArrayList<>();
+                try {
+                    for (Database.Device dev : services.accounts().devices(u)) {
+                        boolean online = services.presence().connections(u.id()).stream().anyMatch(c -> c.deviceId() == dev.id());
+                        list.add(new Packet.DeviceInfo(dev.id(), dev.name(), dev.createdAt(), dev.lastSeen(), online, dev.id() == deviceId));
+                    }
+                } catch (java.sql.SQLException e) {
+                    throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+                }
+                yield new Packet.DeviceList(list);
+            }
+            case Packet.RemoveDevice r -> {
+                Database.User u = me();
+                if (r.deviceId() == deviceId) throw new ApiException(ErrorCode.INVALID_REQUEST, "Sign out on that computer instead.");
+                try {
+                    services.accounts().removeDevice(u, r.deviceId());
+                } catch (java.sql.SQLException e) {
+                    throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+                }
+                for (ClientConnection c : services.presence().connections(u.id())) if (c.deviceId() == r.deviceId()) c.removed();
+                yield new Packet.Ok();
+            }
+            case Packet.SetAccessKey a -> {
+                services.messages().setAccessKey(me(), a.keyHash());
+                yield new Packet.Ok();
+            }
+            case Packet.SendSealed s -> {
+                services.metrics().envelopes.increment();
+                yield services.messages().sendSealed(s.recipient(), s.accessKey(), s.copies(), local ? null : address);
+            }
+            case Packet.LinkLogin l -> {
+                requireLoggedOut();
+                Database.User u = services.accounts().checkForLink(l.username(), l.password(), l.code(), address);
+                yield new Packet.LinkPending(services.links().request(u, l.name(), l.commitment(), this));
+            }
+            case Packet.LinkOffer o -> {
+                services.links().offer(me(), o.linkId(), o.ephemeral(), this);
+                yield new Packet.Ok();
+            }
+            case Packet.LinkReveal r -> {
+                services.links().reveal(r.linkId(), r.ephemeral(), this);
+                yield new Packet.Ok();
+            }
+            case Packet.LinkApprove a -> {
+                services.links().approve(me(), a.linkId(), a.ephemeral(), a.sealed());
+                yield new Packet.Ok();
+            }
+            case Packet.LinkDeny d -> {
+                services.links().deny(me(), d.linkId());
+                yield new Packet.Ok();
+            }
+            case Packet.SetUpTwoFactor s -> new Packet.TwoFactorSecret(services.accounts().setUpTwoFactor(me()));
+            case Packet.EnableTwoFactor e -> new Packet.RecoveryCodes(services.accounts().enableTwoFactor(me(), e.code()));
+            case Packet.DisableTwoFactor d -> {
+                services.accounts().disableTwoFactor(me(), d.password());
+                yield new Packet.Ok();
+            }
+            case Packet.TwoFactorStatus t -> {
+                int[] state = services.accounts().twoFactorState(me());
+                yield new Packet.TwoFactorState(state[0] == 1, state[1]);
+            }
+            case Packet.ChangePassword c -> {
+                services.accounts().changePassword(me(), c.oldPassword(), c.newPassword());
+                yield new Packet.Ok();
             }
             case Packet.SendFriendRequest s -> new Packet.FriendRequestResult(services.friends().request(me(), s.username()));
             case Packet.RespondFriendRequest r -> {
@@ -309,21 +479,31 @@ final class ClientConnection {
                 yield new Packet.Ok();
             }
             case Packet.RemoveFriend r -> {
+                long other;
+                try {
+                    other = services.friends().friendId(me(), r.username());
+                } catch (java.sql.SQLException e) {
+                    other = 0;
+                }
                 services.friends().remove(me(), r.username());
+                if (other != 0) services.relay().forgetPair(me().id(), other); // no more relaying between them
                 yield new Packet.Ok();
             }
             case Packet.ListFriends l -> services.friends().list(me());
             case Packet.UploadKeys k -> {
-                services.messages().uploadKeys(me(), session.peerIdentityKey(), k);
+                services.messages().uploadKeys(me(), deviceId, multiDevice, session.peerIdentityKey(), k);
                 yield new Packet.Ok();
             }
             case Packet.UploadPrekeys u -> {
-                services.messages().uploadPrekeys(me(), u.prekeys());
+                services.messages().uploadPrekeys(me(), deviceId, u.prekeys());
                 yield new Packet.Ok();
             }
-            case Packet.KeyStatus k -> services.messages().status(me());
+            case Packet.KeyStatus k -> services.messages().status(me(), deviceId);
             case Packet.FetchBundle f -> new Packet.Bundle(services.messages().bundle(me(), f.username()));
-            case Packet.SendEnvelope s -> services.messages().send(me(), s.recipient(), s.body());
+            case Packet.SendEnvelope s -> {
+                services.metrics().envelopes.increment();
+                yield services.messages().send(me(), s.recipient(), s.body());
+            }
             case Packet.FetchPending f -> new Packet.PendingCount(services.messages().pushPending(me(), this));
             case Packet.CreateGroup c -> services.groups().create(me(), c.name(), c.members());
             case Packet.AddGroupMember a -> {
@@ -359,14 +539,18 @@ final class ClientConnection {
                 yield new Packet.Ok();
             }
             case Packet.ListGroups l -> services.groups().list(me());
-            case Packet.SendGroupEnvelope s -> services.messages().sendToGroup(me(), s.groupId(), s.body());
+            case Packet.SendGroupEnvelope s -> {
+                services.metrics().groupEnvelopes.increment();
+                yield services.messages().sendToGroup(me(), deviceId, s.groupId(), s.body());
+            }
             case Packet.AckEnvelopes a -> {
-                services.messages().ack(me(), a.ids());
+                services.messages().ack(me(), deviceId, a.ids());
                 yield new Packet.Ok();
             }
             case Packet.UploadStart u -> services.attachments().start(me(), u.size(), u.recipient(), u.groupId());
             case Packet.UploadChunk u -> {
                 services.attachments().chunk(me(), u.attachmentId(), u.offset(), u.data());
+                services.metrics().attachmentBytes.add(u.data().length);
                 yield new Packet.Ok();
             }
             case Packet.UploadFinish u -> {

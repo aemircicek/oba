@@ -35,7 +35,8 @@ public final class Messenger {
     private static final int KIND_NORMAL = 2;
     private static final int MAX_SESSIONS_PER_PEER = 4;
     private static final int MAX_CIPHERTEXT = 32 * 1024;
-    private static final Pattern PEER = Pattern.compile("[a-z0-9_.]{3,20}");
+    /** A user, or one of their devices after the first ("efe#2", 3.6): each device has its own sessions. */
+    private static final Pattern PEER = Pattern.compile("[a-z0-9_.]{3,20}(#[1-9][0-9]{0,9})?");
 
     /** Fetches a peer's prekey bundle from the server when a new session is needed. */
     @FunctionalInterface
@@ -214,6 +215,16 @@ public final class Messenger {
         } catch (ProtocolException e) {
             throw new SecurityException("Malformed message: " + e.getMessage(), e);
         }
+    }
+
+    /** Opens a sealed envelope addressed to this device (3.6); the sender's signature is checked. */
+    public synchronized SealedSender.Opened unseal(byte[] sealed) {
+        return SealedSender.open(keys.dhIdentity(), sealed);
+    }
+
+    /** This device's X25519 identity key, as others seal to it. */
+    public synchronized byte[] dhIdentityPublic() {
+        return X25519.encode(keys.dhIdentity().getPublic());
     }
 
     /** Forgets all sessions with a peer (e.g. after their key changed and was re-verified). */

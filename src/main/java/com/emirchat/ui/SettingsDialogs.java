@@ -27,19 +27,30 @@ final class SettingsDialogs {
         this.main = main;
     }
 
-    /** A short tour the first time someone signs in. */
+    /** The moving picture of the tour page on screen (stopped when the page changes). */
+    private javafx.scene.Node introScene;
+
+    /** A short tour the first time someone signs in: what is encrypted, how keys are agreed, why to verify. */
     void openWelcome(int page) {
         String[][] pages = {
-                {Icons.LOCK, "welcome.title1", "welcome.body1"},
-                {Icons.SHIELD_CHECK, "welcome.title2", "welcome.body2"},
-                {Icons.KEY, "welcome.title3", "welcome.body3"}};
+                {"welcome.title1", "welcome.body1"},
+                {"welcome.title2", "welcome.body2"},
+                {"welcome.title3", "welcome.body3"}};
         String[] p = pages[page];
-        StackPane badge = new StackPane(Icons.of(p[0], 28, "accent"));
-        badge.getStyleClass().addAll("icon-badge", "accent");
-        Label body = UiKit.label(I18n.t(p[2]), "body");
+        IntroScenes.stop(introScene);
+        StackPane scene = IntroScenes.scene(page);
+        introScene = scene;
+        Label body = UiKit.label(I18n.t(p[1]), "body");
         body.setWrapText(true);
         body.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
-        Label step = UiKit.label((page + 1) + " / " + pages.length, "caption");
+        HBox dots = new HBox(6);
+        dots.setAlignment(Pos.CENTER_LEFT);
+        for (int i = 0; i < pages.length; i++) {
+            javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(4);
+            dot.getStyleClass().add(i == page ? "intro-dot-on" : "intro-dot");
+            dots.getChildren().add(dot);
+        }
+        dots.setAccessibleText((page + 1) + " / " + pages.length);
         Button back = new Button(I18n.t("welcome.back"));
         back.setVisible(page > 0);
         back.setOnAction(e -> openWelcome(page - 1));
@@ -50,13 +61,15 @@ final class SettingsDialogs {
         next.setDefaultButton(true);
         next.setOnAction(e -> {
             if (last) {
+                IntroScenes.stop(introScene);
+                introScene = null;
                 AppPrefs.setWelcomeShown();
                 main.overlay.close();
             } else {
                 openWelcome(page + 1);
             }
         });
-        VBox box = Overlay.dialog(I18n.t(p[1]), badge, body, new HBox(10, step, UiKit.grow(), back, next));
+        VBox box = Overlay.dialog(I18n.t(p[0]), scene, body, new HBox(10, dots, UiKit.grow(), back, next));
         box.setId("welcome-dialog");
         main.overlay.show(box);
     }
@@ -87,6 +100,45 @@ final class SettingsDialogs {
         main.overlay.show(box);
     }
 
+    /** Quiet hours: no sounds or banners at night (direct messages and mentions may come through silently). */
+    private VBox quietHours() {
+        NotifyRules rules = main.session.notifyRules();
+        NotifyRules.Quiet q = rules.quiet();
+        javafx.scene.control.CheckBox on = new javafx.scene.control.CheckBox(I18n.t("settings.quiet"));
+        on.setId("setting-quiet");
+        on.setSelected(q.on());
+        ComboBox<java.time.LocalTime> from = timeChoice(q.start(), "setting-quiet-from");
+        ComboBox<java.time.LocalTime> to = timeChoice(q.end(), "setting-quiet-to");
+        javafx.scene.control.CheckBox through = new javafx.scene.control.CheckBox(I18n.t("settings.quietThrough"));
+        through.setId("setting-quiet-through");
+        through.setSelected(q.mentionsThrough());
+        Runnable save = () -> rules.setQuiet(new NotifyRules.Quiet(on.isSelected(), from.getValue(), to.getValue(),
+                through.isSelected()));
+        on.setOnAction(e -> save.run());
+        from.setOnAction(e -> save.run());
+        to.setOnAction(e -> save.run());
+        through.setOnAction(e -> save.run());
+        from.disableProperty().bind(on.selectedProperty().not());
+        to.disableProperty().bind(on.selectedProperty().not());
+        through.disableProperty().bind(on.selectedProperty().not());
+        HBox times = new HBox(8, on, UiKit.grow(), from, UiKit.label("–", "caption"), to);
+        times.setAlignment(Pos.CENTER_LEFT);
+        Label hint = UiKit.label(I18n.t("settings.quietHint"), "caption");
+        hint.setWrapText(true);
+        hint.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        return new VBox(4, times, through, hint);
+    }
+
+    private static ComboBox<java.time.LocalTime> timeChoice(java.time.LocalTime value, String id) {
+        ComboBox<java.time.LocalTime> box = new ComboBox<>();
+        box.setId(id);
+        for (int m = 0; m < 24 * 60; m += 30) box.getItems().add(java.time.LocalTime.of(m / 60, m % 60));
+        if (!box.getItems().contains(value)) box.getItems().add(value);
+        box.setValue(value);
+        box.setVisibleRowCount(8);
+        return box;
+    }
+
     void openSettings() {
         VBox toggles = new VBox(10,
                 toggle(I18n.t("settings.receipts"), I18n.t("settings.receiptsHint"),
@@ -103,6 +155,7 @@ final class SettingsDialogs {
             toggles.getChildren().add(appToggle(I18n.t("settings.keepRunning"), I18n.t("settings.keepRunningHint"),
                     "setting-keep-running", AppPrefs.keepRunning(), AppPrefs::setKeepRunning));
         }
+        toggles.getChildren().add(quietHours());
         toggles.getChildren().add(appToggle(I18n.t("settings.nudges"), I18n.t("settings.nudgesHint"),
                 "setting-nudges", AppPrefs.nudges(), AppPrefs::setNudges));
         toggles.getChildren().add(appToggle(I18n.t("settings.storm"), I18n.t("settings.stormHint", Sandstorm.SHORTCUT_TEXT),
@@ -167,7 +220,20 @@ final class SettingsDialogs {
         Button looks = new Button(I18n.t("appearance.title"));
         looks.setId("appearance");
         looks.setOnAction(e -> openAppearance());
-        VBox box = Overlay.dialog(I18n.t("main.settings"), toggles, new HBox(10, backup, looks, UiKit.grow(), done));
+        // the list grew longer than a small window: it scrolls, the buttons stay in view
+        javafx.scene.control.ScrollPane scroll = new javafx.scene.control.ScrollPane(toggles);
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.getStyleClass().add("dialog-scroll");
+        scroll.setPrefViewportHeight(430);
+        scroll.setMaxHeight(470);
+        Button security = new Button(I18n.t("security.title"));
+        security.setId("security");
+        security.setOnAction(e -> new SecurityDialogs(main).open());
+        // two rows: the three pages, then Done; each button keeps its whole label
+        for (Button b : new Button[] {backup, looks, security, done}) b.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        javafx.scene.layout.FlowPane pages = new javafx.scene.layout.FlowPane(10, 8, backup, looks, security);
+        VBox box = Overlay.dialog(I18n.t("main.settings"), scroll, pages, new HBox(UiKit.grow(), done));
         box.setId("settings-dialog");
         main.overlay.show(box);
     }
@@ -190,10 +256,18 @@ final class SettingsDialogs {
         drawSwatches[0] = () -> {
             swatches.getChildren().clear();
             for (String name : Appearance.ACCENTS.keySet()) {
-                String[][] palette = Appearance.ACCENTS.get(name);
+                String[][] palette = Appearance.palette(name);
                 String hex = palette == null ? (Theme.isDark() ? "#f2a43a" : "#b45f0b") : palette[Theme.isDark() ? 1 : 0][0];
                 javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(13, javafx.scene.paint.Color.web(hex));
                 StackPane swatch = new StackPane(dot);
+                if (name.equals(Appearance.CUSTOM)) {
+                    // a rainbow ring marks the one you choose yourself
+                    dot.setStroke(new javafx.scene.paint.LinearGradient(0, 0, 1, 1, true, javafx.scene.paint.CycleMethod.NO_CYCLE,
+                            new javafx.scene.paint.Stop(0, javafx.scene.paint.Color.web("#e8505b")),
+                            new javafx.scene.paint.Stop(0.5, javafx.scene.paint.Color.web("#f9d56e")),
+                            new javafx.scene.paint.Stop(1, javafx.scene.paint.Color.web("#14b1ab"))));
+                    dot.setStrokeWidth(3);
+                }
                 swatch.getStyleClass().add("swatch");
                 if (name.equals(AppPrefs.accent())) swatch.getStyleClass().add("selected");
                 swatch.setId("accent-" + name);
@@ -210,6 +284,39 @@ final class SettingsDialogs {
             }
         };
         drawSwatches[0].run();
+        javafx.scene.control.ColorPicker picker = new javafx.scene.control.ColorPicker(javafx.scene.paint.Color.web(AppPrefs.customAccent()));
+        picker.setId("appearance-custom");
+        picker.getStyleClass().addAll("small", "accent-picker");
+        picker.setPrefWidth(52);
+        picker.setMinWidth(52);
+        HBox.setMargin(picker, new javafx.geometry.Insets(0, 8, 0, 4));
+        picker.setStyle("-fx-color-label-visible: false;");
+        picker.setTooltip(new Tooltip(I18n.t("appearance.customTip")));
+        picker.setOnAction(e -> {
+            AppPrefs.setCustomAccent(AccentMaker.hex(picker.getValue()));
+            AppPrefs.setAccent(Appearance.CUSTOM);
+            Theme.refreshAll();
+            drawSwatches[0].run();
+            main.sidebarUi.refreshSidebar();
+            if (main.current != null) main.current.refreshHeader();
+        });
+        swatches.getChildren().add(picker);
+        Runnable redrawWithPicker = drawSwatches[0];
+        drawSwatches[0] = () -> {
+            redrawWithPicker.run();
+            if (!swatches.getChildren().contains(picker)) swatches.getChildren().add(picker);
+        };
+        ComboBox<String> contrast = new ComboBox<>();
+        contrast.setId("appearance-contrast");
+        String[] contrasts = {"system", "off", "on"};
+        contrast.getItems().addAll(I18n.t("appearance.contrastSystem"), I18n.t("appearance.contrastNormal"),
+                I18n.t("appearance.contrastHigh"));
+        contrast.getSelectionModel().select(Math.max(0, java.util.Arrays.asList(contrasts).indexOf(AppPrefs.highContrast())));
+        contrast.setOnAction(e -> {
+            AppPrefs.setHighContrast(contrasts[contrast.getSelectionModel().getSelectedIndex()]);
+            Theme.refreshAll();
+            main.sidebarUi.refreshSidebar();
+        });
         ComboBox<String> size = new ComboBox<>();
         size.setId("appearance-size");
         String[] sizes = {"small", "normal", "large"};
@@ -235,6 +342,7 @@ final class SettingsDialogs {
         VBox rows = new VBox(14,
                 field(I18n.t("appearance.theme"), theme),
                 field(I18n.t("appearance.accent"), swatches),
+                field(I18n.t("appearance.contrast"), contrast),
                 field(I18n.t("appearance.textSize"), size),
                 appToggle(I18n.t("appearance.compact"), I18n.t("appearance.compactHint"), "appearance-compact",
                         AppPrefs.compact(), on -> {
@@ -267,6 +375,7 @@ final class SettingsDialogs {
             case "sky" -> I18n.t("appearance.sky");
             case "rose" -> I18n.t("appearance.rose");
             case "violet" -> I18n.t("appearance.violet");
+            case Appearance.CUSTOM -> I18n.t("appearance.custom");
             default -> I18n.t("appearance.amber");
         };
     }

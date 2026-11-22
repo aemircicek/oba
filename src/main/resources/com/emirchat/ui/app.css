@@ -64,6 +64,63 @@
     -sc-rail: #0b0a08;
 }
 
+/* High contrast (Appearance → Contrast, or Windows' own setting): plain backgrounds, full-strength
+   text, visible borders and a strong accent; every text pair is well above WCAG AAA (7:1). */
+.root.light.high-contrast {
+    -sc-bg: #ffffff;
+    -sc-surface: #ffffff;
+    -sc-surface-2: #f0f0f0;
+    -sc-surface-3: #d9d9d9;
+    -sc-border: #000000;
+    -sc-text: #000000;
+    -sc-text-2: #1a1a1a;
+    -sc-text-3: #262626;
+    -sc-accent: #6b3300;
+    -sc-accent-hover: #4d2500;
+    -sc-on-accent: #ffffff;
+    -sc-accent-weak: #ffe9cc;
+    -sc-accent-text: #5c2c00;
+    -sc-own-bubble: #6b3300;
+    -sc-on-own-bubble: #ffffff;
+    -sc-own-time: #ffffff;
+    -sc-peer-bubble: #ffffff;
+    -sc-danger: #8f0000;
+    -sc-warning: #7a2900;
+    -sc-success: #0b5a1f;
+    -sc-rail: #e6e6e6;
+}
+
+.root.dark.high-contrast {
+    -sc-bg: #000000;
+    -sc-surface: #000000;
+    -sc-surface-2: #141414;
+    -sc-surface-3: #262626;
+    -sc-border: #ffffff;
+    -sc-text: #ffffff;
+    -sc-text-2: #f0f0f0;
+    -sc-text-3: #e0e0e0;
+    -sc-accent: #ffc266;
+    -sc-accent-hover: #ffd699;
+    -sc-on-accent: #000000;
+    -sc-accent-weak: #2e1f00;
+    -sc-accent-text: #ffcc80;
+    -sc-own-bubble: #ffc266;
+    -sc-on-own-bubble: #000000;
+    -sc-own-time: #000000;
+    -sc-peer-bubble: #000000;
+    -sc-danger: #ff8a80;
+    -sc-warning: #ffab70;
+    -sc-success: #9cf0a8;
+    -sc-rail: #000000;
+}
+
+.root.high-contrast .list-row, .root.high-contrast .text-field, .root.high-contrast .text-area,
+.root.high-contrast .bubble, .root.high-contrast .button {
+    -fx-border-color: -sc-border;
+    -fx-border-width: 1;
+    -fx-border-radius: 6;
+}
+
 .root {
     -fx-font-family: "System";
     -fx-font-size: 13px;
@@ -352,6 +409,9 @@
 .list-row.selected { -fx-background-color: -sc-accent-weak; }
 .row-title { -fx-font-size: 13.5px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
 .row-sub { -fx-font-size: 12px; -fx-text-fill: -sc-text-2; }
+/* search results: the matched starts of words stand out */
+.row-sub .search-plain { -fx-fill: -sc-text-2; -fx-font-size: 12px; }
+.row-sub .search-hit { -fx-fill: -sc-accent-text; -fx-font-size: 12px; -fx-font-weight: bold; }
 .row-time { -fx-font-size: 11px; -fx-text-fill: -sc-text-3; }
 .list-heading { -fx-padding: 12 14 4 14; }
 
@@ -365,6 +425,8 @@
     -fx-min-width: 18;
     -fx-alignment: center;
 }
+/* a muted chat still shows how much is unread, without drawing the eye */
+.unread-badge.quiet { -fx-background-color: -sc-surface-2; -fx-text-fill: -sc-text-2; }
 
 .presence-dot { -fx-background-radius: 999; -fx-min-width: 11; -fx-min-height: 11; -fx-max-width: 11; -fx-max-height: 11;
     -fx-border-color: -sc-surface; -fx-border-width: 2; -fx-border-radius: 999; }
@@ -922,3 +984,51 @@
     -fx-background-color: -sc-surface-2; -fx-background-radius: 8; -fx-padding: 10; }
 .cipher-layers { -fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: -sc-accent-text; }
 .cipher-plain { -fx-font-family: "Menlo", "Consolas", "DejaVu Sans Mono", monospace; -fx-font-size: 14px; -fx-padding: 6 0 6 0; }
+
+/* the media panel: pictures in square tiles, files and links in rows */
+.media-tile { -fx-background-color: -sc-surface-2; -fx-background-radius: 8; -fx-cursor: hand; }
+.media-tile:hover { -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.25), 8, 0, 0, 1); }
+.media-tab { -fx-background-color: -sc-surface-2; -fx-text-fill: -sc-text; -fx-background-radius: 999; -fx-padding: 3 10; }
+.media-tab:hover { -fx-background-color: -sc-surface-3; }
+.media-tab:selected { -fx-background-color: -sc-accent; -fx-text-fill: -sc-on-accent; }
+.media-link-row { -fx-padding: 4 0 8 0; -fx-border-color: transparent transparent -sc-surface-2 transparent; }
+.media-link { -fx-text-overrun: center-ellipsis; }
+
+/* pictures at the fire: a grid of tiles, the speaker's glowing */
+.video-tile { -fx-background-color: #000000; -fx-background-radius: 14; -fx-cursor: hand;
+    -fx-border-color: rgba(255,255,255,0.10); -fx-border-radius: 14; -fx-border-width: 1; }
+.video-tile:speaking { -fx-border-color: -sc-accent; -fx-border-width: 3;
+    -fx-effect: dropshadow(gaussian, -sc-accent, 14, 0.25, 0, 0); }
+.video-tile-name { -fx-background-color: rgba(0,0,0,0.55); -fx-text-fill: #ffffff; -fx-background-radius: 6;
+    -fx-padding: 2 6; -fx-font-size: 11px; }
+
+/* the first-start tour's moving pictures */
+.intro-scene { -fx-background-color: -sc-surface-2; -fx-background-radius: 12; -fx-padding: 8; }
+.intro-tent { -fx-fill: -sc-accent; }
+.intro-road { -fx-stroke: -sc-border; -fx-stroke-width: 2; -fx-stroke-dash-array: 4 5; }
+.intro-server { -fx-fill: -sc-surface-3; -fx-stroke: -sc-text-3; -fx-stroke-width: 1.5; }
+.intro-caption { -fx-text-fill: -sc-text-2; -fx-font-size: 11px; }
+.intro-message { -fx-background-color: -sc-own-bubble; -fx-text-fill: -sc-on-own-bubble; -fx-background-radius: 10;
+    -fx-padding: 3 8; -fx-font-size: 12px; -fx-min-width: 70; -fx-alignment: center; }
+.intro-message:sealed { -fx-background-color: -sc-surface-3; -fx-text-fill: -sc-text-2; -fx-font-family: "Monospaced"; }
+.intro-orb { -fx-stroke: -sc-surface; -fx-stroke-width: 1.5; }
+.intro-orb-identity { -fx-fill: -sc-accent; }
+.intro-orb-signed { -fx-fill: -sc-venom; }
+.intro-orb-onetime { -fx-fill: -sc-read; }
+.intro-key { -fx-fill: -sc-accent; }
+.intro-key-hole { -fx-fill: -sc-surface-2; }
+.intro-number { -fx-font-family: "Monospaced"; -fx-font-size: 12px; -fx-text-fill: -sc-text; }
+.intro-scan { -fx-fill: -sc-accent; -fx-arc-width: 4; -fx-arc-height: 4; }
+.intro-check { -fx-text-fill: -sc-success; -fx-font-size: 40px; -fx-font-weight: bold; }
+.intro-dot { -fx-fill: -sc-surface-3; }
+.intro-dot-on { -fx-fill: -sc-accent; }
+
+.dialog-scroll, .dialog-scroll > .viewport { -fx-background-color: transparent; -fx-background: transparent; -fx-padding: 0 6 0 0; }
+
+/* account security */
+.h3 { -fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
+.fingerprint { -fx-font-family: "Monospaced"; -fx-font-size: 13px; -fx-text-fill: -sc-text; -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 8; -fx-padding: 6 10; }
+
+.link-code-big { -fx-font-family: "Monospaced"; -fx-font-size: 30px; -fx-font-weight: bold; -fx-text-fill: -sc-accent-text;
+    -fx-background-color: -sc-surface-2; -fx-background-radius: 10; -fx-padding: 8 18; }

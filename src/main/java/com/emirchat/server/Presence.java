@@ -31,6 +31,17 @@ final class Presence {
         return false;
     }
 
+    /** The user's live connections (each knows which of the account's devices it is). */
+    synchronized List<ClientConnection> connections(long userId) {
+        Set<ClientConnection> set = online.get(userId);
+        return set == null ? List.of() : List.copyOf(set);
+    }
+
+    /** Accounts with a connection (for metrics). */
+    synchronized int onlineCount() {
+        return online.size();
+    }
+
     synchronized boolean isOnline(long userId) {
         return online.containsKey(userId);
     }

@@ -33,8 +33,18 @@ final class ConversationHeader {
 
     void refreshHeader() {
         ChatClient client = chat.session.client();
-        HBox header = new HBox(12);
+        HBox header = new HBox(10);
         header.getStyleClass().add("chat-header");
+        // buttons keep their size; when the window is narrow the title gives way
+        header.getChildren().addListener((javafx.collections.ListChangeListener<Node>) change -> {
+            while (change.next()) {
+                for (Node n : change.getAddedSubList()) {
+                    if (n instanceof javafx.scene.control.ButtonBase || n instanceof MenuButton) {
+                        ((javafx.scene.layout.Region) n).setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+                    }
+                }
+            }
+        });
         header.setAlignment(Pos.CENTER_LEFT);
         VBox titles = new VBox(2);
         if (chat.peer != null) {
@@ -113,6 +123,25 @@ final class ConversationHeader {
             Tooltip.install(chip, new Tooltip(I18n.t("sky.theirTime", chat.peer, Sky.city(theirZone))));
             header.getChildren().add(chip);
         }
+        if (chat.groupId != 0) {
+            Button threadsButton = new Button();
+            threadsButton.setGraphic(Icons.of(Icons.MESSAGE, 15, "muted"));
+            threadsButton.getStyleClass().addAll("small", "timer-button");
+            if ("threads".equals(chat.side.sideMode)) threadsButton.getStyleClass().add("active");
+            threadsButton.setTooltip(new Tooltip(I18n.t("thread.all")));
+            threadsButton.setId("threads-button");
+            threadsButton.setOnAction(e -> chat.side.toggleSide("threads", chat.side::showThreads));
+            header.getChildren().add(threadsButton);
+        }
+        Button media = new Button();
+        media.setGraphic(Icons.of(Icons.IMAGE, 15, "muted"));
+        media.getStyleClass().addAll("small", "timer-button");
+        if ("media".equals(chat.side.sideMode)) media.getStyleClass().add("active");
+        media.setTooltip(new Tooltip(I18n.t("media.title")));
+        media.setId("media-button");
+        media.setOnAction(e -> chat.side.toggleSide("media", () -> chat.side.showMedia(chat.side.mediaTab)));
+        header.getChildren().add(media);
+        header.getChildren().add(bellButton());
         header.getChildren().add(timerButton());
         if (chat.peer != null) {
             Button call = new Button();
@@ -169,6 +198,68 @@ final class ConversationHeader {
             line.setOnMouseClicked(e -> editTopic());
         }
         return line;
+    }
+
+    /** Notifications for this chat: everything, mentions only or nothing, and muting for a while. */
+    private Node bellButton() {
+        NotifyRules rules = chat.session.notifyRules();
+        long now = System.currentTimeMillis();
+        boolean muted = rules.muted(chat.conversation, now);
+        NotifyRules.Level level = rules.level(chat.conversation);
+        MenuButton button = new MenuButton();
+        button.setId("bell");
+        button.getStyleClass().addAll("small", "timer-button");
+        if (muted || level != NotifyRules.Level.ALL) button.getStyleClass().add("active");
+        button.setGraphic(Icons.of(muted ? Icons.BELL_OFF : Icons.BELL, 15, muted ? "muted" : "accent"));
+        long until = rules.mutedUntil(chat.conversation);
+        button.setTooltip(new Tooltip(until > now ? (until == NotifyRules.FOREVER ? I18n.t("notify.mutedForever")
+                : I18n.t("notify.mutedUntil", UiKit.time(until))) : levelText(level)));
+        for (NotifyRules.Level l : NotifyRules.Level.values()) {
+            if (l == NotifyRules.Level.MENTIONS && chat.peer != null) continue; // in a direct chat every message is for you
+            MenuItem item = new MenuItem((l == level ? "✓ " : "   ") + levelText(l));
+            item.setId("notify-" + l.name().toLowerCase(java.util.Locale.ROOT));
+            item.setOnAction(e -> {
+                rules.setLevel(chat.conversation, l);
+                notifyChanged();
+            });
+            button.getItems().add(item);
+        }
+        button.getItems().add(new javafx.scene.control.SeparatorMenuItem());
+        int[][] choices = {{60, 0}, {8 * 60, 1}, {-2, 2}, {-1, 3}};
+        String[] keys = {"notify.mute1h", "notify.mute8h", "notify.muteMorning", "notify.muteForever"};
+        for (int i = 0; i < choices.length; i++) {
+            int choice = choices[i][0];
+            MenuItem item = new MenuItem("   " + I18n.t(keys[i]));
+            item.setId("mute-" + i);
+            item.setOnAction(e -> {
+                rules.muteUntil(chat.conversation, NotifyRules.until(choice, NotifyRules.now()));
+                notifyChanged();
+            });
+            button.getItems().add(item);
+        }
+        if (until > now) {
+            MenuItem unmute = new MenuItem("   " + I18n.t("notify.unmute"));
+            unmute.setId("unmute");
+            unmute.setOnAction(e -> {
+                rules.muteUntil(chat.conversation, 0);
+                notifyChanged();
+            });
+            button.getItems().add(unmute);
+        }
+        return button;
+    }
+
+    static String levelText(NotifyRules.Level level) {
+        return switch (level) {
+            case ALL -> I18n.t("notify.level.all");
+            case MENTIONS -> I18n.t("notify.level.mentions");
+            case NONE -> I18n.t("notify.level.none");
+        };
+    }
+
+    private void notifyChanged() {
+        chat.refreshHeader();
+        chat.actions.sidebarChanged();
     }
 
     /** Shows the disappearing-message timer and lets the user change it for everyone in the chat. */

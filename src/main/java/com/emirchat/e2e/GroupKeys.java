@@ -112,6 +112,11 @@ public final class GroupKeys {
         save(groupId);
     }
 
+    /** The member's devices changed (one was added): they need our key again, on every device. */
+    public synchronized void unmarkDistributed(long groupId, String member) throws IOException {
+        if (own(groupId).distributedTo.remove(member)) save(groupId);
+    }
+
     /**
      * Rotates if anyone who holds our current key is no longer a member. Checked before every send,
      * so a removal is honoured even if the membership push was missed while we were offline.

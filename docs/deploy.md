@@ -21,14 +21,31 @@ dpkg-reconfigure -plow unattended-upgrades    # security updates install themsel
 ufw default deny incoming
 ufw allow OpenSSH
 ufw allow 5056/tcp                            # secure-chat
-ufw allow 5056/udp                            # optional: lets calls go directly between users
+ufw allow 5056/udp                            # calls: direct paths, and the UDP relay when there is none
 ufw enable
 ```
 
 No TLS certificate or domain name is needed: every connection already runs secure-chat's own
 authenticated, encrypted handshake, and clients pin the server's key.
 
-## 2a. Run it with Docker (recommended)
+## 2. The quickest way: the ready-made image (3.6 and later)
+
+```sh
+curl -fsSL https://get.docker.com | sh        # Docker, if it is not installed yet
+git clone https://github.com/aemircicek/oba.git secure-chat && cd secure-chat
+sudo deploy/oba-server.sh install             # pulls ghcr.io/aemircicek/oba-server, starts it, prints the fingerprint
+```
+
+Later, one command updates it: `sudo deploy/oba-server.sh update`. It backs up the data volume
+first (into `/var/backups/oba-server`, the ten newest are kept), pulls the new image, restarts,
+and **checks that the server key is still the same**. Other commands: `backup`, `restore <file>`,
+`fingerprint`, `status`. The image is built by the release workflow for amd64 and arm64 and
+carries a signed build-provenance attestation (`gh attestation verify oci://ghcr.io/aemircicek/oba-server:3.6.0 -R aemircicek/oba`).
+
+A server set up earlier with `docker compose up -d --build` (section 2a) moves to the image with
+`sudo deploy/oba-server.sh update`: the names match, so it keeps its volume and key.
+
+## 2a. …or build the image yourself with Docker
 
 ```sh
 curl -fsSL https://get.docker.com | sh        # or install docker.io + docker-compose-v2 from apt
@@ -62,10 +79,20 @@ fingerprint: **compare it with the one in the logs** before accepting. From then
 pinned, and the app refuses a server presenting a different key. Give the fingerprint to your
 friends over another channel (in person, or a call) so they can check it too.
 
+## Metrics
+
+Started with `--metrics [host:]port` (the ready-made set-up does this, on 127.0.0.1:9105), the
+server serves counters in the Prometheus text format at `/metrics`: open connections, accounts
+online, logins, relayed envelopes and call packets, voice rooms, packets over the limits, clients
+cut off for falling behind, memory. Only totals: no user names, groups or addresses. Look at them
+with `curl -s 127.0.0.1:9105/metrics` or `sudo deploy/oba-server.sh status`; keep the port off the
+internet (Prometheus on the same machine, or an SSH tunnel).
+
 ## Updating
 
 ```sh
-cd secure-chat && git pull && sudo docker compose up -d --build     # Docker
+sudo deploy/oba-server.sh update                                     # ready-made image (backs up, checks the key)
+cd secure-chat && git pull && sudo docker compose up -d --build     # Docker, built here
 # systemd: replace /opt/secure-chat/secure-chat.jar, then: sudo systemctl restart secure-chat
 ```
 

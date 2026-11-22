@@ -24,6 +24,7 @@ final class AccountService {
     record LoginResult(Database.User user, boolean newDevice) {}
 
     private final Database db;
+    private final Clock clock;
     private final PasswordHasher hasher;
     private final RateLimiter perUsername;
     private final RateLimiter perAddress;
@@ -37,6 +38,7 @@ final class AccountService {
 
     AccountService(Database db, int iterations, Clock clock) {
         this.db = db;
+        this.clock = clock;
         this.hasher = new PasswordHasher(iterations);
         this.perUsername = new RateLimiter(5, Duration.ofMinutes(15), clock);
         this.perAddress = new RateLimiter(20, Duration.ofMinutes(15), clock);
@@ -87,6 +89,16 @@ final class AccountService {
      * connection. A different key means the user logged in from a new device.
      */
     LoginResult login(String rawUsername, String password, byte[] identityKey, String address) throws ApiException {
+        return login(rawUsername, password, null, identityKey, address);
+    }
+
+    /**
+     * As {@link #login(String, String, byte[], String)}, with two-step login: an account that has it
+     * asks a new device (not the one it is bound to) for a code from the authenticator app, or one
+     * of its recovery codes. The code is asked for only after the password was right.
+     */
+    LoginResult login(String rawUsername, String password, String code, byte[] identityKey, String address)
+            throws ApiException {
         String username = normalize(rawUsername);
         boolean wellFormed = USERNAME.matcher(username).matches();
         if (perAddress.isBlocked(address)) throw tooManyAttempts();
@@ -112,9 +124,10 @@ final class AccountService {
             perAddress.recordFailure(address);
             throw new ApiException(ErrorCode.BAD_CREDENTIALS, GENERIC_LOGIN_ERROR);
         }
-        perUsername.reset(username);
         Database.User user = found.get();
         boolean newDevice = !Arrays.equals(user.identityKey(), identityKey);
+        if (newDevice) secondStep(user, code, username, address);
+        perUsername.reset(username);
         if (newDevice) {
             try {
                 db.updateIdentityKey(user.id(), identityKey);
@@ -123,6 +136,166 @@ final class AccountService {
             }
         }
         return new LoginResult(user, newDevice);
+    }
+
+    /** Checks the second step of a login from a new device, if the account has it turned on. */
+    private void secondStep(Database.User user, String code, String username, String address) throws ApiException {
+        Optional<Database.TwoFactor> tf;
+        try {
+            tf = db.twoFactor(user.id());
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+        if (tf.isEmpty() || !tf.get().enabled()) return;
+        if (code == null || code.isBlank()) {
+            throw new ApiException(ErrorCode.CODE_REQUIRED, "Enter the code from your authenticator app.");
+        }
+        try {
+            if (Totp.looksLikeRecoveryCode(code)) {
+                if (db.useRecoveryCode(user.id(), Totp.recoveryHash(code))) return;
+            } else {
+                long step = Totp.verify(tf.get().secret(), code, clock.millis(), tf.get().lastStep());
+                if (step >= 0) {
+                    db.setTwoFactorStep(user.id(), step); // the same code never works twice
+                    return;
+                }
+            }
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+        perUsername.recordFailure(username); // codes are guessed like passwords: the same limits
+        perAddress.recordFailure(address);
+        throw new ApiException(ErrorCode.BAD_CODE, "That code is not right. Check the time on your phone.");
+    }
+
+    /** Starts turning two-step login on: a new secret for the authenticator app (not active until confirmed). */
+    byte[] setUpTwoFactor(Database.User user) throws ApiException {
+        try {
+            Optional<Database.TwoFactor> tf = db.twoFactor(user.id());
+            if (tf.isPresent() && tf.get().enabled()) {
+                throw new ApiException(ErrorCode.INVALID_REQUEST, "Two-step login is already on.");
+            }
+            byte[] secret = Totp.newSecret();
+            db.setPendingTwoFactor(user.id(), secret);
+            return secret;
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+    }
+
+    /** Turns it on with the first code from the app. @return recovery codes, shown once */
+    java.util.List<String> enableTwoFactor(Database.User user, String code) throws ApiException {
+        try {
+            Optional<Database.TwoFactor> tf = db.twoFactor(user.id());
+            if (tf.isEmpty() || tf.get().enabled()) throw new ApiException(ErrorCode.INVALID_REQUEST, "Start again.");
+            long step = Totp.verify(tf.get().secret(), code, clock.millis(), -1);
+            if (step < 0) throw new ApiException(ErrorCode.BAD_CODE, "That code is not right. Check the time on your phone.");
+            java.util.List<String> codes = Totp.newRecoveryCodes();
+            db.enableTwoFactor(user.id(), step, codes.stream().map(Totp::recoveryHash).toList());
+            return codes;
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+    }
+
+    /** Turns it off; needs the password again, so an unlocked computer left alone is not enough. */
+    void disableTwoFactor(Database.User user, String password) throws ApiException {
+        checkPassword(user, password);
+        try {
+            db.disableTwoFactor(user.id());
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+    }
+
+    /** @return {on, recovery codes left} */
+    int[] twoFactorState(Database.User user) throws ApiException {
+        try {
+            Optional<Database.TwoFactor> tf = db.twoFactor(user.id());
+            return tf.isPresent() && tf.get().enabled() ? new int[] {1, tf.get().recoveryLeft()} : new int[] {0, 0};
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+    }
+
+    void changePassword(Database.User user, String oldPassword, String newPassword) throws ApiException {
+        validatePassword(user.username(), newPassword);
+        checkPassword(user, oldPassword);
+        try {
+            db.updatePassword(user.id(), hashed(() -> hasher.hash(newPassword)));
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+    }
+
+    /** The current password, checked against the stored hash (the logged-in record may be older). */
+    private void checkPassword(Database.User user, String password) throws ApiException {
+        if (perUsername.isBlocked(user.username())) throw tooManyAttempts();
+        Database.User current;
+        try {
+            current = db.findUserById(user.id()).orElseThrow(() -> new ApiException(ErrorCode.USER_NOT_FOUND, "Gone."));
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+        if (!hashed(() -> hasher.verify(password, current.password()))) {
+            perUsername.recordFailure(user.username());
+            throw new ApiException(ErrorCode.BAD_CREDENTIALS, "The password is not right.");
+        }
+    }
+
+    byte[] deviceSecret(Database.User user, int deviceId) throws java.sql.SQLException {
+        return db.deviceSecret(user.id(), deviceId);
+    }
+
+    /** True once device 0 has a row (and so its secret was issued already, or must be). */
+    boolean deviceExists0(Database.User user) throws java.sql.SQLException {
+        return db.devices(user.id()).stream().anyMatch(d -> d.id() == 0 && d.createdAt() > 0);
+    }
+
+    void setDeviceSecret(Database.User user, int deviceId, byte[] hash) throws java.sql.SQLException {
+        db.setDeviceSecret(user.id(), deviceId, hash);
+    }
+
+    void deviceSeen(Database.User user, int deviceId, String name) throws java.sql.SQLException {
+        db.deviceSeen(user.id(), deviceId, name.isBlank() ? "" : name.strip(), clock.millis());
+    }
+
+    java.util.List<Database.Device> devices(Database.User user) throws java.sql.SQLException {
+        return db.devices(user.id());
+    }
+
+    void removeDevice(Database.User user, int deviceId) throws java.sql.SQLException {
+        db.removeDevice(user.id(), deviceId);
+    }
+
+    /**
+     * Checks a computer that asks to be linked to the account (3.6): the password and, when two-step
+     * login is on, the code, under the same limits as a login. Nothing is bound to its key.
+     */
+    Database.User checkForLink(String rawUsername, String password, String code, String address) throws ApiException {
+        String username = normalize(rawUsername);
+        if (perAddress.isBlocked(address) || perUsername.isBlocked(username)) throw tooManyAttempts();
+        Optional<Database.User> found;
+        try {
+            found = USERNAME.matcher(username).matches() ? db.findUser(username) : Optional.empty();
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+        Optional<Database.User> account = found;
+        boolean ok = hashed(() -> {
+            if (account.isPresent()) return hasher.verify(password, account.get().password());
+            hasher.verifyDummy(password);
+            return false;
+        });
+        if (!ok) {
+            // counted for every well-formed name, as in login: the limits must not tell which names exist
+            if (USERNAME.matcher(username).matches()) perUsername.recordFailure(username);
+            perAddress.recordFailure(address);
+            throw new ApiException(ErrorCode.BAD_CREDENTIALS, GENERIC_LOGIN_ERROR);
+        }
+        secondStep(found.get(), code, username, address);
+        perUsername.reset(username);
+        return found.get();
     }
 
     private static ApiException tooManyAttempts() {

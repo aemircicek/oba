@@ -86,6 +86,24 @@ final class AppPrefs {
         NODE.put("accent", name);
     }
 
+    /** The colour chosen for the "custom" accent, as #rrggbb. */
+    static String customAccent() {
+        return NODE.get("custom-accent", "#2f9e8f");
+    }
+
+    static void setCustomAccent(String hex) {
+        NODE.put("custom-accent", hex);
+    }
+
+    /** "on", "off" or "system" (follows Windows' high-contrast setting). */
+    static String highContrast() {
+        return NODE.get("high-contrast", "system");
+    }
+
+    static void setHighContrast(String value) {
+        NODE.put("high-contrast", value);
+    }
+
     /** "small", "normal" or "large". */
     static String textSize() {
         return NODE.get("text-size", "normal");
