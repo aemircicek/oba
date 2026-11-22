@@ -10,6 +10,8 @@ import javafx.scene.Parent;
  * everything that uses {@code -sc-accent} follows.
  */
 final class Appearance {
+    static final String CUSTOM = "custom";
+
     /** Accent name → {light palette, dark palette}; each is accent, hover, on-accent, weak, text, own bubble. */
     static final Map<String, String[][]> ACCENTS = new LinkedHashMap<>();
 
@@ -29,8 +31,6 @@ final class Appearance {
                 {"#a58cf5", "#b8a3f7", "#120a26", "#221b35", "#bba8f8", "#5b46a6"}});
         ACCENTS.put(CUSTOM, null); // made from AppPrefs.customAccent() by AccentMaker
     }
-
-    static final String CUSTOM = "custom";
 
     /** The palette of an accent ({light, dark}), or null for the stylesheet's own. */
     static String[][] palette(String name) {

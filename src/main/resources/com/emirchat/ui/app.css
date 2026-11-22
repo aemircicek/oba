@@ -991,3 +991,11 @@
 .media-tab:selected { -fx-background-color: -sc-accent; -fx-text-fill: -sc-on-accent; }
 .media-link-row { -fx-padding: 4 0 8 0; -fx-border-color: transparent transparent -sc-surface-2 transparent; }
 .media-link { -fx-text-overrun: center-ellipsis; }
+
+/* pictures at the fire: a grid of tiles, the speaker's glowing */
+.video-tile { -fx-background-color: #000000; -fx-background-radius: 14; -fx-cursor: hand;
+    -fx-border-color: rgba(255,255,255,0.10); -fx-border-radius: 14; -fx-border-width: 1; }
+.video-tile:speaking { -fx-border-color: -sc-accent; -fx-border-width: 3;
+    -fx-effect: dropshadow(gaussian, -sc-accent, 14, 0.25, 0, 0); }
+.video-tile-name { -fx-background-color: rgba(0,0,0,0.55); -fx-text-fill: #ffffff; -fx-background-radius: 6;
+    -fx-padding: 2 6; -fx-font-size: 11px; }

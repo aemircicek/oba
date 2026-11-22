@@ -47,28 +47,18 @@ final class Campfire {
     private double time;
     private long lastMove;
 
-    /** Cameras and screens shared in the room: one at a time, large, above the fire. */
-    private final VideoStage stage = new VideoStage();
-    private volatile String focus;
+    /** Cameras and screens shared in the room, side by side above the fire. */
+    private final RoomVideoGrid stage = new RoomVideoGrid();
     private final java.util.function.BiConsumer<String, Boolean> notice;
     private final Button cameraButton = new Button();
     private final Button screenButton = new Button();
     private final com.emirchat.call.RoomVideo.View roomView = new com.emirchat.call.RoomVideo.View() {
         @Override public void remote(String who, com.emirchat.video.VideoFrame frame, boolean screen) {
-            String current = focus;
-            if (current == null) {
-                focus = who; // the first to share is shown; the next one when they stop
-                current = who;
-                javafx.application.Platform.runLater(() -> stage.peer(who));
-            }
-            if (who.equals(current)) stage.remote(frame, screen);
+            stage.remote(who, frame, screen);
         }
 
         @Override public void remoteStopped(String who) {
-            if (who.equals(focus)) {
-                focus = null;
-                stage.remoteStopped();
-            }
+            stage.remoteStopped(who);
         }
 
         @Override public void local(com.emirchat.video.VideoFrame frame, boolean screen) { stage.local(frame, screen); }
@@ -127,11 +117,11 @@ final class Campfire {
 
         // a box in the middle of the fire, never the whole scene (its picture would otherwise push its minimum up)
         stage.root().setMinSize(0, 0);
-        stage.root().setPrefSize(720, 450);
-        stage.root().setMaxSize(720, 450);
+        stage.root().setPrefSize(760, 470);
+        stage.root().setMaxSize(760, 470);
         stage.root().getStyleClass().add("campfire-video");
         StackPane.setAlignment(stage.root(), Pos.CENTER);
-        stage.root().setMouseTransparent(true); // the sand stays walkable around and under it
+        // only the pictures take clicks (to make one large); the sand around them stays walkable
         root.getChildren().addAll(ground, people, stage.root(), hud);
         // a click on the sand walks us there
         ground.setOnMouseClicked(e -> walkTo(wx(e.getX()), wy(e.getY())));
@@ -154,6 +144,8 @@ final class Campfire {
 
     void update(VoiceChannels.State state) {
         speaking = state.speaking();
+        stage.speaking(speaking.stream().map(w -> w.equals(session.client().username()) ? RoomVideoGrid.ME : w)
+                .collect(java.util.stream.Collectors.toSet()));
         refresh();
     }
 
@@ -230,7 +222,6 @@ final class Campfire {
 
     void stop() {
         voice().videoView(null);
-        focus = null;
         stage.clear();
         if (frames != null) frames.stop();
         if (follow != null) follow.stop();
