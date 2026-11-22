@@ -100,6 +100,8 @@ final class VideoStage implements CallVideo.View {
     void clear() {
         remoteOn = false;
         localOn = false;
+        remotePicture.release();
+        localPicture.release();
         layout();
     }
 
@@ -120,6 +122,13 @@ final class VideoStage implements CallVideo.View {
         private int height;
         private boolean screen;
         private WritableImage image;
+
+        /** The call ended: free the native scaler (a new one is made if pictures come again). */
+        synchronized void release() {
+            if (scaler != null) scaler.close();
+            scaler = null;
+            latest.set(null);
+        }
 
         void offer(VideoFrame frame, boolean isScreen) {
             byte[] bgra;
