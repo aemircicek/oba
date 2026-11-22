@@ -45,7 +45,7 @@ talking to 3.5 ones. 3.5 shows the new kinds of message as "update to see it"; v
   length says less.
 - **Fuzzing**: Jazzer fuzz tests for the wire format, every message format, video packets, call
   candidates, the UDP relay, Markdown, pictures and voice notes, and the decryption paths; their
-  saved inputs run with every build. About 70 million inputs found nothing (docs/security-report.md).
+  saved inputs run with every build. About 60 million inputs found nothing (docs/security-report.md).
 
 ### Server
 - **A ready-made image** (ghcr.io/aemircicek/oba-server, amd64 and arm64, with a signed

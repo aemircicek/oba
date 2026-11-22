@@ -25,7 +25,7 @@ JAZZER_FUZZ=1 mvn test -Dtest='PacketFuzzTest#decode'
 | `TextFormatsFuzzTest#slashCommandsAndSettings` | slash commands, quiet hours, time zones | 2.0 M | nothing |
 | `TextFormatsFuzzTest#imagesAndVoice` | pictures (ImageIO behind limits) and voice notes | 0.5 M | nothing |
 | `CryptoInputsFuzzTest#directMessages` | Double Ratchet and X3DH messages from anyone | 0.07 M | nothing |
-| `CryptoInputsFuzzTest#groupKeys` | sender key distributions and group messages | see below | nothing |
+| `CryptoInputsFuzzTest#groupKeys` | sender key distributions and group messages | 0.6 M | nothing |
 
 The first fuzzing run did find a test bug (empty input decoded to `null`) and showed that
 malformed ciphertexts are refused with `SecurityException`, which the app reports as "could not

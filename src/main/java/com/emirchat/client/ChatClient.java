@@ -643,11 +643,10 @@ public final class ChatClient implements AutoCloseable {
             online.put(f.username(), f.online());
             current.add(f.username());
         }
-        boolean someoneLeft = !current.containsAll(friends) && !friends.isEmpty();
         friends.addAll(current);
         friends.retainAll(current);
         lastFriends = list;
-        if (someoneLeft) sealed.friendLeft(); // a removed friend must not keep sending us sealed messages
+        sealed.checkHolders(); // a removed friend (even while we were away) must not keep sending us sealed messages
         return list;
     }
 

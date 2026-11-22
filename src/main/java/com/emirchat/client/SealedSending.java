@@ -28,17 +28,34 @@ final class SealedSending {
      */
     synchronized void friendLeft() {
         if (accessKey == null) return;
+        byte[] key = new byte[Packet.ACCESS_KEY_BYTES];
+        new java.security.SecureRandom().nextBytes(key);
         try {
-            byte[] key = new byte[Packet.ACCESS_KEY_BYTES];
-            new java.security.SecureRandom().nextBytes(key);
-            client.connection.call(new Packet.SetAccessKey(java.security.MessageDigest.getInstance("SHA-256").digest(key)));
+            // kept here first: every login tells the server the hash of the key we keep, so even if
+            // telling it now fails, the old key stops working at the next login
             com.emirchat.e2e.Vault.write(client.dataDir.resolve(ACCESS_KEY_FILE), key);
-            accessKey = key;
-            gaveAccessKey.clear();
-            friendAccessKeys.keySet().retainAll(client.friends);
-            saveAccessKeys();
+        } catch (IOException e) {
+            return; // nothing changed: tried again at the next check
+        }
+        accessKey = key;
+        gaveAccessKey.clear();
+        friendAccessKeys.keySet().retainAll(client.friends);
+        saveAccessKeys();
+        try {
+            client.connection.call(new Packet.SetAccessKey(java.security.MessageDigest.getInstance("SHA-256").digest(key)));
         } catch (IOException | ApiException | java.security.NoSuchAlgorithmException e) {
-            // tried again when the next friend leaves; the client drops sealed messages from non-friends meanwhile
+            // the next login sends it; the client drops sealed messages from non-friends meanwhile
+        }
+    }
+
+    /** Anyone we gave our key to who is no longer a friend (removed while we were away, too): a new key. */
+    void checkHolders() {
+        if (accessKey == null) return;
+        for (String holder : gaveAccessKey) {
+            if (!client.friends.contains(holder)) {
+                friendLeft();
+                return;
+            }
         }
     }
 
