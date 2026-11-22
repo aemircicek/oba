@@ -336,7 +336,14 @@ final class ClientConnection {
                 yield new Packet.Ok();
             }
             case Packet.RemoveFriend r -> {
+                long other;
+                try {
+                    other = services.friends().friendId(me(), r.username());
+                } catch (java.sql.SQLException e) {
+                    other = 0;
+                }
                 services.friends().remove(me(), r.username());
+                if (other != 0) services.relay().forgetPair(me().id(), other); // no more relaying between them
                 yield new Packet.Ok();
             }
             case Packet.ListFriends l -> services.friends().list(me());

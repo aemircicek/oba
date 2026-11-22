@@ -117,4 +117,15 @@ class UdpRelayTest {
         relay.forget(1);
         assertNull(send(msg(UdpRelay.HELLO, second), emirAt), "gone with the user");
     }
+
+    @Test
+    void unfriendingEndsTheRelayBetweenThem() {
+        byte[] emir = relay.open(1, 2);
+        byte[] efe = relay.open(2, 1);
+        confirm(emir, emirAt);
+        confirm(efe, efeAt);
+        relay.forgetPair(2, 1);
+        assertNull(send(msg(UdpRelay.DATA, emir, new byte[10]), emirAt));
+        assertNull(send(msg(UdpRelay.HELLO, efe), efeAt));
+    }
 }

@@ -49,6 +49,8 @@ final class UdpRelay {
     static final int PER_USER = 4;
     /** A ticket nobody used for this long is dropped. */
     static final long IDLE_MS = 120_000;
+    /** However busy, a ticket ends after this long (a call needs a new one; friendship is checked again then). */
+    static final long MAX_LIFETIME_MS = 6 * 60 * 60_000L;
 
     /** Where to send what: the answer, or the forwarded packet. */
     record Out(byte[] data, InetSocketAddress to) {}
@@ -105,6 +107,13 @@ final class UdpRelay {
     /** The user is gone (their last connection closed): their tickets go too. */
     synchronized void forget(long user) {
         for (Ticket t : new ArrayList<>(byTicket.values())) if (t.user == user) remove(t);
+    }
+
+    /** Two people are no longer friends: neither may relay to the other any more. */
+    synchronized void forgetPair(long a, long b) {
+        for (Ticket t : new ArrayList<>(byTicket.values())) {
+            if ((t.user == a && t.peer == b) || (t.user == b && t.peer == a)) remove(t);
+        }
     }
 
     /** Calls relayed right now (tickets with a confirmed address on both sides, counted once). */
@@ -171,6 +180,10 @@ final class UdpRelay {
         Ticket other;
         synchronized (this) {
             t = byTicket.get(key(ticketBytes));
+            if (t != null && now - t.created > MAX_LIFETIME_MS) {
+                remove(t);
+                t = null;
+            }
             if (t == null || !from.equals(t.address) || size <= 0 || size > MAX_DATA) {
                 metrics.udpDropped.increment();
                 return null;
@@ -209,7 +222,9 @@ final class UdpRelay {
     }
 
     private void sweep(long now) {
-        for (Ticket t : new ArrayList<>(byTicket.values())) if (now - t.lastSeen > IDLE_MS) remove(t);
+        for (Ticket t : new ArrayList<>(byTicket.values())) {
+            if (now - t.lastSeen > IDLE_MS || now - t.created > MAX_LIFETIME_MS) remove(t);
+        }
     }
 
     synchronized void sweep() {
