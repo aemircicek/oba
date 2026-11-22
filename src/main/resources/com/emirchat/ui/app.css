@@ -368,6 +368,8 @@
     -fx-min-width: 18;
     -fx-alignment: center;
 }
+/* a muted chat still shows how much is unread, without drawing the eye */
+.unread-badge.quiet { -fx-background-color: -sc-surface-2; -fx-text-fill: -sc-text-2; }
 
 .presence-dot { -fx-background-radius: 999; -fx-min-width: 11; -fx-min-height: 11; -fx-max-width: 11; -fx-max-height: 11;
     -fx-border-color: -sc-surface; -fx-border-width: 2; -fx-border-radius: 999; }

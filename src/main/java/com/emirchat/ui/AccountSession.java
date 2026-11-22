@@ -143,6 +143,25 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     static final String NOTIFICATIONS = "notifications";
     static final String NOTIFICATION_PREVIEW = "notification-preview";
 
+    private NotifyRules notifyRules;
+
+    /** Per-chat notification levels, mutes and quiet hours. */
+    synchronized NotifyRules notifyRules() {
+        if (notifyRules == null) {
+            notifyRules = new NotifyRules(k -> {
+                String v = history.setting(k, "");
+                return v.isEmpty() ? null : v;
+            }, (k, v) -> {
+                try {
+                    history.setSetting(k, v);
+                } catch (IOException ignored) {
+                    // kept as it was
+                }
+            });
+        }
+        return notifyRules;
+    }
+
     boolean setting(String key) {
         return Boolean.parseBoolean(history.setting(key, "true"));
     }

@@ -87,6 +87,45 @@ final class SettingsDialogs {
         main.overlay.show(box);
     }
 
+    /** Quiet hours: no sounds or banners at night (direct messages and mentions may come through silently). */
+    private VBox quietHours() {
+        NotifyRules rules = main.session.notifyRules();
+        NotifyRules.Quiet q = rules.quiet();
+        javafx.scene.control.CheckBox on = new javafx.scene.control.CheckBox(I18n.t("settings.quiet"));
+        on.setId("setting-quiet");
+        on.setSelected(q.on());
+        ComboBox<java.time.LocalTime> from = timeChoice(q.start(), "setting-quiet-from");
+        ComboBox<java.time.LocalTime> to = timeChoice(q.end(), "setting-quiet-to");
+        javafx.scene.control.CheckBox through = new javafx.scene.control.CheckBox(I18n.t("settings.quietThrough"));
+        through.setId("setting-quiet-through");
+        through.setSelected(q.mentionsThrough());
+        Runnable save = () -> rules.setQuiet(new NotifyRules.Quiet(on.isSelected(), from.getValue(), to.getValue(),
+                through.isSelected()));
+        on.setOnAction(e -> save.run());
+        from.setOnAction(e -> save.run());
+        to.setOnAction(e -> save.run());
+        through.setOnAction(e -> save.run());
+        from.disableProperty().bind(on.selectedProperty().not());
+        to.disableProperty().bind(on.selectedProperty().not());
+        through.disableProperty().bind(on.selectedProperty().not());
+        HBox times = new HBox(8, on, UiKit.grow(), from, UiKit.label("–", "caption"), to);
+        times.setAlignment(Pos.CENTER_LEFT);
+        Label hint = UiKit.label(I18n.t("settings.quietHint"), "caption");
+        hint.setWrapText(true);
+        hint.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        return new VBox(4, times, through, hint);
+    }
+
+    private static ComboBox<java.time.LocalTime> timeChoice(java.time.LocalTime value, String id) {
+        ComboBox<java.time.LocalTime> box = new ComboBox<>();
+        box.setId(id);
+        for (int m = 0; m < 24 * 60; m += 30) box.getItems().add(java.time.LocalTime.of(m / 60, m % 60));
+        if (!box.getItems().contains(value)) box.getItems().add(value);
+        box.setValue(value);
+        box.setVisibleRowCount(8);
+        return box;
+    }
+
     void openSettings() {
         VBox toggles = new VBox(10,
                 toggle(I18n.t("settings.receipts"), I18n.t("settings.receiptsHint"),
@@ -103,6 +142,7 @@ final class SettingsDialogs {
             toggles.getChildren().add(appToggle(I18n.t("settings.keepRunning"), I18n.t("settings.keepRunningHint"),
                     "setting-keep-running", AppPrefs.keepRunning(), AppPrefs::setKeepRunning));
         }
+        toggles.getChildren().add(quietHours());
         toggles.getChildren().add(appToggle(I18n.t("settings.nudges"), I18n.t("settings.nudgesHint"),
                 "setting-nudges", AppPrefs.nudges(), AppPrefs::setNudges));
         toggles.getChildren().add(appToggle(I18n.t("settings.storm"), I18n.t("settings.stormHint", Sandstorm.SHORTCUT_TEXT),

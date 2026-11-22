@@ -50,6 +50,9 @@ final class ConversationView {
 
         /** Shows a dialog over the window; the runnable given to the builder closes it. */
         default void dialog(java.util.function.Function<Runnable, javafx.scene.layout.VBox> build) {}
+
+        /** Something shown in the chat list changed (a chat was muted, for example). */
+        default void sidebarChanged() {}
     }
 
     final AccountSession session;

@@ -237,10 +237,12 @@ final class Sidebar {
         return root == null ? I18n.t("main.formerGroup") : ConversationView.groupName(root);
     }
 
+    /** Unread messages of a chat that should draw attention (none for a muted chat). */
     int unread(String conversation, Map<String, History.Summary> summaries) {
         History.Summary s = summaries.get(conversation);
         boolean open = main.current != null && main.current.conversation().equals(conversation);
-        return s == null || open ? 0 : s.unread();
+        if (s == null || open) return 0;
+        return main.session.notifyRules().muted(conversation, System.currentTimeMillis()) ? 0 : s.unread();
     }
 
     Map<String, History.Summary> summaries() {
@@ -471,7 +473,18 @@ final class Sidebar {
             int inVoice = main.voiceRooms.getOrDefault(Long.parseLong(conversation.substring(2)), List.of()).size();
             if (inVoice > 0) right.getChildren().add(UiKit.label("🔊 " + inVoice, "voice-badge"));
         }
-        if (s != null && s.unread() > 0 && !open) right.getChildren().add(UiKit.label(String.valueOf(s.unread()), "unread-badge"));
+        boolean muted = main.session.notifyRules().muted(conversation, System.currentTimeMillis());
+        if (muted) {
+            javafx.scene.Node bell = Icons.of(Icons.BELL_OFF, 13, "muted");
+            bell.setId("muted-" + conversation.replace(':', '-'));
+            Tooltip.install(bell, new Tooltip(I18n.t("notify.mutedTip")));
+            right.getChildren().add(bell);
+        }
+        if (s != null && s.unread() > 0 && !open) {
+            Label badge = UiKit.label(String.valueOf(s.unread()), "unread-badge");
+            if (muted) badge.getStyleClass().add("quiet");
+            right.getChildren().add(badge);
+        }
         if (avatar instanceof javafx.scene.layout.Region r) r.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         HBox row = new HBox(avatar, text, UiKit.grow(), right);
         row.getStyleClass().add("list-row");

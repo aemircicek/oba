@@ -338,6 +338,10 @@ final class MainView implements AccountSession.View {
 
             @Override public void openGroupInfo(long groupId) { MainView.this.contacts.openGroupInfo(groupId); }
 
+            @Override public void sidebarChanged() {
+                sidebarUi.refreshSidebar();
+            }
+
             @Override public void dialog(java.util.function.Function<Runnable, javafx.scene.layout.VBox> build) {
                 overlay.show(build.apply(overlay::close));
             }
@@ -524,8 +528,10 @@ final class MainView implements AccountSession.View {
     @Override
     public void nudged(String user) {
         boolean focused = stack.getScene() != null && stack.getScene().getWindow() != null && stack.getScene().getWindow().isFocused();
-        Sounds.play();
-        if (!focused) Tray.get().notify("Oba", "🦂 " + I18n.t("nudge.received", user));
+        // a muted chat or quiet hours keep a nudge silent too
+        NotifyRules.Decision decision = session.notifyRules().decide(AccountSession.dm(user), true, NotifyRules.now());
+        if (decision == NotifyRules.Decision.NOTIFY) Sounds.play();
+        if (!focused && decision != NotifyRules.Decision.NONE) Tray.get().notify("Oba", "🦂 " + I18n.t("nudge.received", user));
         if (current != null && user.equals(current.peer())) {
             Nudge.play(current.layer, current.input); // waits on screen for when they look back, too
             return;
@@ -661,6 +667,10 @@ final class MainView implements AccountSession.View {
                 && stack.getScene().getWindow().isFocused();
         boolean visible = current != null && current.conversation().equals(m.conversation());
         if (focused && visible) return;
+        boolean mentioned = m.file() == null && Markdown.mentions(m.text(), session.client().username());
+        NotifyRules.Decision decision = session.notifyRules().decide(m.conversation(),
+                mentioned || m.conversation().startsWith("dm:"), NotifyRules.now());
+        if (decision == NotifyRules.Decision.NONE) return;
         String where = m.conversation().startsWith("g:") ? sidebarUi.groupName(Long.parseLong(m.conversation().substring(2)))
                 : m.sender();
         String title = m.conversation().startsWith("g:") ? I18n.t("notify.inGroup", m.sender(), where) : where;
@@ -670,7 +680,7 @@ final class MainView implements AccountSession.View {
                         : Markdown.plain(m.text()))
                 : I18n.t("notify.newMessage");
         Tray.get().notify(title, body);
-        Sounds.play();
+        if (decision == NotifyRules.Decision.NOTIFY) Sounds.play();
     }
 
     /** Called once the view is in a window: report reads when the window comes back into focus. */
@@ -705,8 +715,10 @@ final class MainView implements AccountSession.View {
     void showUnread() {
         int unread = 0;
         try {
+            long now = System.currentTimeMillis();
             for (History.Summary s : session.history().summaries()) {
-                if (current == null || !current.conversation().equals(s.conversation())) unread += s.unread();
+                if ((current == null || !current.conversation().equals(s.conversation()))
+                        && session.notifyRules().counts(s.conversation(), now)) unread += s.unread();
             }
         } catch (IOException ignored) {
             // leave the title as it is
