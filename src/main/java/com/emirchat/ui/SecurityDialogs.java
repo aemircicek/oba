@@ -73,7 +73,7 @@ final class SecurityDialogs {
         section.getChildren().setAll(UiKit.label(I18n.t("devices.title"), "h3"), wrap(I18n.t("devices.hint"), "caption"));
         for (Packet.DeviceInfo d : list) {
             String name = d.name().isBlank() ? (d.id() == 0 ? I18n.t("devices.first") : I18n.t("devices.unnamed")) : d.name();
-            Label title = UiKit.label(name + (d.current() ? "  · " + I18n.t("devices.thisOne") : ""), "row-title");
+            Label title = UiKit.label(name + (d.current() ? " · " + I18n.t("devices.thisOne") : ""), "row-title");
             Label sub = UiKit.label(d.online() ? I18n.t("conv.online")
                     : d.lastSeen() > 0 ? I18n.t("devices.lastSeen", UiKit.time(d.lastSeen())) : "", "row-sub");
             VBox text = new VBox(1, title, sub);
@@ -202,7 +202,10 @@ final class SecurityDialogs {
         };
         confirm.setOnAction(e -> go.run());
         code.setOnAction(e -> go.run());
-        VBox right = new VBox(8, wrap(I18n.t("security.scan"), "body"), text, new HBox(8, code, confirm), problem);
+        confirm.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        VBox right = new VBox(8, wrap(I18n.t("security.scan"), "body"), text, code, confirm, problem);
+        HBox.setHgrow(right, javafx.scene.layout.Priority.ALWAYS);
+        right.setMinWidth(0);
         HBox row = new HBox(14, qr, right);
         row.setAlignment(Pos.TOP_LEFT);
         twoStep.getChildren().setAll(UiKit.label(I18n.t("security.twoStep"), "h3"), row);

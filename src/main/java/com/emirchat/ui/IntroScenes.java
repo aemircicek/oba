@@ -26,7 +26,7 @@ import javafx.util.Duration;
 final class IntroScenes {
     static final double W = 340;
     static final double H = 130;
-    private static final double NUMBER_W = 150;
+    private static final double NUMBER_W = 128;
 
     private IntroScenes() {}
 

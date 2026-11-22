@@ -155,7 +155,7 @@ final class RoomVideoGrid implements RoomVideo.View {
             root.getChildren().clear();
             return;
         }
-        double width = Math.max(200, root.getWidth() > 0 ? root.getWidth() : 720);
+        double width = Math.max(200, (root.getWidth() > 0 ? root.getWidth() : 720) - 16); // a margin on both sides
         double height = Math.max(150, root.getHeight() > 0 ? root.getHeight() : 450);
         if (spotlight != null && tiles.containsKey(spotlight)) {
             Tile big = tiles.get(spotlight);

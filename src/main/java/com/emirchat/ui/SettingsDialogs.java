@@ -230,7 +230,10 @@ final class SettingsDialogs {
         Button security = new Button(I18n.t("security.title"));
         security.setId("security");
         security.setOnAction(e -> new SecurityDialogs(main).open());
-        VBox box = Overlay.dialog(I18n.t("main.settings"), scroll, new HBox(10, backup, looks, security, UiKit.grow(), done));
+        // two rows: the three pages, then Done; each button keeps its whole label
+        for (Button b : new Button[] {backup, looks, security, done}) b.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        javafx.scene.layout.FlowPane pages = new javafx.scene.layout.FlowPane(10, 8, backup, looks, security);
+        VBox box = Overlay.dialog(I18n.t("main.settings"), scroll, pages, new HBox(UiKit.grow(), done));
         box.setId("settings-dialog");
         main.overlay.show(box);
     }
@@ -285,6 +288,8 @@ final class SettingsDialogs {
         picker.setId("appearance-custom");
         picker.getStyleClass().addAll("small", "accent-picker");
         picker.setPrefWidth(52);
+        picker.setMinWidth(52);
+        HBox.setMargin(picker, new javafx.geometry.Insets(0, 8, 0, 4));
         picker.setStyle("-fx-color-label-visible: false;");
         picker.setTooltip(new Tooltip(I18n.t("appearance.customTip")));
         picker.setOnAction(e -> {
