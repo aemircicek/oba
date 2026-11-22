@@ -20,11 +20,13 @@ import javax.crypto.spec.SecretKeySpec;
 /**
  * Handing the account's identity key to a computer being linked (3.6).
  *
- * <p>The new computer makes a one-time X25519 key and shows a code made from it. The approving
- * computer shows the code of the key it received; the user compares the two, so a server that
- * swapped the key for its own would be seen. The approving computer then seals the identity key
- * to it: X25519 with a key of its own, HKDF-SHA256, AES-256-GCM. The server passes the sealed
- * bytes on and can read none of it.
+ * <p>Both computers make a one-time X25519 key. The new one first sends only a commitment (a hash)
+ * to its key; the approving one then sends its key; only then does the new one reveal its own.
+ * Both show a six-digit code made from both keys, which the user compares. A server in the middle
+ * would have to fix the keys it passes on before it sees the other side's, so it can do no better
+ * than guess a code (one chance in a million, with the user watching), as in ZRTP or Bluetooth's
+ * numeric comparison. The approving computer then seals the identity key to the new one: X25519,
+ * HKDF-SHA256, AES-256-GCM. The server can read none of it.
  */
 public final class DeviceLink {
     private static final byte[] INFO = "oba device link v1".getBytes(StandardCharsets.US_ASCII);
@@ -35,10 +37,24 @@ public final class DeviceLink {
     /** What the approving computer sends: its one-time public key and the sealed keys. */
     public record Sealed(byte[] ephemeral, byte[] ciphertext) {}
 
-    /** The code both computers show for the new computer's one-time key ("482 913"). */
-    public static String code(byte[] ephemeral) {
+    /** The new computer's commitment to its one-time key. */
+    public static byte[] commitment(byte[] joinerEphemeral) {
         try {
-            byte[] h = MessageDigest.getInstance("SHA-256").digest(ephemeral);
+            MessageDigest d = MessageDigest.getInstance("SHA-256");
+            d.update("oba link commit v1".getBytes(StandardCharsets.US_ASCII));
+            return d.digest(joinerEphemeral);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The code both computers show, from both one-time keys ("482 913"). */
+    public static String code(byte[] joinerEphemeral, byte[] approverEphemeral) {
+        try {
+            MessageDigest d = MessageDigest.getInstance("SHA-256");
+            d.update("oba link code v1".getBytes(StandardCharsets.US_ASCII));
+            d.update(joinerEphemeral);
+            byte[] h = d.digest(approverEphemeral);
             int n = (ByteBuffer.wrap(h).getInt() & 0x7fffffff) % 1_000_000;
             String s = String.format(java.util.Locale.ROOT, "%06d", n);
             return s.substring(0, 3) + " " + s.substring(3);
@@ -47,9 +63,8 @@ public final class DeviceLink {
         }
     }
 
-    /** Seals the account's identity key to the new computer's one-time key. */
-    public static Sealed seal(Identity account, byte[] theirEphemeral) throws IOException {
-        KeyPair mine = X25519.generate();
+    /** Seals the account's identity key to the new computer's one-time key, with our own one-time key. */
+    public static Sealed seal(Identity account, KeyPair mine, byte[] theirEphemeral) throws IOException {
         byte[] key = key(mine, theirEphemeral, X25519.encode(mine.getPublic()), theirEphemeral);
         byte[] plain = new Wire.Writer().u8(1).bytes(account.publicKeyBytes()).bytes(account.exportPrivate()).toByteArray();
         byte[] nonce = new byte[12];

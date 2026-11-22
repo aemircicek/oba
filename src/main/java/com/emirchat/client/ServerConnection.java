@@ -77,9 +77,40 @@ public final class ServerConnection implements AutoCloseable {
         }
     }
 
+    /**
+     * A second connection to the same server that never logs in, made with a one-time key, for
+     * sealed messages (3.6): the server sees an anonymous sender. It accepts only the very server
+     * key of this connection.
+     */
+    public ServerConnection anonymous() throws IOException, PeerRejectedException {
+        java.net.InetSocketAddress at = remoteAddress();
+        Socket s = new Socket();
+        try {
+            s.connect(at, CONNECT_TIMEOUT_MS);
+            s.setSoTimeout(Connector.HANDSHAKE_TIMEOUT_MS);
+            s.setTcpNoDelay(true);
+            FrameIO io = new FrameIO(s.getInputStream(), s.getOutputStream());
+            String expected = serverFingerprint;
+            Session session = Handshake.asClient(io, Identity.generate(), CLIENT_NAME, (name, fingerprint) -> {
+                if (!fingerprint.equalsIgnoreCase(expected)) throw new PeerRejectedException("Another server key");
+            });
+            s.setSoTimeout(0);
+            ServerConnection c = new ServerConnection(s, session);
+            c.startReader();
+            return c;
+        } catch (IOException | PeerRejectedException | RuntimeException e) {
+            Connector.closeQuietly(s);
+            throw e;
+        }
+    }
+
     /** The server's address as connected to (its UDP address service listens on the same port). */
     public java.net.InetSocketAddress remoteAddress() {
         return (java.net.InetSocketAddress) socket.getRemoteSocketAddress();
+    }
+
+    public boolean isClosed() {
+        return closed;
     }
 
     public String serverFingerprint() {

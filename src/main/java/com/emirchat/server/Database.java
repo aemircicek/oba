@@ -247,6 +247,10 @@ final class Database implements AutoCloseable {
                 s.execute("ALTER TABLE envelopes ADD COLUMN sender_device INTEGER NOT NULL DEFAULT 0");
                 s.execute("ALTER TABLE envelopes ADD COLUMN batch_id INTEGER NOT NULL DEFAULT 0");
                 s.execute("CREATE INDEX envelopes_device ON envelopes(recipient_id, device_id, id)");
+                // sealed sender: the server does not know who sent these (sender_id is the recipient's own)
+                s.execute("ALTER TABLE envelopes ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0");
+                s.execute("CREATE TABLE access_keys (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, "
+                        + "key_hash BLOB NOT NULL)");
                 s.execute("PRAGMA user_version = 9");
             }
         }
@@ -789,10 +793,39 @@ final class Database implements AutoCloseable {
     record DeviceKeysRow(byte[] dhIdentity, byte[] dhSig, int spkId, byte[] spk, byte[] spkSig) {}
 
     record QueuedEnvelope(long id, long senderId, String sender, long groupId, long sentAt, byte[] body, int senderDevice,
-                          long batchId) {
+                          long batchId, boolean sealed) {
         QueuedEnvelope(long id, long senderId, String sender, long groupId, long sentAt, byte[] body) {
-            this(id, senderId, sender, groupId, sentAt, body, 0, id);
+            this(id, senderId, sender, groupId, sentAt, body, 0, id, false);
         }
+    }
+
+    /** The hash of the key friends present to send sealed messages to this user, or null. */
+    synchronized byte[] accessKey(long userId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT key_hash FROM access_keys WHERE user_id = ?")) {
+            ps.setLong(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getBytes(1) : null;
+            }
+        }
+    }
+
+    synchronized void setAccessKey(long userId, byte[] hash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO access_keys (user_id, key_hash) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET key_hash = excluded.key_hash")) {
+            ps.setLong(1, userId);
+            ps.setBytes(2, hash);
+            ps.executeUpdate();
+        }
+    }
+
+    /** A sealed envelope: who sent it is inside, encrypted; the server records the recipient in its place. */
+    synchronized long queueSealed(long recipientId, int deviceId, long sentAt, byte[] body, long batchId) throws SQLException {
+        long id = queueEnvelope(recipientId, deviceId, recipientId, 0, 0, sentAt, body, batchId);
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE envelopes SET sealed = 1 WHERE id = ?")) {
+            ps.setLong(1, id);
+            ps.executeUpdate();
+        }
+        return id;
     }
 
     synchronized void putDeviceKeys(long userId, DeviceKeysRow k) throws SQLException {
@@ -959,7 +992,7 @@ final class Database implements AutoCloseable {
     synchronized List<QueuedEnvelope> queuedFor(long recipientId, int deviceId, int limit) throws SQLException {
         List<QueuedEnvelope> result = new ArrayList<>();
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT e.id, e.sender_id, u.username, e.group_id, e.sent_at, e.body, e.sender_device, e.batch_id "
+                "SELECT e.id, e.sender_id, u.username, e.group_id, e.sent_at, e.body, e.sender_device, e.batch_id, e.sealed "
                         + "FROM envelopes e JOIN users u ON u.id = e.sender_id "
                         + "WHERE e.recipient_id = ? AND e.device_id = ? ORDER BY e.id LIMIT ?")) {
             ps.setLong(1, recipientId);
@@ -968,7 +1001,7 @@ final class Database implements AutoCloseable {
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     result.add(new QueuedEnvelope(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getLong(4), rs.getLong(5),
-                            rs.getBytes(6), rs.getInt(7), rs.getLong(8)));
+                            rs.getBytes(6), rs.getInt(7), rs.getLong(8), rs.getInt(9) == 1));
                 }
             }
         }
@@ -990,13 +1023,14 @@ final class Database implements AutoCloseable {
         long sender;
         long batch;
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT sender_id, batch_id FROM envelopes WHERE id = ? AND recipient_id = ? AND device_id = ?")) {
+                "SELECT sender_id, batch_id, sealed FROM envelopes WHERE id = ? AND recipient_id = ? AND device_id = ?")) {
             ps.setLong(1, envelopeId);
             ps.setLong(2, recipientId);
             ps.setInt(3, deviceId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return null;
-                sender = rs.getLong(1);
+                // a sealed envelope has no sender to tell: as if it came from the recipient itself
+                sender = rs.getInt(3) == 1 ? recipientId : rs.getLong(1);
                 batch = rs.getLong(2);
             }
         }

@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.emirchat.api.ApiException;
 import com.emirchat.api.Packet;
 import com.emirchat.client.ChatClient;
-import com.emirchat.client.DeviceLink;
 import com.emirchat.client.ServerConnection;
 import com.emirchat.crypto.Identity;
 import com.emirchat.trust.KnownPeers;
@@ -38,7 +37,7 @@ class MultiDeviceTest {
         final BlockingQueue<String> got = new LinkedBlockingQueue<>();
         final BlockingQueue<String> ours = new LinkedBlockingQueue<>();
         final BlockingQueue<String> problems = new LinkedBlockingQueue<>();
-        final BlockingQueue<Packet.LinkRequest> links = new LinkedBlockingQueue<>();
+        final BlockingQueue<ChatClient.LinkPrompt> links = new LinkedBlockingQueue<>();
         final BlockingQueue<Boolean> removed = new LinkedBlockingQueue<>();
 
         Computer(String name) throws Exception {
@@ -64,7 +63,7 @@ class MultiDeviceTest {
 
                         @Override public void undecryptable(String from, String reason) { problems.add(from + ": " + reason); }
 
-                        @Override public void linkRequest(Packet.LinkRequest r) { links.add(r); }
+                        @Override public void linkRequest(ChatClient.LinkPrompt r) { links.add(r); }
 
                         @Override public void deviceRemoved() { removed.add(true); }
                     });
@@ -103,9 +102,9 @@ class MultiDeviceTest {
                 throw new RuntimeException(e);
             }
         });
-        Packet.LinkRequest request = laptop.links.poll(10, TimeUnit.SECONDS);
+        ChatClient.LinkPrompt request = laptop.links.poll(10, TimeUnit.SECONDS);
         assertNotNull(request, "the laptop was asked");
-        assertEquals(shown.get(5, TimeUnit.SECONDS), DeviceLink.code(request.ephemeral()), "both show the same code");
+        assertEquals(shown.get(5, TimeUnit.SECONDS), request.code(), "both show the same code");
         laptop.client.approveLink(request, laptop.identity);
         ChatClient.Linked result = linked.get(10, TimeUnit.SECONDS);
         assertEquals(laptop.identity.fingerprint(), result.account().fingerprint(), "the same account key");

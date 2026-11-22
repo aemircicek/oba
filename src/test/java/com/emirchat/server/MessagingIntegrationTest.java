@@ -119,7 +119,8 @@ class MessagingIntegrationTest {
             efe.close(); // efe goes offline
 
             for (int i = 1; i <= 3; i++) emir.client.sendText("efe", "offline " + i);
-            assertEquals(3, queued(), "waiting on the server");
+            // and, with the first message, emir's access key for sealed messages (never shown)
+            assertEquals(4, queued(), "waiting on the server");
 
             try (Device efeBack = new Device("efe-laptop").start("efe", false)) {
                 for (int i = 1; i <= 3; i++) assertEquals("emir: offline " + i, efeBack.nextMessage());

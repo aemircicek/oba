@@ -39,6 +39,9 @@ public sealed interface Packet {
     int MAX_CODE_BYTES = 32;
     int MAX_DEVICES = 16;
     int DEVICE_SECRET_BYTES = 32;
+    int ACCESS_KEY_BYTES = 16;
+    /** A commitment to a one-time key while linking: SHA-256. */
+    int COMMITMENT_BYTES = 32;
     int MAX_DEVICE_NAME_BYTES = 64;
     int MAX_LINK_BYTES = 32 * 1024;
 
@@ -263,16 +266,16 @@ public sealed interface Packet {
      * A new computer asks to join the account. Checked like a login (password, and the code when
      * two-step login is on), but nothing is bound: the account's devices are asked instead.
      *
-     * @param ephemeral an X25519 key the approving device seals the account's keys to
+     * @param commitment SHA-256 of the one-time key it will reveal once the approving device has sent its own
      */
-    record LinkLogin(String username, String password, String code, byte[] ephemeral, String name) implements Packet {
+    record LinkLogin(String username, String password, String code, byte[] commitment, String name) implements Packet {
         @Override public String toString() { return "LinkLogin[" + username + "]"; }
     }
 
     record LinkPending(long linkId) implements Packet {}
 
     /** Pushed to the account's devices: a computer asks to join. */
-    record LinkRequest(long linkId, String name, byte[] ephemeral) implements Packet {}
+    record LinkRequest(long linkId, String name, byte[] commitment) implements Packet {}
 
     /** An existing device approves, with the account's keys sealed to the new computer's key. */
     record LinkApprove(long linkId, byte[] ephemeral, byte[] sealed) implements Packet {}
@@ -283,6 +286,33 @@ public sealed interface Packet {
     record LinkGranted(int deviceId, byte[] ephemeral, byte[] sealed, byte[] secret) implements Packet {
         @Override public String toString() { return "LinkGranted[" + deviceId + "]"; }
     }
+
+    /** The hash (SHA-256) of the key friends must show to send us sealed messages (3.6). */
+    record SetAccessKey(byte[] keyHash) implements Packet {}
+
+    /**
+     * A sealed message, sent without logging in: the server checks the recipient's access key and
+     * that every one of their devices gets a copy, and never learns who sent it.
+     */
+    record SendSealed(String recipient, byte[] accessKey, List<DeviceEnvelope> copies) implements Packet {
+        public SendSealed {
+            copies = List.copyOf(copies);
+        }
+
+        @Override public String toString() { return "SendSealed[" + recipient + ", " + copies.size() + "]"; }
+    }
+
+    /** The approving device's one-time key, sent before it sees the new computer's (see DeviceLink). */
+    record LinkOffer(long linkId, byte[] ephemeral) implements Packet {}
+
+    /** Pushed to the waiting computer: the approving device's one-time key. */
+    record LinkOffered(long linkId, byte[] ephemeral) implements Packet {}
+
+    /** The waiting computer opens its commitment: its one-time key. */
+    record LinkReveal(long linkId, byte[] ephemeral) implements Packet {}
+
+    /** Pushed to the device that offered: the new computer's key; now both show the code. */
+    record LinkRevealed(long linkId, String name, byte[] ephemeral) implements Packet {}
 
     /** An envelope, with which of its sender's devices sent it (pushed to 3.6 apps that said SetDevice). */
     record EnvelopeReceivedFrom(Envelope envelope, int senderDevice) implements Packet {}
@@ -639,6 +669,15 @@ public sealed interface Packet {
             case TwoFactorState t -> w.u8(137).i64(requestId).u8(t.enabled() ? 1 : 0).i64(t.recoveryLeft());
             case SetDevice d -> w.u8(60).i64(requestId).i64(d.deviceId()).string(d.name()).bytes(d.secret());
             case DeviceSecret d -> w.u8(145).i64(requestId).bytes(d.secret());
+            case SetAccessKey a -> w.u8(68).i64(requestId).bytes(a.keyHash());
+            case SendSealed s -> {
+                w.u8(69).i64(requestId).string(s.recipient()).bytes(s.accessKey()).u16(s.copies().size());
+                for (DeviceEnvelope c : s.copies()) w.i64(c.deviceId()).bytes(c.body());
+            }
+            case LinkOffer o -> w.u8(70).i64(requestId).i64(o.linkId()).bytes(o.ephemeral());
+            case LinkReveal r -> w.u8(71).i64(requestId).i64(r.linkId()).bytes(r.ephemeral());
+            case LinkOffered o -> w.u8(146).i64(requestId).i64(o.linkId()).bytes(o.ephemeral());
+            case LinkRevealed r -> w.u8(147).i64(requestId).i64(r.linkId()).string(r.name()).bytes(r.ephemeral());
             case FetchDeviceBundles f -> w.u8(61).i64(requestId).string(f.username());
             case SendToDevices s -> {
                 w.u8(62).i64(requestId).string(s.recipient()).u16(s.copies().size());
@@ -647,7 +686,7 @@ public sealed interface Packet {
             case ListDevices l -> w.u8(63).i64(requestId);
             case RemoveDevice d -> w.u8(64).i64(requestId).i64(d.deviceId());
             case LinkLogin l -> w.u8(65).i64(requestId).string(l.username()).string(l.password()).string(l.code())
-                    .bytes(l.ephemeral()).string(l.name());
+                    .bytes(l.commitment()).string(l.name());
             case LinkApprove a -> w.u8(66).i64(requestId).i64(a.linkId()).bytes(a.ephemeral()).bytes(a.sealed());
             case LinkDeny d -> w.u8(67).i64(requestId).i64(d.linkId());
             case DeviceBundles b -> {
@@ -667,7 +706,7 @@ public sealed interface Packet {
                 }
             }
             case LinkPending p -> w.u8(140).i64(requestId).i64(p.linkId());
-            case LinkRequest l -> w.u8(141).i64(requestId).i64(l.linkId()).string(l.name()).bytes(l.ephemeral());
+            case LinkRequest l -> w.u8(141).i64(requestId).i64(l.linkId()).string(l.name()).bytes(l.commitment());
             case LinkGranted g -> w.u8(142).i64(requestId).i64(g.deviceId()).bytes(g.ephemeral()).bytes(g.sealed())
                     .bytes(g.secret());
             case DeviceRemoved d -> w.u8(143).i64(requestId).i64(d.deviceId());
@@ -792,6 +831,19 @@ public sealed interface Packet {
             case 137 -> new TwoFactorState(bool(r.u8()), (int) r.i64());
             case 60 -> new SetDevice(deviceId(r), r.string(MAX_DEVICE_NAME_BYTES), r.bytes(DEVICE_SECRET_BYTES));
             case 145 -> new DeviceSecret(r.exactBytes(DEVICE_SECRET_BYTES));
+            case 68 -> new SetAccessKey(r.exactBytes(32));
+            case 69 -> {
+                String recipient = r.string(MAX_USERNAME_BYTES);
+                byte[] access = r.exactBytes(ACCESS_KEY_BYTES);
+                int n = r.count(MAX_DEVICES);
+                List<DeviceEnvelope> copies = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) copies.add(new DeviceEnvelope(deviceId(r), r.bytes(MAX_ENVELOPE_BYTES)));
+                yield new SendSealed(recipient, access, copies);
+            }
+            case 70 -> new LinkOffer(r.i64(), r.exactBytes(X25519_KEY));
+            case 71 -> new LinkReveal(r.i64(), r.exactBytes(X25519_KEY));
+            case 146 -> new LinkOffered(r.i64(), r.exactBytes(X25519_KEY));
+            case 147 -> new LinkRevealed(r.i64(), r.string(MAX_DEVICE_NAME_BYTES), r.exactBytes(X25519_KEY));
             case 61 -> new FetchDeviceBundles(r.string(MAX_USERNAME_BYTES));
             case 62 -> {
                 String recipient = r.string(MAX_USERNAME_BYTES);
@@ -803,7 +855,7 @@ public sealed interface Packet {
             case 63 -> new ListDevices();
             case 64 -> new RemoveDevice(deviceId(r));
             case 65 -> new LinkLogin(r.string(MAX_USERNAME_BYTES), r.string(MAX_PASSWORD_BYTES), r.string(MAX_CODE_BYTES),
-                    r.exactBytes(X25519_KEY), r.string(MAX_DEVICE_NAME_BYTES));
+                    r.exactBytes(COMMITMENT_BYTES), r.string(MAX_DEVICE_NAME_BYTES));
             case 66 -> new LinkApprove(r.i64(), r.exactBytes(X25519_KEY), r.bytes(MAX_LINK_BYTES));
             case 67 -> new LinkDeny(r.i64());
             case 138 -> {
@@ -827,7 +879,7 @@ public sealed interface Packet {
                 yield new DeviceList(list);
             }
             case 140 -> new LinkPending(r.i64());
-            case 141 -> new LinkRequest(r.i64(), r.string(MAX_DEVICE_NAME_BYTES), r.exactBytes(X25519_KEY));
+            case 141 -> new LinkRequest(r.i64(), r.string(MAX_DEVICE_NAME_BYTES), r.exactBytes(COMMITMENT_BYTES));
             case 142 -> new LinkGranted((int) r.i64(), r.bytes(X25519_KEY), r.bytes(MAX_LINK_BYTES), r.bytes(DEVICE_SECRET_BYTES));
             case 143 -> new DeviceRemoved(deviceId(r));
             case 144 -> new EnvelopeReceivedFrom(new Envelope(r.i64(), r.string(MAX_USERNAME_BYTES), r.i64(), r.i64(),

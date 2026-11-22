@@ -10,9 +10,11 @@ import java.util.Map;
 
 /**
  * Linking a new computer to an account (3.6). The new computer proves the password (and the
- * two-step code), then waits; the account's devices are asked, and one of them approves by sealing
- * the account's keys to the new computer's one-time key. The server only passes the sealed bytes
- * on: it can neither read them nor approve on its own.
+ * two-step code), then waits; the account's devices are asked. One of them offers its one-time key;
+ * only then does the new computer reveal the key it had committed to, so both can show a code made
+ * from both keys, which the user compares. The approving device then seals the account's keys to
+ * the new computer. The server only passes things on: it cannot read the sealed keys, approve on
+ * its own, or pick keys that would give matching codes.
  */
 final class LinkService {
     /** A request nobody answered is dropped after this long. */
@@ -21,7 +23,34 @@ final class LinkService {
     /** Devices one account may have. */
     static final int MAX_DEVICES = Packet.MAX_DEVICES;
 
-    private record Pending(long id, long userId, String name, byte[] ephemeral, ClientConnection waiting, long since) {}
+    private static final class Pending {
+        final long id;
+        final long userId;
+        final String name;
+        final byte[] commitment;
+        final ClientConnection waiting;
+        final long since;
+        ClientConnection offerer;
+        byte[] offered;
+        boolean revealed;
+
+        Pending(long id, long userId, String name, byte[] commitment, ClientConnection waiting, long since) {
+            this.id = id;
+            this.userId = userId;
+            this.name = name;
+            this.commitment = commitment;
+            this.waiting = waiting;
+            this.since = since;
+        }
+
+        long userId() { return userId; }
+
+        long since() { return since; }
+
+        String name() { return name; }
+
+        ClientConnection waiting() { return waiting; }
+    }
 
     private final Database db;
     private final Presence presence;
@@ -34,7 +63,7 @@ final class LinkService {
     }
 
     /** A new computer asks; its password (and code) were checked. Asks the account's 3.6 devices. */
-    long request(Database.User user, String name, byte[] ephemeral, ClientConnection waiting) throws ApiException {
+    long request(Database.User user, String name, byte[] commitment, ClientConnection waiting) throws ApiException {
         long now = System.currentTimeMillis();
         boolean asked = false;
         long id;
@@ -53,11 +82,11 @@ final class LinkService {
             do {
                 id = random.nextLong() & Long.MAX_VALUE;
             } while (id == 0 || pending.containsKey(id));
-            pending.put(id, new Pending(id, user.id(), name, ephemeral.clone(), waiting, now));
+            pending.put(id, new Pending(id, user.id(), name, commitment.clone(), waiting, now));
         }
         for (ClientConnection c : presence.connections(user.id())) {
             if (c.multiDevice()) {
-                c.push(new Packet.LinkRequest(id, name, ephemeral));
+                c.push(new Packet.LinkRequest(id, name, commitment));
                 asked = true;
             }
         }
@@ -71,9 +100,39 @@ final class LinkService {
         return id;
     }
 
-    /** One of the account's devices approves: a new device id, and the sealed keys go to the waiting computer. */
+    /** One of the account's devices offers its one-time key (the first to offer handles the request). */
+    void offer(Database.User user, long linkId, byte[] ephemeral, ClientConnection from) throws ApiException {
+        Pending p;
+        synchronized (this) {
+            p = pending.get(linkId);
+            if (p == null || p.userId != user.id() || p.offerer != null || System.currentTimeMillis() - p.since > WAIT_MS) {
+                throw new ApiException(ErrorCode.INVALID_REQUEST, "That computer is no longer waiting.");
+            }
+            p.offerer = from;
+            p.offered = ephemeral.clone();
+        }
+        p.waiting.push(new Packet.LinkOffered(linkId, ephemeral));
+    }
+
+    /** The waiting computer reveals the key it committed to; the offering device checks the commitment. */
+    void reveal(long linkId, byte[] ephemeral, ClientConnection from) throws ApiException {
+        Pending p;
+        synchronized (this) {
+            p = pending.get(linkId);
+            if (p == null || p.waiting != from || p.offerer == null || p.revealed) {
+                throw new ApiException(ErrorCode.INVALID_REQUEST, "Not expected now.");
+            }
+            p.revealed = true;
+        }
+        p.offerer.push(new Packet.LinkRevealed(linkId, p.name, ephemeral));
+    }
+
+    /** The offering device approves: a new device id, and the sealed keys go to the waiting computer. */
     void approve(Database.User approver, long linkId, byte[] ephemeral, byte[] sealed) throws ApiException {
         Pending p = take(approver, linkId);
+        if (!p.revealed || !java.util.Arrays.equals(p.offered, ephemeral)) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST, "Compare the codes first.");
+        }
         int deviceId;
         try {
             java.util.Set<Integer> used = new java.util.HashSet<>();

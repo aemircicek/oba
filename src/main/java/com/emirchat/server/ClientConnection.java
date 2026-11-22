@@ -430,10 +430,26 @@ final class ClientConnection {
                 for (ClientConnection c : services.presence().connections(u.id())) if (c.deviceId() == r.deviceId()) c.removed();
                 yield new Packet.Ok();
             }
+            case Packet.SetAccessKey a -> {
+                services.messages().setAccessKey(me(), a.keyHash());
+                yield new Packet.Ok();
+            }
+            case Packet.SendSealed s -> {
+                services.metrics().envelopes.increment();
+                yield services.messages().sendSealed(s.recipient(), s.accessKey(), s.copies(), local ? null : address);
+            }
             case Packet.LinkLogin l -> {
                 requireLoggedOut();
                 Database.User u = services.accounts().checkForLink(l.username(), l.password(), l.code(), address);
-                yield new Packet.LinkPending(services.links().request(u, l.name(), l.ephemeral(), this));
+                yield new Packet.LinkPending(services.links().request(u, l.name(), l.commitment(), this));
+            }
+            case Packet.LinkOffer o -> {
+                services.links().offer(me(), o.linkId(), o.ephemeral(), this);
+                yield new Packet.Ok();
+            }
+            case Packet.LinkReveal r -> {
+                services.links().reveal(r.linkId(), r.ephemeral(), this);
+                yield new Packet.Ok();
             }
             case Packet.LinkApprove a -> {
                 services.links().approve(me(), a.linkId(), a.ephemeral(), a.sealed());

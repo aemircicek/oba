@@ -168,6 +168,61 @@ final class MessageService {
         }
     }
 
+    /** Wrong access keys from one address before it is refused for a while (guessing 128 bits is hopeless anyway). */
+    private final RateLimiter sealedFailures = new RateLimiter(20, Duration.ofMinutes(15), Clock.systemUTC());
+
+    /**
+     * A sealed message (3.6): accepted from a connection that need not be logged in, if it shows the
+     * recipient's access key, which only their friends got from them, end-to-end encrypted. Every
+     * receiving device must be a 3.6 app (older ones could not open it) and get a copy.
+     */
+    Packet.EnvelopeAccepted sendSealed(String recipientName, byte[] accessKey, List<Packet.DeviceEnvelope> copies,
+                                       String address) throws ApiException {
+        if (address != null && sealedFailures.isBlocked(address)) {
+            throw new ApiException(ErrorCode.RATE_LIMITED, "Too many refused messages. Try again later.");
+        }
+        try {
+            String name = AccountService.normalize(recipientName);
+            Optional<Database.User> found = AccountService.USERNAME.matcher(name).matches() ? db.findUser(name) : Optional.empty();
+            byte[] stored = found.isPresent() ? db.accessKey(found.get().id()) : null;
+            byte[] given = java.security.MessageDigest.getInstance("SHA-256").digest(accessKey);
+            if (stored == null || !java.security.MessageDigest.isEqual(stored, given)) {
+                if (address != null) sealedFailures.recordFailure(address);
+                throw new ApiException(ErrorCode.NOT_FRIENDS, "Not accepted.");
+            }
+            Database.User recipient = found.get();
+            Map<Integer, Boolean> devices = db.receivingDevices(recipient.id());
+            java.util.Set<Integer> covered = new java.util.TreeSet<>();
+            for (Packet.DeviceEnvelope c : copies) covered.add(c.deviceId());
+            if (!devices.keySet().equals(covered) || covered.size() != copies.size() || devices.containsValue(false)) {
+                throw new ApiException(ErrorCode.STALE_DEVICES, "The devices changed.");
+            }
+            if (db.queuedCount(recipient.id()) + copies.size() > MAX_QUEUED_PER_RECIPIENT) {
+                throw new ApiException(ErrorCode.LIMIT_REACHED, "The inbox is full.");
+            }
+            long now = clock.millis();
+            long batch = 0;
+            for (Packet.DeviceEnvelope c : copies) {
+                long id = db.queueSealed(recipient.id(), c.deviceId(), now, c.body(), batch);
+                if (batch == 0) batch = id;
+                pushToDevice(recipient.id(), c.deviceId(), new Packet.Envelope(id, "", 0, now, c.body()), 0);
+            }
+            return new Packet.EnvelopeAccepted(batch, now);
+        } catch (SQLException e) {
+            throw storage();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    void setAccessKey(Database.User me, byte[] hash) throws ApiException {
+        try {
+            db.setAccessKey(me.id(), hash);
+        } catch (SQLException e) {
+            throw storage();
+        }
+    }
+
     private void pushToDevice(long userId, int deviceId, Packet.Envelope e, int senderDevice) {
         for (ClientConnection c : presence.connections(userId)) {
             if (c.deviceId() == deviceId) c.pushEnvelope(e, senderDevice);
@@ -235,7 +290,8 @@ final class MessageService {
         try {
             List<Database.QueuedEnvelope> queued = db.queuedFor(me.id(), to.deviceId(), PUSH_BATCH);
             for (Database.QueuedEnvelope e : queued) {
-                to.pushEnvelope(new Packet.Envelope(e.id(), e.sender(), e.groupId(), e.sentAt(), e.body()), e.senderDevice());
+                to.pushEnvelope(new Packet.Envelope(e.id(), e.sealed() ? "" : e.sender(), e.groupId(), e.sentAt(), e.body()),
+                        e.senderDevice());
             }
             return queued.size();
         } catch (SQLException e) {

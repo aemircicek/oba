@@ -56,7 +56,7 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
         default void call(com.emirchat.call.Calls.Call call) {}
 
         /** Another computer asks to join the account. */
-        default void linkRequest(com.emirchat.api.Packet.LinkRequest request) {}
+        default void linkRequest(ChatClient.LinkPrompt prompt) {}
 
         /** A reply arrived in the thread of {@code rootId} (local id of the first message). */
         default void threadReply(History.Message reply, long rootId) {}
@@ -386,8 +386,8 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     }
 
     @Override
-    public void linkRequest(com.emirchat.api.Packet.LinkRequest request) {
-        fx(v -> v.linkRequest(request));
+    public void linkRequest(ChatClient.LinkPrompt prompt) {
+        fx(v -> v.linkRequest(prompt));
     }
 
     private void incoming(ChatClient.Incoming m, String conversation) {

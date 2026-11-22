@@ -217,6 +217,16 @@ public final class Messenger {
         }
     }
 
+    /** Opens a sealed envelope addressed to this device (3.6); the sender's signature is checked. */
+    public synchronized SealedSender.Opened unseal(byte[] sealed) {
+        return SealedSender.open(keys.dhIdentity(), sealed);
+    }
+
+    /** This device's X25519 identity key, as others seal to it. */
+    public synchronized byte[] dhIdentityPublic() {
+        return X25519.encode(keys.dhIdentity().getPublic());
+    }
+
     /** Forgets all sessions with a peer (e.g. after their key changed and was re-verified). */
     public synchronized void resetSessions(String peer) throws IOException {
         checkPeer(peer);
