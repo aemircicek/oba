@@ -227,7 +227,10 @@ final class SettingsDialogs {
         scroll.getStyleClass().add("dialog-scroll");
         scroll.setPrefViewportHeight(430);
         scroll.setMaxHeight(470);
-        VBox box = Overlay.dialog(I18n.t("main.settings"), scroll, new HBox(10, backup, looks, UiKit.grow(), done));
+        Button security = new Button(I18n.t("security.title"));
+        security.setId("security");
+        security.setOnAction(e -> new SecurityDialogs(main).open());
+        VBox box = Overlay.dialog(I18n.t("main.settings"), scroll, new HBox(10, backup, looks, security, UiKit.grow(), done));
         box.setId("settings-dialog");
         main.overlay.show(box);
     }

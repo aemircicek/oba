@@ -100,19 +100,83 @@ public final class History implements AutoCloseable {
     public record Summary(String conversation, String lastSender, String lastText, long lastAt, int unread) {}
 
     private final Connection db;
-    private final SecretKey key;
+    private SecretKey key;
     private final Path file;
-    private final SearchTerms terms;
+    private SearchTerms terms;
 
     private History(Connection db, SecretKey key, Path file) {
         this.db = db;
-        this.key = key;
         this.file = file;
+        useKey(key);
+    }
+
+    private void useKey(SecretKey key) {
+        this.key = key;
         byte[] raw = key.getEncoded();
         byte[] indexKey = com.emirchat.crypto.Hkdf.expand(raw, "oba history search index".getBytes(StandardCharsets.UTF_8), 32);
         Arrays.fill(raw, (byte) 0);
         this.terms = new SearchTerms(indexKey);
         Arrays.fill(indexKey, (byte) 0);
+    }
+
+    /**
+     * The account's password changed: everything encrypted here is encrypted again under a key
+     * from the new one (in one transaction), and the search index is built again with it.
+     */
+    public synchronized void changePassword(String newPassword) throws IOException {
+        changePassword(newPassword, KDF_ITERATIONS);
+    }
+
+    synchronized void changePassword(String newPassword, int iterations) throws IOException {
+        byte[] salt = new byte[16];
+        RANDOM.nextBytes(salt);
+        SecretKey newKey = deriveKey(newPassword, salt, iterations);
+        SecretKey oldKey = key;
+        String[][] sealed = {{"messages", "id", "body"}, {"reactions", "rowid", "emoji"}, {"votes", "rowid", "choice"},
+                {"topics", "rowid", "body"}};
+        try {
+            db.setAutoCommit(false);
+            try {
+                for (String[] t : sealed) {
+                    List<Object[]> rows = new ArrayList<>();
+                    try (Statement st = db.createStatement();
+                         ResultSet rs = st.executeQuery("SELECT " + t[1] + ", " + t[2] + " FROM " + t[0])) {
+                        while (rs.next()) rows.add(new Object[] {rs.getLong(1), rs.getBytes(2)});
+                    }
+                    try (PreparedStatement ps = db.prepareStatement("UPDATE " + t[0] + " SET " + t[2] + " = ? WHERE " + t[1] + " = ?")) {
+                        for (Object[] r : rows) {
+                            key = oldKey;
+                            byte[] plain = open((byte[]) r[1]);
+                            if (plain == null) continue; // unreadable already: left as it is
+                            key = newKey;
+                            ps.setBytes(1, seal(plain));
+                            ps.setLong(2, (Long) r[0]);
+                            ps.addBatch();
+                        }
+                        ps.executeBatch();
+                    }
+                }
+                try (Statement st = db.createStatement()) {
+                    st.execute("DELETE FROM search_index");
+                    st.execute("UPDATE messages SET indexed = 0");
+                }
+                try (PreparedStatement ps = db.prepareStatement("UPDATE meta SET v = ? WHERE k = 'salt'")) {
+                    ps.setBytes(1, salt);
+                    ps.executeUpdate();
+                }
+                db.commit();
+            } catch (SQLException | IOException e) {
+                db.rollback();
+                key = oldKey;
+                throw e;
+            } finally {
+                db.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            key = oldKey;
+            throw new IOException("Could not re-encrypt the history: " + e.getMessage(), e);
+        }
+        useKey(newKey);
     }
 
     /** The database file (for backups). */

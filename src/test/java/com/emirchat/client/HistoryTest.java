@@ -227,6 +227,29 @@ class HistoryTest {
     }
 
     @Test
+    void aNewPasswordReEncryptsEverything() throws Exception {
+        Path file = dir.resolve("h.db");
+        try (History h = History.open(file, "old pw", 1000)) {
+            h.add("dm:efe", "efe", "kervan yarın", 1, false, History.RECEIVED, 1, 0, uid(1), null);
+            h.react("dm:efe", uid(1), "emir", "👍");
+            h.setTopic("g:1", "konu");
+            h.changePassword("new pw", 1000);
+            assertEquals("kervan yarın", h.load("dm:efe", 10).get(0).text(), "still readable in this session");
+            h.indexBacklog(100);
+            assertEquals(1, h.search("kervan", 10).size());
+        }
+        try (History h = History.open(file, "new pw", 1000)) {
+            assertEquals("kervan yarın", h.load("dm:efe", 10).get(0).text());
+            assertEquals("👍", h.reactions("dm:efe").values().iterator().next().get("emir"));
+            assertEquals("konu", h.topic("g:1"));
+            assertEquals(1, h.search("kervan", 10).size());
+        }
+        try (History h = History.open(file, "old pw", 1000)) {
+            assertEquals("[unreadable]", h.load("dm:efe", 10).get(0).text(), "the old password opens nothing");
+        }
+    }
+
+    @Test
     void settingsPersist() throws Exception {
         Path file = dir.resolve("h.db");
         try (History h = History.open(file, "pw", 1000)) {

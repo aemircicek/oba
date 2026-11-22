@@ -202,7 +202,8 @@ final class AppShell {
                 History history = History.open(accounts.resolve(user).resolve("history.db"), r.password());
                 s = new AccountSession(history);
                 s.setHome(home);
-                ChatClient client = ChatClient.start(open(login, screen), identity, accounts, user, r.password(), r.register(), s);
+                ChatClient client = ChatClient.start(open(login, screen), identity, accounts, user, r.password(), r.code(),
+                        r.register(), s);
                 s.attach(client);
                 rememberChoice(text, user, r.remember(), r.password());
                 AccountSession ready = s;
@@ -215,6 +216,12 @@ final class AppShell {
                 fail(screen, s, login.isDefault(defaults) && defaults.hasFingerprint()
                         ? I18n.t("shell.pinnedMismatch") : I18n.t("shell.serverNotTrusted"));
             } catch (ApiException e) {
+                if (e.code() == ErrorCode.CODE_REQUIRED || e.code() == ErrorCode.BAD_CODE) {
+                    boolean wrong = e.code() == ErrorCode.BAD_CODE;
+                    fail(screen, s, null);
+                    Platform.runLater(() -> screen.askCode(wrong));
+                    return;
+                }
                 if (e.code() == ErrorCode.BAD_CREDENTIALS) forget(text, user); // a remembered password went stale
                 fail(screen, s, I18n.error(e));
             } catch (IOException e) {
@@ -294,6 +301,11 @@ final class AppShell {
         session = s;
         current = login;
         s.onConnectionLost(() -> reconnect(s, login));
+        s.onPasswordChanged(password -> {
+            // reconnects and the remembered password use the new one from now on
+            current = new Login(login.serverText(), login.host(), login.port(), login.user(), password.toCharArray());
+            if (prefs.getBoolean("remember", false)) rememberChoice(login.serverText(), login.user(), true, password);
+        });
         javafx.stage.Window w = stage.getScene() == null ? null : stage.getScene().getWindow();
         if (w != null && w.getWidth() < 960) {
             w.setWidth(1100);
@@ -324,13 +336,18 @@ final class AppShell {
                 try {
                     ChatClient old = s.client();
                     ChatClient client = ChatClient.start(open(login, null), identity, accountsDir(login), login.user(),
-                            new String(login.password()), false, s);
+                            new String((current != null && current.user().equals(login.user()) ? current : login).password()),
+                            false, s);
                     s.attach(client);
                     if (old != null) old.close();
                     AppLog.info("Reconnected after " + (attempt + 1) + " attempt(s)");
                     Platform.runLater(s::reconnected);
                     return;
                 } catch (ApiException e) {
+                    if (e.code() == ErrorCode.CODE_REQUIRED) { // the account moved to another computer with two-step login on
+                        Platform.runLater(() -> logout(I18n.t("shell.codeNeeded")));
+                        return;
+                    }
                     if (e.code() == ErrorCode.BAD_CREDENTIALS) { // the password was changed elsewhere
                         forget(login.serverText(), login.user());
                         Platform.runLater(() -> logout(I18n.t("shell.signedOut")));

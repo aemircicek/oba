@@ -1024,3 +1024,8 @@
 .intro-dot-on { -fx-fill: -sc-accent; }
 
 .dialog-scroll, .dialog-scroll > .viewport { -fx-background-color: transparent; -fx-background: transparent; -fx-padding: 0 6 0 0; }
+
+/* account security */
+.h3 { -fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: -sc-text; }
+.fingerprint { -fx-font-family: "Monospaced"; -fx-font-size: 13px; -fx-text-fill: -sc-text; -fx-background-color: -sc-surface-2;
+    -fx-background-radius: 8; -fx-padding: 6 10; }

@@ -23,7 +23,11 @@ import javafx.scene.layout.VBox;
  */
 final class LoginScreen {
     /** @param server empty for the default server */
-    record Request(String server, String username, String password, boolean register, boolean remember) {}
+    record Request(String server, String username, String password, boolean register, boolean remember, String code) {
+        Request(String server, String username, String password, boolean register, boolean remember) {
+            this(server, username, password, register, remember, null);
+        }
+    }
 
     interface Actions {
         void submit(Request request);
@@ -40,6 +44,9 @@ final class LoginScreen {
     private final javafx.scene.control.ScrollPane root;
     private final Label error = new Label();
     private final Button go = new Button();
+    /** Shown when the server asks this new device for a code from the authenticator app. */
+    private final TextField code = new TextField();
+    private final VBox codeBox = new VBox(6);
 
     LoginScreen(String savedServer, String savedUser, String notice, DefaultServer defaults, boolean canRemember,
                 Actions actions) {
@@ -177,11 +184,21 @@ final class LoginScreen {
             }
             error.setVisible(false);
             actions.submit(new Request(server.getText().strip(), user.getText().strip(), password.getText(),
-                    create.isSelected(), remember.isSelected()));
+                    create.isSelected(), remember.isSelected(), codeBox.isVisible() ? code.getText().strip() : null));
         });
+        code.setId("login-code");
+        code.setPromptText("123 456");
+        code.setPrefColumnCount(10);
+        code.setOnAction(e -> go.fire());
+        Label codeHint = UiKit.label(I18n.t("login.codeHint"), "caption");
+        codeHint.setWrapText(true);
+        codeHint.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        codeBox.getChildren().setAll(field(I18n.t("login.code"), code), codeHint);
+        codeBox.setVisible(false);
+        codeBox.managedProperty().bind(codeBox.visibleProperty());
 
         VBox form = new VBox(14, segmented, serverBox, serverNote, field(I18n.t("login.username"), user),
-                field(I18n.t("login.password"), passwordInput), repeatBox, rules, new HBox(18, show, remember), error, go, advanced);
+                field(I18n.t("login.password"), passwordInput), codeBox, repeatBox, rules, new HBox(18, show, remember), error, go, advanced);
         form.getStyleClass().add("card");
 
         Button direct = new Button(I18n.t("login.direct"));
@@ -233,6 +250,15 @@ final class LoginScreen {
     void showError(String message) {
         error.setText(message);
         error.setVisible(true);
+    }
+
+    /** The password was right; this device must also give a code (two-step login). */
+    void askCode(boolean wrong) {
+        codeBox.setVisible(true);
+        code.clear();
+        if (wrong) showError(I18n.t("login.codeWrong"));
+        else error.setVisible(false);
+        Platform.runLater(code::requestFocus);
     }
 
     void setBusy(boolean busy) {

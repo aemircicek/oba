@@ -352,6 +352,17 @@ public final class AccountPreview {
         waitFor("#settings-dialog");
         pause();
         snap("05f-settings");
+        fx(() -> { ((Button) find("#security")).fire(); return null; });
+        waitFor("#two-step-on");
+        pause();
+        snap("05v-security");
+        fx(() -> { ((Button) find("#two-step-on")).fire(); return null; });
+        waitFor("#two-step-qr");
+        pause();
+        snap("05w-two-step-qr");
+        fx(() -> { ((Button) find("#security-close")).fire(); return null; });
+        fx(() -> { ((Button) find("#settings")).fire(); return null; });
+        waitFor("#settings-dialog");
         // making a backup: the passphrase form, filled in (saving would open a file chooser)
         fx(() -> { ((Button) find("#backup")).fire(); return null; });
         waitFor("#backup-dialog");

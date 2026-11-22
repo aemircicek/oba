@@ -143,6 +143,22 @@ final class AccountSession implements ChatClient.Listener, AutoCloseable {
     static final String NOTIFICATIONS = "notifications";
     static final String NOTIFICATION_PREVIEW = "notification-preview";
 
+    private volatile java.util.function.Consumer<String> passwordChanged = p -> {};
+
+    void onPasswordChanged(java.util.function.Consumer<String> listener) {
+        passwordChanged = listener == null ? p -> {} : listener;
+    }
+
+    /**
+     * Changes the password: on the server, for this computer's keys, and for the local history;
+     * then tells the shell (remembered password, reconnects). Runs off the UI thread.
+     */
+    void changePassword(String oldPassword, String newPassword) throws IOException, com.emirchat.api.ApiException {
+        client().changePassword(oldPassword, newPassword);
+        history.changePassword(newPassword);
+        passwordChanged.accept(newPassword);
+    }
+
     private NotifyRules notifyRules;
 
     /** Per-chat notification levels, mutes and quiet hours. */
