@@ -243,6 +243,50 @@ final class AccountService {
         }
     }
 
+    boolean deviceExists(Database.User user, int deviceId) throws java.sql.SQLException {
+        return db.deviceExists(user.id(), deviceId);
+    }
+
+    void deviceSeen(Database.User user, int deviceId, String name) throws java.sql.SQLException {
+        db.deviceSeen(user.id(), deviceId, name.isBlank() ? "" : name.strip(), clock.millis());
+    }
+
+    java.util.List<Database.Device> devices(Database.User user) throws java.sql.SQLException {
+        return db.devices(user.id());
+    }
+
+    void removeDevice(Database.User user, int deviceId) throws java.sql.SQLException {
+        db.removeDevice(user.id(), deviceId);
+    }
+
+    /**
+     * Checks a computer that asks to be linked to the account (3.6): the password and, when two-step
+     * login is on, the code, under the same limits as a login. Nothing is bound to its key.
+     */
+    Database.User checkForLink(String rawUsername, String password, String code, String address) throws ApiException {
+        String username = normalize(rawUsername);
+        if (perAddress.isBlocked(address) || perUsername.isBlocked(username)) throw tooManyAttempts();
+        Optional<Database.User> found;
+        try {
+            found = USERNAME.matcher(username).matches() ? db.findUser(username) : Optional.empty();
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+        Optional<Database.User> account = found;
+        boolean ok = hashed(() -> {
+            if (account.isPresent()) return hasher.verify(password, account.get().password());
+            hasher.verifyDummy(password);
+            return false;
+        });
+        if (!ok) {
+            if (found.isPresent()) perUsername.recordFailure(username);
+            perAddress.recordFailure(address);
+            throw new ApiException(ErrorCode.BAD_CREDENTIALS, GENERIC_LOGIN_ERROR);
+        }
+        secondStep(found.get(), code, username, address);
+        return found.get();
+    }
+
     private static ApiException tooManyAttempts() {
         return new ApiException(ErrorCode.RATE_LIMITED, "Too many failed attempts. Try again in 15 minutes.");
     }

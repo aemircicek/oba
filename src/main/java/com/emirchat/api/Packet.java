@@ -37,6 +37,9 @@ public sealed interface Packet {
     int ATTACHMENT_ID_BYTES = com.emirchat.e2e.Attachments.ID_LENGTH;
     int RELAY_TICKET_BYTES = 16;
     int MAX_CODE_BYTES = 32;
+    int MAX_DEVICES = 16;
+    int MAX_DEVICE_NAME_BYTES = 64;
+    int MAX_LINK_BYTES = 32 * 1024;
 
     /** A friend as the server describes it. */
     record Friend(String username, boolean online, byte[] identityKey) {
@@ -196,6 +199,81 @@ public sealed interface Packet {
     }
 
     record TwoFactorState(boolean enabled, int recoveryLeft) implements Packet {}
+
+    // ------------------------------------------------------------- several devices (3.6)
+
+    /** After logging in: which of the account's devices this connection is (0 for the first). */
+    record SetDevice(int deviceId, String name) implements Packet {}
+
+    /** The bundles of every device of a user that can receive; one one-time prekey of each is used. */
+    record FetchDeviceBundles(String username) implements Packet {}
+
+    /** @param multi a 3.6 app (it knows which device a message came from) */
+    record DeviceBundle(int deviceId, boolean multi, com.emirchat.e2e.PrekeyBundle bundle) {}
+
+    record DeviceBundles(List<DeviceBundle> devices) implements Packet {
+        public DeviceBundles {
+            devices = List.copyOf(devices);
+        }
+    }
+
+    /** One copy of a message for one device. */
+    record DeviceEnvelope(int deviceId, byte[] body) {
+        @Override public String toString() { return "DeviceEnvelope[" + deviceId + ", " + body.length + " bytes]"; }
+    }
+
+    /**
+     * A message encrypted separately for each device of {@code recipient} (or, for ourselves, for
+     * our other devices). Refused with STALE_DEVICES unless it covers exactly their devices.
+     */
+    record SendToDevices(String recipient, List<DeviceEnvelope> copies) implements Packet {
+        public SendToDevices {
+            copies = List.copyOf(copies);
+        }
+    }
+
+    record ListDevices() implements Packet {}
+
+    record DeviceInfo(int id, String name, long createdAt, long lastSeen, boolean online, boolean current) {}
+
+    record DeviceList(List<DeviceInfo> devices) implements Packet {
+        public DeviceList {
+            devices = List.copyOf(devices);
+        }
+    }
+
+    record RemoveDevice(int deviceId) implements Packet {}
+
+    /** Pushed to a device that was removed: it signs out. */
+    record DeviceRemoved(int deviceId) implements Packet {}
+
+    /**
+     * A new computer asks to join the account. Checked like a login (password, and the code when
+     * two-step login is on), but nothing is bound: the account's devices are asked instead.
+     *
+     * @param ephemeral an X25519 key the approving device seals the account's keys to
+     */
+    record LinkLogin(String username, String password, String code, byte[] ephemeral, String name) implements Packet {
+        @Override public String toString() { return "LinkLogin[" + username + "]"; }
+    }
+
+    record LinkPending(long linkId) implements Packet {}
+
+    /** Pushed to the account's devices: a computer asks to join. */
+    record LinkRequest(long linkId, String name, byte[] ephemeral) implements Packet {}
+
+    /** An existing device approves, with the account's keys sealed to the new computer's key. */
+    record LinkApprove(long linkId, byte[] ephemeral, byte[] sealed) implements Packet {}
+
+    record LinkDeny(long linkId) implements Packet {}
+
+    /** Pushed to the waiting computer: its device id and the sealed keys, or id -1 if refused. */
+    record LinkGranted(int deviceId, byte[] ephemeral, byte[] sealed) implements Packet {
+        @Override public String toString() { return "LinkGranted[" + deviceId + "]"; }
+    }
+
+    /** An envelope, with which of its sender's devices sent it (pushed to 3.6 apps that said SetDevice). */
+    record EnvelopeReceivedFrom(Envelope envelope, int senderDevice) implements Packet {}
 
     /** The ticket for {@link OpenRelay}: 16 random bytes that name this user and that friend. */
     record RelayTicket(byte[] ticket) implements Packet {
@@ -547,6 +625,40 @@ public sealed interface Packet {
                 writeNames(w, r.codes());
             }
             case TwoFactorState t -> w.u8(137).i64(requestId).u8(t.enabled() ? 1 : 0).i64(t.recoveryLeft());
+            case SetDevice d -> w.u8(60).i64(requestId).i64(d.deviceId()).string(d.name());
+            case FetchDeviceBundles f -> w.u8(61).i64(requestId).string(f.username());
+            case SendToDevices s -> {
+                w.u8(62).i64(requestId).string(s.recipient()).u16(s.copies().size());
+                for (DeviceEnvelope c : s.copies()) w.i64(c.deviceId()).bytes(c.body());
+            }
+            case ListDevices l -> w.u8(63).i64(requestId);
+            case RemoveDevice d -> w.u8(64).i64(requestId).i64(d.deviceId());
+            case LinkLogin l -> w.u8(65).i64(requestId).string(l.username()).string(l.password()).string(l.code())
+                    .bytes(l.ephemeral()).string(l.name());
+            case LinkApprove a -> w.u8(66).i64(requestId).i64(a.linkId()).bytes(a.ephemeral()).bytes(a.sealed());
+            case LinkDeny d -> w.u8(67).i64(requestId).i64(d.linkId());
+            case DeviceBundles b -> {
+                w.u8(138).i64(requestId).u16(b.devices().size());
+                for (DeviceBundle d : b.devices()) {
+                    var x = d.bundle();
+                    w.i64(d.deviceId()).u8(d.multi() ? 1 : 0).bytes(x.identityKey()).bytes(x.dhIdentity())
+                            .bytes(x.dhIdentitySignature()).i64(x.signedPrekeyId()).bytes(x.signedPrekey())
+                            .bytes(x.signedPrekeySignature()).i64(x.oneTimePrekeyId()).bytes(x.oneTimePrekey());
+                }
+            }
+            case DeviceList l -> {
+                w.u8(139).i64(requestId).u16(l.devices().size());
+                for (DeviceInfo d : l.devices()) {
+                    w.i64(d.id()).string(d.name()).i64(d.createdAt()).i64(d.lastSeen()).u8(d.online() ? 1 : 0)
+                            .u8(d.current() ? 1 : 0);
+                }
+            }
+            case LinkPending p -> w.u8(140).i64(requestId).i64(p.linkId());
+            case LinkRequest l -> w.u8(141).i64(requestId).i64(l.linkId()).string(l.name()).bytes(l.ephemeral());
+            case LinkGranted g -> w.u8(142).i64(requestId).i64(g.deviceId()).bytes(g.ephemeral()).bytes(g.sealed());
+            case DeviceRemoved d -> w.u8(143).i64(requestId).i64(d.deviceId());
+            case EnvelopeReceivedFrom e -> w.u8(144).i64(requestId).i64(e.envelope().id()).string(e.envelope().sender())
+                    .i64(e.envelope().groupId()).i64(e.envelope().sentAt()).bytes(e.envelope().body()).i64(e.senderDevice());
             case RelayTicket t -> w.u8(134).i64(requestId).bytes(t.ticket());
             case VoiceRoom v -> {
                 w.u8(131).i64(requestId).i64(v.groupId());
@@ -664,6 +776,47 @@ public sealed interface Packet {
             case 135 -> new TwoFactorSecret(r.bytes(64));
             case 136 -> new RecoveryCodes(readNames(r));
             case 137 -> new TwoFactorState(bool(r.u8()), (int) r.i64());
+            case 60 -> new SetDevice(deviceId(r), r.string(MAX_DEVICE_NAME_BYTES));
+            case 61 -> new FetchDeviceBundles(r.string(MAX_USERNAME_BYTES));
+            case 62 -> {
+                String recipient = r.string(MAX_USERNAME_BYTES);
+                int n = r.count(MAX_DEVICES);
+                List<DeviceEnvelope> copies = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) copies.add(new DeviceEnvelope(deviceId(r), r.bytes(MAX_ENVELOPE_BYTES)));
+                yield new SendToDevices(recipient, copies);
+            }
+            case 63 -> new ListDevices();
+            case 64 -> new RemoveDevice(deviceId(r));
+            case 65 -> new LinkLogin(r.string(MAX_USERNAME_BYTES), r.string(MAX_PASSWORD_BYTES), r.string(MAX_CODE_BYTES),
+                    r.exactBytes(X25519_KEY), r.string(MAX_DEVICE_NAME_BYTES));
+            case 66 -> new LinkApprove(r.i64(), r.exactBytes(X25519_KEY), r.bytes(MAX_LINK_BYTES));
+            case 67 -> new LinkDeny(r.i64());
+            case 138 -> {
+                int n = r.count(MAX_DEVICES);
+                List<DeviceBundle> list = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) {
+                    int device = deviceId(r);
+                    boolean multi = bool(r.u8());
+                    list.add(new DeviceBundle(device, multi, new com.emirchat.e2e.PrekeyBundle(r.exactBytes(Identity.ENCODED_PUBLIC_KEY_LENGTH),
+                            r.exactBytes(X25519_KEY), r.exactBytes(SIGNATURE), (int) r.i64(), r.exactBytes(X25519_KEY),
+                            r.exactBytes(SIGNATURE), (int) r.i64(), r.bytes(X25519_KEY))));
+                }
+                yield new DeviceBundles(list);
+            }
+            case 139 -> {
+                int n = r.count(MAX_DEVICES);
+                List<DeviceInfo> list = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) {
+                    list.add(new DeviceInfo(deviceId(r), r.string(MAX_DEVICE_NAME_BYTES), r.i64(), r.i64(), bool(r.u8()), bool(r.u8())));
+                }
+                yield new DeviceList(list);
+            }
+            case 140 -> new LinkPending(r.i64());
+            case 141 -> new LinkRequest(r.i64(), r.string(MAX_DEVICE_NAME_BYTES), r.exactBytes(X25519_KEY));
+            case 142 -> new LinkGranted((int) r.i64(), r.bytes(X25519_KEY), r.bytes(MAX_LINK_BYTES));
+            case 143 -> new DeviceRemoved(deviceId(r));
+            case 144 -> new EnvelopeReceivedFrom(new Envelope(r.i64(), r.string(MAX_USERNAME_BYTES), r.i64(), r.i64(),
+                    r.bytes(MAX_ENVELOPE_BYTES)), deviceId(r));
             case 134 -> new RelayTicket(r.exactBytes(RELAY_TICKET_BYTES));
             case 131 -> new VoiceRoom(r.i64(), readNames(r));
             case 133 -> {
@@ -762,6 +915,13 @@ public sealed interface Packet {
 
     private static Friend readFriend(Wire.Reader r) throws ProtocolException {
         return new Friend(r.string(MAX_USERNAME_BYTES), bool(r.u8()), r.exactBytes(Identity.ENCODED_PUBLIC_KEY_LENGTH));
+    }
+
+    /** A device id: 0 to 2^31 - 1 (sent as i64). */
+    private static int deviceId(Wire.Reader r) throws ProtocolException {
+        long id = r.i64();
+        if (id < 0 || id > Integer.MAX_VALUE) throw new ProtocolException("Bad device id");
+        return (int) id;
     }
 
     private static void writeNames(Wire.Writer w, List<String> names) {

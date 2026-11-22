@@ -31,6 +31,19 @@
     <native.platform>linux-x86_64</native.platform>
   </properties>
 
+  <dependencyManagement>
+    <dependencies>
+      <!-- one JUnit for all: Jazzer would otherwise bring an older platform than Jupiter needs -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <dependency>
       <groupId>org.xerial</groupId>
@@ -87,6 +100,13 @@
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <!-- Fuzz tests (@FuzzTest): their saved inputs run with every build; JAZZER_FUZZ=1 fuzzes (see docs/security-report.md) -->
+      <groupId>com.code-intelligence</groupId>
+      <artifactId>jazzer-junit</artifactId>
+      <version>0.24.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

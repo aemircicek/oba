@@ -1,0 +1,103 @@
+package com.emirchat.server;
+
+import com.emirchat.api.ApiException;
+import com.emirchat.api.ErrorCode;
+import com.emirchat.api.Packet;
+import java.security.SecureRandom;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Linking a new computer to an account (3.6). The new computer proves the password (and the
+ * two-step code), then waits; the account's devices are asked, and one of them approves by sealing
+ * the account's keys to the new computer's one-time key. The server only passes the sealed bytes
+ * on: it can neither read them nor approve on its own.
+ */
+final class LinkService {
+    /** A request nobody answered is dropped after this long. */
+    static final long WAIT_MS = 5 * 60_000;
+    static final int MAX_PENDING_PER_USER = 3;
+    /** Devices one account may have. */
+    static final int MAX_DEVICES = Packet.MAX_DEVICES;
+
+    private record Pending(long id, long userId, String name, byte[] ephemeral, ClientConnection waiting, long since) {}
+
+    private final Database db;
+    private final Presence presence;
+    private final SecureRandom random = new SecureRandom();
+    private final Map<Long, Pending> pending = new HashMap<>();
+
+    LinkService(Database db, Presence presence) {
+        this.db = db;
+        this.presence = presence;
+    }
+
+    /** A new computer asks; its password (and code) were checked. Asks the account's 3.6 devices. */
+    long request(Database.User user, String name, byte[] ephemeral, ClientConnection waiting) throws ApiException {
+        long now = System.currentTimeMillis();
+        boolean asked = false;
+        long id;
+        synchronized (this) {
+            pending.values().removeIf(p -> now - p.since() > WAIT_MS);
+            if (pending.values().stream().filter(p -> p.userId() == user.id()).count() >= MAX_PENDING_PER_USER) {
+                throw new ApiException(ErrorCode.RATE_LIMITED, "Too many computers are waiting to join. Try again in a few minutes.");
+            }
+            try {
+                if (db.devices(user.id()).size() >= MAX_DEVICES) {
+                    throw new ApiException(ErrorCode.LIMIT_REACHED, "This account has " + MAX_DEVICES + " computers already.");
+                }
+            } catch (SQLException e) {
+                throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+            }
+            do {
+                id = random.nextLong() & Long.MAX_VALUE;
+            } while (id == 0 || pending.containsKey(id));
+            pending.put(id, new Pending(id, user.id(), name, ephemeral.clone(), waiting, now));
+        }
+        for (ClientConnection c : presence.connections(user.id())) {
+            if (c.multiDevice()) {
+                c.push(new Packet.LinkRequest(id, name, ephemeral));
+                asked = true;
+            }
+        }
+        if (!asked) {
+            synchronized (this) {
+                pending.remove(id);
+            }
+            throw new ApiException(ErrorCode.INVALID_REQUEST,
+                    "Open Oba (3.6 or newer) on a computer already signed in to this account, then try again: it has to approve.");
+        }
+        return id;
+    }
+
+    /** One of the account's devices approves: a new device id, and the sealed keys go to the waiting computer. */
+    void approve(Database.User approver, long linkId, byte[] ephemeral, byte[] sealed) throws ApiException {
+        Pending p = take(approver, linkId);
+        int deviceId;
+        try {
+            java.util.Set<Integer> used = new java.util.HashSet<>();
+            for (Database.Device d : db.devices(approver.id())) used.add(d.id());
+            deviceId = 1;
+            while (used.contains(deviceId)) deviceId++;
+            db.addDevice(approver.id(), deviceId, p.name(), System.currentTimeMillis());
+        } catch (SQLException e) {
+            throw new ApiException(ErrorCode.INTERNAL, "Server storage error.");
+        }
+        p.waiting().push(new Packet.LinkGranted(deviceId, ephemeral, sealed));
+    }
+
+    void deny(Database.User user, long linkId) throws ApiException {
+        Pending p = take(user, linkId);
+        p.waiting().push(new Packet.LinkGranted(-1, new byte[0], new byte[0]));
+    }
+
+    private synchronized Pending take(Database.User user, long linkId) throws ApiException {
+        Pending p = pending.get(linkId);
+        if (p == null || p.userId() != user.id() || System.currentTimeMillis() - p.since() > WAIT_MS) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST, "That computer is no longer waiting.");
+        }
+        pending.remove(linkId);
+        return p;
+    }
+}

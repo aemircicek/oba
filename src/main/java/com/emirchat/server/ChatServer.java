@@ -80,7 +80,7 @@ public final class ChatServer implements AutoCloseable {
         this.services = new ClientConnection.Services(identity,
                 new AccountService(db, config.pbkdf2Iterations(), clock),
                 new FriendService(db, presence, clock), messages,
-                groups, attachments, presence, voice, metrics, relay);
+                groups, attachments, presence, voice, metrics, relay, new LinkService(db, presence));
         metrics.gauges(open::get, presence::onlineCount, voice::activeRooms, voice::seated, relay::sessions);
         maintenance.scheduleWithFixedDelay(relay::sweep, 30, 30, TimeUnit.SECONDS);
         attachments.cleanUp();
