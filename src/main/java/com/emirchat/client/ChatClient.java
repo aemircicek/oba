@@ -475,7 +475,17 @@ public final class ChatClient implements AutoCloseable {
     public static ChatClient start(ServerConnection connection, Identity device, Path accountDir, String user,
                                    String password, boolean register, Listener listener)
             throws IOException, ApiException {
-        Packet.LoggedIn loggedIn = register ? connection.register(user, password) : connection.login(user, password);
+        return start(connection, device, accountDir, user, password, null, register, listener);
+    }
+
+    /**
+     * @param code a code from the authenticator app (or a recovery code) when the server asked for
+     *             one with {@link com.emirchat.api.ErrorCode#CODE_REQUIRED}, else null
+     */
+    public static ChatClient start(ServerConnection connection, Identity device, Path accountDir, String user,
+                                   String password, String code, boolean register, Listener listener)
+            throws IOException, ApiException {
+        Packet.LoggedIn loggedIn = register ? connection.register(user, password) : connection.login(user, password, code);
         Path dir = accountDir.resolve(loggedIn.username());
         Files.createDirectories(dir);
         // keys and sessions are encrypted at rest under the password the server just accepted
@@ -1528,6 +1538,17 @@ public final class ChatClient implements AutoCloseable {
     /** Replaces the microphone and speaker (tests, or a device chosen in settings). */
     public void useAudioDevices(java.util.function.Supplier<com.emirchat.call.AudioDevice> devices) {
         audioDevices = devices;
+    }
+
+    /**
+     * Changes the account's password on the server, then locks this computer's keys under the new
+     * one too (a server before 3.6 cannot change passwords).
+     */
+    public void changePassword(String oldPassword, String newPassword) throws IOException, ApiException {
+        if (!connection.hasAccountSecurity()) throw new ApiException(com.emirchat.api.ErrorCode.INVALID_REQUEST,
+                "The server is too old to change passwords; ask whoever runs it to update it.");
+        connection.changePassword(oldPassword, newPassword);
+        com.emirchat.e2e.Vault.rewrap(dataDir, oldPassword, newPassword);
     }
 
     @Override

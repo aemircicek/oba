@@ -36,6 +36,7 @@ public sealed interface Packet {
     int MAX_CHUNK_BYTES = 32 * 1024;
     int ATTACHMENT_ID_BYTES = com.emirchat.e2e.Attachments.ID_LENGTH;
     int RELAY_TICKET_BYTES = 16;
+    int MAX_CODE_BYTES = 32;
 
     /** A friend as the server describes it. */
     record Friend(String username, boolean online, byte[] identityKey) {
@@ -153,6 +154,48 @@ public sealed interface Packet {
      * answered the relay's question on UDP: older servers do not know this packet.
      */
     record OpenRelay(String peer) implements Packet {}
+
+    /** Log in with a code from the authenticator app (3.6; after the server asked with CODE_REQUIRED). */
+    record LoginWithCode(String username, String password, String code) implements Packet {
+        @Override public String toString() { return "LoginWithCode[" + username + "]"; }
+    }
+
+    /** Starts turning two-step login on; answered with {@link TwoFactorSecret}. */
+    record SetUpTwoFactor() implements Packet {}
+
+    /** The first code from the app turns it on; answered with {@link RecoveryCodes}. */
+    record EnableTwoFactor(String code) implements Packet {}
+
+    /** Turns it off (needs the password). */
+    record DisableTwoFactor(String password) implements Packet {
+        @Override public String toString() { return "DisableTwoFactor[…]"; }
+    }
+
+    record TwoFactorStatus() implements Packet {}
+
+    record ChangePassword(String oldPassword, String newPassword) implements Packet {
+        @Override public String toString() { return "ChangePassword[…]"; }
+    }
+
+    record TwoFactorSecret(byte[] secret) implements Packet {
+        public TwoFactorSecret {
+            secret = secret.clone();
+        }
+
+        @Override public byte[] secret() { return secret.clone(); }
+
+        @Override public String toString() { return "TwoFactorSecret[…]"; }
+    }
+
+    record RecoveryCodes(List<String> codes) implements Packet {
+        public RecoveryCodes {
+            codes = List.copyOf(codes);
+        }
+
+        @Override public String toString() { return "RecoveryCodes[" + codes.size() + "]"; }
+    }
+
+    record TwoFactorState(boolean enabled, int recoveryLeft) implements Packet {}
 
     /** The ticket for {@link OpenRelay}: 16 random bytes that name this user and that friend. */
     record RelayTicket(byte[] ticket) implements Packet {
@@ -492,6 +535,18 @@ public sealed interface Packet {
             case VoiceAudio a -> w.u8(51).i64(requestId).i64(a.groupId()).bytes(a.data());
             case ListVoiceRooms l -> w.u8(52).i64(requestId);
             case OpenRelay o -> w.u8(53).i64(requestId).string(o.peer());
+            case LoginWithCode l -> w.u8(54).i64(requestId).string(l.username()).string(l.password()).string(l.code());
+            case SetUpTwoFactor s -> w.u8(55).i64(requestId);
+            case EnableTwoFactor e -> w.u8(56).i64(requestId).string(e.code());
+            case DisableTwoFactor d -> w.u8(57).i64(requestId).string(d.password());
+            case TwoFactorStatus t -> w.u8(58).i64(requestId);
+            case ChangePassword c -> w.u8(59).i64(requestId).string(c.oldPassword()).string(c.newPassword());
+            case TwoFactorSecret t -> w.u8(135).i64(requestId).bytes(t.secret());
+            case RecoveryCodes r -> {
+                w.u8(136).i64(requestId);
+                writeNames(w, r.codes());
+            }
+            case TwoFactorState t -> w.u8(137).i64(requestId).u8(t.enabled() ? 1 : 0).i64(t.recoveryLeft());
             case RelayTicket t -> w.u8(134).i64(requestId).bytes(t.ticket());
             case VoiceRoom v -> {
                 w.u8(131).i64(requestId).i64(v.groupId());
@@ -600,6 +655,15 @@ public sealed interface Packet {
             case 51 -> new VoiceAudio(r.i64(), r.bytes(MAX_CALL_AUDIO_BYTES));
             case 52 -> new ListVoiceRooms();
             case 53 -> new OpenRelay(r.string(MAX_USERNAME_BYTES));
+            case 54 -> new LoginWithCode(r.string(MAX_USERNAME_BYTES), r.string(MAX_PASSWORD_BYTES), r.string(MAX_CODE_BYTES));
+            case 55 -> new SetUpTwoFactor();
+            case 56 -> new EnableTwoFactor(r.string(MAX_CODE_BYTES));
+            case 57 -> new DisableTwoFactor(r.string(MAX_PASSWORD_BYTES));
+            case 58 -> new TwoFactorStatus();
+            case 59 -> new ChangePassword(r.string(MAX_PASSWORD_BYTES), r.string(MAX_PASSWORD_BYTES));
+            case 135 -> new TwoFactorSecret(r.bytes(64));
+            case 136 -> new RecoveryCodes(readNames(r));
+            case 137 -> new TwoFactorState(bool(r.u8()), (int) r.i64());
             case 134 -> new RelayTicket(r.exactBytes(RELAY_TICKET_BYTES));
             case 131 -> new VoiceRoom(r.i64(), readNames(r));
             case 133 -> {

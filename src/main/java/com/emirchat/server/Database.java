@@ -16,7 +16,7 @@ import java.util.Optional;
  * synchronized: one connection, serialised writes, which is plenty for a self-hosted server.
  */
 final class Database implements AutoCloseable {
-    private static final int SCHEMA_VERSION = 7;
+    private static final int SCHEMA_VERSION = 8;
 
     record User(long id, String username, PasswordHasher.Hash password, byte[] identityKey) {}
 
@@ -181,6 +181,115 @@ final class Database implements AutoCloseable {
                         )""");
                 s.execute("PRAGMA user_version = 7");
             }
+        }
+        if (version < 8) {
+            try (Statement s = connection.createStatement()) {
+                // 3.6: two-step login. The secret must be readable to check codes; recovery codes are hashed.
+                s.execute("""
+                        CREATE TABLE two_factor (
+                            user_id   INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                            secret    BLOB    NOT NULL,
+                            enabled   INTEGER NOT NULL,
+                            last_step INTEGER NOT NULL
+                        )""");
+                s.execute("""
+                        CREATE TABLE recovery_codes (
+                            user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            code_hash BLOB    NOT NULL,
+                            PRIMARY KEY (user_id, code_hash)
+                        )""");
+                s.execute("PRAGMA user_version = 8");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ two-step login
+
+    record TwoFactor(byte[] secret, boolean enabled, long lastStep, int recoveryLeft) {}
+
+    synchronized Optional<TwoFactor> twoFactor(long userId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT secret, enabled, last_step, (SELECT COUNT(*) FROM recovery_codes r WHERE r.user_id = t.user_id) "
+                        + "FROM two_factor t WHERE user_id = ?")) {
+            ps.setLong(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return Optional.empty();
+                return Optional.of(new TwoFactor(rs.getBytes(1), rs.getInt(2) == 1, rs.getLong(3), rs.getInt(4)));
+            }
+        }
+    }
+
+    /** A new secret waiting for its first code (replaces one that was waiting; never an enabled one). */
+    synchronized void setPendingTwoFactor(long userId, byte[] secret) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO two_factor (user_id, secret, enabled, last_step) VALUES (?, ?, 0, -1) "
+                        + "ON CONFLICT(user_id) DO UPDATE SET secret = excluded.secret, last_step = -1 WHERE enabled = 0")) {
+            ps.setLong(1, userId);
+            ps.setBytes(2, secret);
+            ps.executeUpdate();
+        }
+    }
+
+    synchronized void enableTwoFactor(long userId, long step, java.util.List<byte[]> recoveryHashes) throws SQLException {
+        boolean auto = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try (PreparedStatement en = connection.prepareStatement("UPDATE two_factor SET enabled = 1, last_step = ? WHERE user_id = ?");
+             PreparedStatement del = connection.prepareStatement("DELETE FROM recovery_codes WHERE user_id = ?");
+             PreparedStatement add = connection.prepareStatement("INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)")) {
+            en.setLong(1, step);
+            en.setLong(2, userId);
+            en.executeUpdate();
+            del.setLong(1, userId);
+            del.executeUpdate();
+            for (byte[] h : recoveryHashes) {
+                add.setLong(1, userId);
+                add.setBytes(2, h);
+                add.executeUpdate();
+            }
+            connection.commit();
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(auto);
+        }
+    }
+
+    synchronized void setTwoFactorStep(long userId, long step) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE two_factor SET last_step = ? WHERE user_id = ?")) {
+            ps.setLong(1, step);
+            ps.setLong(2, userId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Uses up a recovery code. @return true if it was one of the user's (it is gone now) */
+    synchronized boolean useRecoveryCode(long userId, byte[] hash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM recovery_codes WHERE user_id = ? AND code_hash = ?")) {
+            ps.setLong(1, userId);
+            ps.setBytes(2, hash);
+            return ps.executeUpdate() == 1;
+        }
+    }
+
+    synchronized void disableTwoFactor(long userId) throws SQLException {
+        try (PreparedStatement a = connection.prepareStatement("DELETE FROM two_factor WHERE user_id = ?");
+             PreparedStatement b = connection.prepareStatement("DELETE FROM recovery_codes WHERE user_id = ?")) {
+            a.setLong(1, userId);
+            a.executeUpdate();
+            b.setLong(1, userId);
+            b.executeUpdate();
+        }
+    }
+
+    synchronized void updatePassword(long userId, PasswordHasher.Hash hash) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE users SET password_hash = ?, password_salt = ?, iterations = ? WHERE id = ?")) {
+            ps.setBytes(1, hash.hash());
+            ps.setBytes(2, hash.salt());
+            ps.setInt(3, hash.iterations());
+            ps.setLong(4, userId);
+            ps.executeUpdate();
         }
     }
 

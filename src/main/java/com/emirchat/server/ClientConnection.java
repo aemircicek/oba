@@ -24,7 +24,12 @@ final class ClientConnection {
     /** Unauthenticated connections must log in quickly; this bounds idle half-open sockets. */
     private static final int PRE_AUTH_TIMEOUT_MS = 60_000;
     private static final int OUTBOUND_CAPACITY = 1024;
-    private static final String SERVER_NAME = "server";
+    /**
+     * How the server names itself in the handshake (signed with its key). Clients before 3.6 do
+     * not look at it; 3.6 reads the version from it, to know which requests it may send without an
+     * older server closing the connection on an unknown one.
+     */
+    static final String SERVER_NAME = "server-3.6";
     private static final byte[] CLOSE = new byte[0];
 
     /** Everything a connection needs from the server. */
@@ -73,7 +78,9 @@ final class ClientConnection {
                 try {
                     response = handle(frame.packet());
                 } catch (ApiException e) {
-                    if (frame.packet() instanceof Packet.Login) services.metrics().loginFailures.increment();
+                    if (frame.packet() instanceof Packet.Login || frame.packet() instanceof Packet.LoginWithCode) {
+                        services.metrics().loginFailures.increment();
+                    }
                     response = new Packet.Error(e.code(), e.getMessage());
                 }
                 services.metrics().requests.increment();
@@ -329,6 +336,28 @@ final class ClientConnection {
                 loggedIn(result.user(), result.newDevice());
                 services.metrics().logins.increment();
                 yield new Packet.LoggedIn(result.user().username(), result.newDevice());
+            }
+            case Packet.LoginWithCode l -> {
+                requireLoggedOut();
+                AccountService.LoginResult result = services.accounts().login(l.username(), l.password(), l.code(),
+                        session.peerIdentityKey(), address);
+                loggedIn(result.user(), result.newDevice());
+                services.metrics().logins.increment();
+                yield new Packet.LoggedIn(result.user().username(), result.newDevice());
+            }
+            case Packet.SetUpTwoFactor s -> new Packet.TwoFactorSecret(services.accounts().setUpTwoFactor(me()));
+            case Packet.EnableTwoFactor e -> new Packet.RecoveryCodes(services.accounts().enableTwoFactor(me(), e.code()));
+            case Packet.DisableTwoFactor d -> {
+                services.accounts().disableTwoFactor(me(), d.password());
+                yield new Packet.Ok();
+            }
+            case Packet.TwoFactorStatus t -> {
+                int[] state = services.accounts().twoFactorState(me());
+                yield new Packet.TwoFactorState(state[0] == 1, state[1]);
+            }
+            case Packet.ChangePassword c -> {
+                services.accounts().changePassword(me(), c.oldPassword(), c.newPassword());
+                yield new Packet.Ok();
             }
             case Packet.SendFriendRequest s -> new Packet.FriendRequestResult(services.friends().request(me(), s.username()));
             case Packet.RespondFriendRequest r -> {

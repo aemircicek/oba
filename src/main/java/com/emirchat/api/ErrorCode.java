@@ -19,7 +19,10 @@ public enum ErrorCode {
     NO_KEYS(15),
     GROUP_NOT_FOUND(16),
     NOT_GROUP_ADMIN(17),
-    ATTACHMENT_NOT_FOUND(18);
+    ATTACHMENT_NOT_FOUND(18),
+    /** 3.6: the password was right, but this device must also give a code from the authenticator app */
+    CODE_REQUIRED(19),
+    BAD_CODE(20);
 
     final int code;
 
