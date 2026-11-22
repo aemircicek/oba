@@ -33,8 +33,14 @@ import javafx.scene.shape.Rectangle;
 final class RoomVideoGrid implements RoomVideo.View {
     static final String ME = "";
 
+    /** A room holds at most 12 people (the server's limit); with our own picture that is 12 tiles. */
+    static final int MAX_TILES = 12;
+
     private final StackPane root = new StackPane();
     private final Map<String, Tile> tiles = new LinkedHashMap<>();
+    /** When each person's picture last stopped: a frame still on its way then must not bring the tile back. */
+    private final Map<String, Long> stoppedAt = new java.util.HashMap<>();
+    static final long LATE_FRAME_MS = 800;
     private String spotlight;
     private Set<String> speaking = Set.of();
 
@@ -58,25 +64,49 @@ final class RoomVideoGrid implements RoomVideo.View {
     // ------------------------------------------------------------------ RoomVideo.View (video threads)
 
     @Override public void remote(String who, VideoFrame frame, boolean screen) {
-        tile(who).offer(frame, screen);
+        Tile t = tile(who);
+        if (t != null) t.offer(frame, screen);
     }
 
     @Override public void remoteStopped(String who) {
-        Platform.runLater(() -> remove(who));
+        Tile gone;
+        synchronized (tiles) {
+            gone = tiles.remove(who);
+            stoppedAt.put(who, System.currentTimeMillis());
+        }
+        if (gone != null) gone.close();
+        Platform.runLater(this::afterRemoval);
     }
 
     @Override public void local(VideoFrame frame, boolean screen) {
-        tile(ME).offer(frame, screen);
+        Tile t = tile(ME);
+        if (t != null) t.offer(frame, screen);
     }
 
     @Override public void localStopped() {
-        Platform.runLater(() -> remove(ME));
+        Tile gone;
+        synchronized (tiles) {
+            gone = tiles.remove(ME);
+            stoppedAt.put(ME, System.currentTimeMillis());
+        }
+        if (gone != null) gone.close();
+        Platform.runLater(this::afterRemoval);
+    }
+
+    private void afterRemoval() {
+        if (spotlight != null && !tiles.containsKey(spotlight)) spotlight = null;
+        layout();
     }
 
     /** Left the room: nothing to show. */
     void clear() {
-        Platform.runLater(() -> {
+        List<Tile> gone;
+        synchronized (tiles) {
+            gone = new ArrayList<>(tiles.values());
             tiles.clear();
+        }
+        for (Tile t : gone) t.close();
+        Platform.runLater(() -> {
             spotlight = null;
             layout();
         });
@@ -87,23 +117,19 @@ final class RoomVideoGrid implements RoomVideo.View {
         return List.copyOf(tiles.keySet());
     }
 
+    /** The tile for someone, made on their first picture; null when the grid is full. */
     private Tile tile(String who) {
         synchronized (tiles) {
             Tile t = tiles.get(who);
             if (t != null) return t;
+            if (tiles.size() >= MAX_TILES) return null;
+            Long stopped = stoppedAt.get(who);
+            if (stopped != null && System.currentTimeMillis() - stopped < LATE_FRAME_MS) return null;
             Tile created = new Tile(who);
             tiles.put(who, created);
             Platform.runLater(this::layout);
             return created;
         }
-    }
-
-    private void remove(String who) {
-        synchronized (tiles) {
-            tiles.remove(who);
-        }
-        if (who.equals(spotlight)) spotlight = null;
-        layout();
     }
 
     private void toggleSpotlight(String who) {
@@ -180,6 +206,7 @@ final class RoomVideoGrid implements RoomVideo.View {
         private int height;
         private boolean screen;
         private WritableImage image;
+        private volatile boolean closed;
 
         Tile(String who) {
             this.who = who;
@@ -211,9 +238,17 @@ final class RoomVideoGrid implements RoomVideo.View {
             view.setFitHeight(h);
         }
 
+        /** Frees the native scaler; pictures that still arrive for this tile are dropped. */
+        synchronized void close() {
+            closed = true;
+            if (scaler != null) scaler.close();
+            scaler = null;
+        }
+
         void offer(VideoFrame frame, boolean isScreen) {
             byte[] bgra;
             synchronized (this) {
+                if (closed) return;
                 try {
                     if (scaler == null) scaler = new Scaler();
                     bgra = scaler.toBgra(frame);
@@ -229,7 +264,7 @@ final class RoomVideoGrid implements RoomVideo.View {
 
         private void draw() {
             byte[] bgra = latest.getAndSet(null);
-            if (bgra == null) return;
+            if (bgra == null || closed) return;
             int w;
             int h;
             boolean isScreen;

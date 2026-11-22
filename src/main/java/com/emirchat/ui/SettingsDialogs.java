@@ -27,19 +27,30 @@ final class SettingsDialogs {
         this.main = main;
     }
 
-    /** A short tour the first time someone signs in. */
+    /** The moving picture of the tour page on screen (stopped when the page changes). */
+    private javafx.scene.Node introScene;
+
+    /** A short tour the first time someone signs in: what is encrypted, how keys are agreed, why to verify. */
     void openWelcome(int page) {
         String[][] pages = {
-                {Icons.LOCK, "welcome.title1", "welcome.body1"},
-                {Icons.SHIELD_CHECK, "welcome.title2", "welcome.body2"},
-                {Icons.KEY, "welcome.title3", "welcome.body3"}};
+                {"welcome.title1", "welcome.body1"},
+                {"welcome.title2", "welcome.body2"},
+                {"welcome.title3", "welcome.body3"}};
         String[] p = pages[page];
-        StackPane badge = new StackPane(Icons.of(p[0], 28, "accent"));
-        badge.getStyleClass().addAll("icon-badge", "accent");
-        Label body = UiKit.label(I18n.t(p[2]), "body");
+        IntroScenes.stop(introScene);
+        StackPane scene = IntroScenes.scene(page);
+        introScene = scene;
+        Label body = UiKit.label(I18n.t(p[1]), "body");
         body.setWrapText(true);
         body.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
-        Label step = UiKit.label((page + 1) + " / " + pages.length, "caption");
+        HBox dots = new HBox(6);
+        dots.setAlignment(Pos.CENTER_LEFT);
+        for (int i = 0; i < pages.length; i++) {
+            javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(4);
+            dot.getStyleClass().add(i == page ? "intro-dot-on" : "intro-dot");
+            dots.getChildren().add(dot);
+        }
+        dots.setAccessibleText((page + 1) + " / " + pages.length);
         Button back = new Button(I18n.t("welcome.back"));
         back.setVisible(page > 0);
         back.setOnAction(e -> openWelcome(page - 1));
@@ -50,13 +61,15 @@ final class SettingsDialogs {
         next.setDefaultButton(true);
         next.setOnAction(e -> {
             if (last) {
+                IntroScenes.stop(introScene);
+                introScene = null;
                 AppPrefs.setWelcomeShown();
                 main.overlay.close();
             } else {
                 openWelcome(page + 1);
             }
         });
-        VBox box = Overlay.dialog(I18n.t(p[1]), badge, body, new HBox(10, step, UiKit.grow(), back, next));
+        VBox box = Overlay.dialog(I18n.t(p[0]), scene, body, new HBox(10, dots, UiKit.grow(), back, next));
         box.setId("welcome-dialog");
         main.overlay.show(box);
     }
