@@ -64,6 +64,63 @@
     -sc-rail: #0b0a08;
 }
 
+/* High contrast (Appearance → Contrast, or Windows' own setting): plain backgrounds, full-strength
+   text, visible borders and a strong accent; every text pair is well above WCAG AAA (7:1). */
+.root.light.high-contrast {
+    -sc-bg: #ffffff;
+    -sc-surface: #ffffff;
+    -sc-surface-2: #f0f0f0;
+    -sc-surface-3: #d9d9d9;
+    -sc-border: #000000;
+    -sc-text: #000000;
+    -sc-text-2: #1a1a1a;
+    -sc-text-3: #262626;
+    -sc-accent: #6b3300;
+    -sc-accent-hover: #4d2500;
+    -sc-on-accent: #ffffff;
+    -sc-accent-weak: #ffe9cc;
+    -sc-accent-text: #5c2c00;
+    -sc-own-bubble: #6b3300;
+    -sc-on-own-bubble: #ffffff;
+    -sc-own-time: #ffffff;
+    -sc-peer-bubble: #ffffff;
+    -sc-danger: #8f0000;
+    -sc-warning: #7a2900;
+    -sc-success: #0b5a1f;
+    -sc-rail: #e6e6e6;
+}
+
+.root.dark.high-contrast {
+    -sc-bg: #000000;
+    -sc-surface: #000000;
+    -sc-surface-2: #141414;
+    -sc-surface-3: #262626;
+    -sc-border: #ffffff;
+    -sc-text: #ffffff;
+    -sc-text-2: #f0f0f0;
+    -sc-text-3: #e0e0e0;
+    -sc-accent: #ffc266;
+    -sc-accent-hover: #ffd699;
+    -sc-on-accent: #000000;
+    -sc-accent-weak: #2e1f00;
+    -sc-accent-text: #ffcc80;
+    -sc-own-bubble: #ffc266;
+    -sc-on-own-bubble: #000000;
+    -sc-own-time: #000000;
+    -sc-peer-bubble: #000000;
+    -sc-danger: #ff8a80;
+    -sc-warning: #ffab70;
+    -sc-success: #9cf0a8;
+    -sc-rail: #000000;
+}
+
+.root.high-contrast .list-row, .root.high-contrast .text-field, .root.high-contrast .text-area,
+.root.high-contrast .bubble, .root.high-contrast .button {
+    -fx-border-color: -sc-border;
+    -fx-border-width: 1;
+    -fx-border-radius: 6;
+}
+
 .root {
     -fx-font-family: "System";
     -fx-font-size: 13px;

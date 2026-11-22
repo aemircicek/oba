@@ -230,10 +230,18 @@ final class SettingsDialogs {
         drawSwatches[0] = () -> {
             swatches.getChildren().clear();
             for (String name : Appearance.ACCENTS.keySet()) {
-                String[][] palette = Appearance.ACCENTS.get(name);
+                String[][] palette = Appearance.palette(name);
                 String hex = palette == null ? (Theme.isDark() ? "#f2a43a" : "#b45f0b") : palette[Theme.isDark() ? 1 : 0][0];
                 javafx.scene.shape.Circle dot = new javafx.scene.shape.Circle(13, javafx.scene.paint.Color.web(hex));
                 StackPane swatch = new StackPane(dot);
+                if (name.equals(Appearance.CUSTOM)) {
+                    // a rainbow ring marks the one you choose yourself
+                    dot.setStroke(new javafx.scene.paint.LinearGradient(0, 0, 1, 1, true, javafx.scene.paint.CycleMethod.NO_CYCLE,
+                            new javafx.scene.paint.Stop(0, javafx.scene.paint.Color.web("#e8505b")),
+                            new javafx.scene.paint.Stop(0.5, javafx.scene.paint.Color.web("#f9d56e")),
+                            new javafx.scene.paint.Stop(1, javafx.scene.paint.Color.web("#14b1ab"))));
+                    dot.setStrokeWidth(3);
+                }
                 swatch.getStyleClass().add("swatch");
                 if (name.equals(AppPrefs.accent())) swatch.getStyleClass().add("selected");
                 swatch.setId("accent-" + name);
@@ -250,6 +258,35 @@ final class SettingsDialogs {
             }
         };
         drawSwatches[0].run();
+        javafx.scene.control.ColorPicker picker = new javafx.scene.control.ColorPicker(javafx.scene.paint.Color.web(AppPrefs.customAccent()));
+        picker.setId("appearance-custom");
+        picker.getStyleClass().add("small");
+        picker.setTooltip(new Tooltip(I18n.t("appearance.customTip")));
+        picker.setOnAction(e -> {
+            AppPrefs.setCustomAccent(AccentMaker.hex(picker.getValue()));
+            AppPrefs.setAccent(Appearance.CUSTOM);
+            Theme.refreshAll();
+            drawSwatches[0].run();
+            main.sidebarUi.refreshSidebar();
+            if (main.current != null) main.current.refreshHeader();
+        });
+        swatches.getChildren().add(picker);
+        Runnable redrawWithPicker = drawSwatches[0];
+        drawSwatches[0] = () -> {
+            redrawWithPicker.run();
+            if (!swatches.getChildren().contains(picker)) swatches.getChildren().add(picker);
+        };
+        ComboBox<String> contrast = new ComboBox<>();
+        contrast.setId("appearance-contrast");
+        String[] contrasts = {"system", "off", "on"};
+        contrast.getItems().addAll(I18n.t("appearance.contrastSystem"), I18n.t("appearance.contrastNormal"),
+                I18n.t("appearance.contrastHigh"));
+        contrast.getSelectionModel().select(Math.max(0, java.util.Arrays.asList(contrasts).indexOf(AppPrefs.highContrast())));
+        contrast.setOnAction(e -> {
+            AppPrefs.setHighContrast(contrasts[contrast.getSelectionModel().getSelectedIndex()]);
+            Theme.refreshAll();
+            main.sidebarUi.refreshSidebar();
+        });
         ComboBox<String> size = new ComboBox<>();
         size.setId("appearance-size");
         String[] sizes = {"small", "normal", "large"};
@@ -275,6 +312,7 @@ final class SettingsDialogs {
         VBox rows = new VBox(14,
                 field(I18n.t("appearance.theme"), theme),
                 field(I18n.t("appearance.accent"), swatches),
+                field(I18n.t("appearance.contrast"), contrast),
                 field(I18n.t("appearance.textSize"), size),
                 appToggle(I18n.t("appearance.compact"), I18n.t("appearance.compactHint"), "appearance-compact",
                         AppPrefs.compact(), on -> {
@@ -307,6 +345,7 @@ final class SettingsDialogs {
             case "sky" -> I18n.t("appearance.sky");
             case "rose" -> I18n.t("appearance.rose");
             case "violet" -> I18n.t("appearance.violet");
+            case Appearance.CUSTOM -> I18n.t("appearance.custom");
             default -> I18n.t("appearance.amber");
         };
     }
