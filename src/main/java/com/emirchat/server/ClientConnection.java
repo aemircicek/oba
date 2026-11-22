@@ -29,7 +29,8 @@ final class ClientConnection {
 
     /** Everything a connection needs from the server. */
     record Services(Identity identity, AccountService accounts, FriendService friends, MessageService messages,
-                    GroupService groups, AttachmentService attachments, Presence presence, VoiceRooms voice) {}
+                    GroupService groups, AttachmentService attachments, Presence presence, VoiceRooms voice,
+                    ServerMetrics metrics) {}
 
     private final Socket socket;
     private final Services services;
@@ -72,8 +73,10 @@ final class ClientConnection {
                 try {
                     response = handle(frame.packet());
                 } catch (ApiException e) {
+                    if (frame.packet() instanceof Packet.Login) services.metrics().loginFailures.increment();
                     response = new Packet.Error(e.code(), e.getMessage());
                 }
+                services.metrics().requests.increment();
                 enqueue(Packet.encode(frame.requestId(), response));
             }
         } catch (SocketTimeoutException e) {
@@ -130,6 +133,7 @@ final class ClientConnection {
         requestTokens = Math.min(REQUEST_BURST, requestTokens + (now - requestTokensAt) / 1e9 * REQUESTS_PER_SECOND);
         requestTokensAt = now;
         if (requestTokens < 1) {
+            services.metrics().throttled.increment();
             try {
                 Thread.sleep((long) Math.ceil((1 - requestTokens) * 1000 / REQUESTS_PER_SECOND));
             } catch (InterruptedException e) {
@@ -159,7 +163,10 @@ final class ClientConnection {
             audioWindowStart = now;
             audioInWindow = 0;
         }
-        if (++audioInWindow > AUDIO_PER_SECOND) return;
+        if (++audioInWindow > AUDIO_PER_SECOND) {
+            services.metrics().callPacketsDropped.increment();
+            return;
+        }
         try {
             if (!audio.peer().equals(audioPeer) || now - audioPeerCheckedAt > FRIEND_CHECK_MS) {
                 audioPeer = null;
@@ -172,6 +179,7 @@ final class ClientConnection {
         } catch (java.sql.SQLException e) {
             return;
         }
+        services.metrics().callPackets.increment();
         services.presence().pushDroppable(audioPeerId, new Packet.CallAudioIn(u.username(), audio.data()));
     }
 
@@ -218,7 +226,10 @@ final class ClientConnection {
             voiceWindowStart = now;
             voiceInWindow = 0;
         }
-        if (++voiceInWindow > AUDIO_PER_SECOND) return;
+        if (++voiceInWindow > AUDIO_PER_SECOND) {
+            services.metrics().voicePacketsDropped.increment();
+            return;
+        }
         if (now - voiceCheckedAt > FRIEND_CHECK_MS) {
             voiceCheckedAt = now;
             if (!services.groups().isMemberOf(audio.groupId(), u.id())) {
@@ -226,6 +237,7 @@ final class ClientConnection {
                 return;
             }
         }
+        services.metrics().voicePackets.increment();
         Packet.VoiceAudioIn out = new Packet.VoiceAudioIn(audio.groupId(), u.username(), audio.data());
         for (ClientConnection other : services.voice().others(audio.groupId(), this)) other.pushDroppable(out);
     }
@@ -242,6 +254,7 @@ final class ClientConnection {
 
     private void enqueue(byte[] frame) {
         if (!outbound.offer(frame)) {
+            services.metrics().slowClients.increment();
             try {
                 socket.close(); // too far behind: disconnect rather than buffer without limit
             } catch (IOException ignored) {
@@ -294,6 +307,7 @@ final class ClientConnection {
                 Database.User created = services.accounts().register(r.username(), r.password(), session.peerIdentityKey(),
                         local ? null : address);
                 loggedIn(created, false);
+                services.metrics().registrations.increment();
                 yield new Packet.LoggedIn(created.username(), false);
             }
             case Packet.Login l -> {
@@ -301,6 +315,7 @@ final class ClientConnection {
                 AccountService.LoginResult result = services.accounts().login(l.username(), l.password(),
                         session.peerIdentityKey(), address);
                 loggedIn(result.user(), result.newDevice());
+                services.metrics().logins.increment();
                 yield new Packet.LoggedIn(result.user().username(), result.newDevice());
             }
             case Packet.SendFriendRequest s -> new Packet.FriendRequestResult(services.friends().request(me(), s.username()));
@@ -323,7 +338,10 @@ final class ClientConnection {
             }
             case Packet.KeyStatus k -> services.messages().status(me());
             case Packet.FetchBundle f -> new Packet.Bundle(services.messages().bundle(me(), f.username()));
-            case Packet.SendEnvelope s -> services.messages().send(me(), s.recipient(), s.body());
+            case Packet.SendEnvelope s -> {
+                services.metrics().envelopes.increment();
+                yield services.messages().send(me(), s.recipient(), s.body());
+            }
             case Packet.FetchPending f -> new Packet.PendingCount(services.messages().pushPending(me(), this));
             case Packet.CreateGroup c -> services.groups().create(me(), c.name(), c.members());
             case Packet.AddGroupMember a -> {
@@ -359,7 +377,10 @@ final class ClientConnection {
                 yield new Packet.Ok();
             }
             case Packet.ListGroups l -> services.groups().list(me());
-            case Packet.SendGroupEnvelope s -> services.messages().sendToGroup(me(), s.groupId(), s.body());
+            case Packet.SendGroupEnvelope s -> {
+                services.metrics().groupEnvelopes.increment();
+                yield services.messages().sendToGroup(me(), s.groupId(), s.body());
+            }
             case Packet.AckEnvelopes a -> {
                 services.messages().ack(me(), a.ids());
                 yield new Packet.Ok();
@@ -367,6 +388,7 @@ final class ClientConnection {
             case Packet.UploadStart u -> services.attachments().start(me(), u.size(), u.recipient(), u.groupId());
             case Packet.UploadChunk u -> {
                 services.attachments().chunk(me(), u.attachmentId(), u.offset(), u.data());
+                services.metrics().attachmentBytes.add(u.data().length);
                 yield new Packet.Ok();
             }
             case Packet.UploadFinish u -> {

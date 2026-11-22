@@ -1,0 +1,34 @@
+# Oba server from the ready-made image (no build on the server). deploy/oba-server.sh uses this
+# file; by hand:  OBA_VERSION=3.6.0 docker compose -f deploy/docker-compose.yml up -d
+#
+# The project name, service, container and volume names match the root docker-compose.yml, so a
+# server first set up by building from source moves to the image without losing its data or key.
+name: secure-chat
+services:
+  secure-chat:
+    image: ghcr.io/aemircicek/oba-server:${OBA_VERSION:-latest}
+    container_name: secure-chat
+    restart: unless-stopped
+    command: ["--metrics", "0.0.0.0:9105"]
+    ports:
+      - "5056:5056"              # TCP: the app's connections
+      - "5056:5056/udp"          # UDP: outside addresses for direct calls, and the call relay
+      - "127.0.0.1:9105:9105"    # counters for Prometheus, on this machine only
+    volumes:
+      - securechat-data:/data    # server identity key, accounts database, encrypted attachments
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  securechat-data:

@@ -31,6 +31,11 @@ final class Presence {
         return false;
     }
 
+    /** Accounts with a connection (for metrics). */
+    synchronized int onlineCount() {
+        return online.size();
+    }
+
     synchronized boolean isOnline(long userId) {
         return online.containsKey(userId);
     }

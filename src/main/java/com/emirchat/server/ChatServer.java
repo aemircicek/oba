@@ -33,6 +33,7 @@ public final class ChatServer implements AutoCloseable {
     }
 
     private final Identity identity;
+    private final ServerMetrics metrics = new ServerMetrics();
     private final Database db;
     private final ClientConnection.Services services;
     private final ServerSocket listener;
@@ -78,7 +79,8 @@ public final class ChatServer implements AutoCloseable {
         this.services = new ClientConnection.Services(identity,
                 new AccountService(db, config.pbkdf2Iterations(), clock),
                 new FriendService(db, presence, clock), messages,
-                groups, attachments, presence, voice);
+                groups, attachments, presence, voice, metrics);
+        metrics.gauges(open::get, presence::onlineCount, voice::activeRooms, voice::seated, () -> 0);
         attachments.cleanUp();
         maintenance.scheduleAtFixedRate(attachments::cleanUp, 1, 1, TimeUnit.HOURS);
         // Plain TCP by design: ClientConnection runs the authenticated handshake on every socket.
@@ -109,6 +111,11 @@ public final class ChatServer implements AutoCloseable {
         return discovery == null ? -1 : discovery.port();
     }
 
+    /** What the server is doing, for {@code --metrics}. */
+    public ServerMetrics metrics() {
+        return metrics;
+    }
+
     public String fingerprint() {
         return identity.fingerprint();
     }
@@ -127,6 +134,7 @@ public final class ChatServer implements AutoCloseable {
                 Socket socket = listener.accept();
                 String key = Addresses.local(socket.getInetAddress()) ? null : Addresses.key(socket.getInetAddress());
                 if (!admit(key)) {
+                    metrics.refusedConnections.increment();
                     socket.close(); // over a limit: refuse before spending a handshake on it
                     continue;
                 }
@@ -197,6 +205,7 @@ public final class ChatServer implements AutoCloseable {
         }
         connections.shutdownNow();
         maintenance.shutdownNow();
+        metrics.close();
         if (discovery != null) discovery.close();
         try {
             db.close();
