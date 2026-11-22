@@ -136,10 +136,8 @@ case "$cmd" in
     fingerprint ;;
   status)
     docker ps --filter "name=^${CONTAINER}$" --format 'container: {{.Status}}  image: {{.Image}}'
-    if curl -fsS --max-time 3 http://127.0.0.1:9105/metrics > /tmp/oba-metrics.$$ 2> /dev/null; then
-      grep -E '^oba_(build_info|uptime_seconds|users_online|connections_open|voice_participants|udp_relay_sessions)[ {]' \
-        /tmp/oba-metrics.$$ || true
-      rm -f /tmp/oba-metrics.$$
+    if page=$(curl -fsS --max-time 3 http://127.0.0.1:9105/metrics 2> /dev/null); then
+      printf '%s\n' "$page" | grep -E '^oba_(build_info|uptime_seconds|users_online|connections_open|voice_participants|udp_relay_sessions)[ {]' || true
     else
       echo "metrics: not reachable on 127.0.0.1:9105 (servers before 3.6 do not have them)"
     fi ;;

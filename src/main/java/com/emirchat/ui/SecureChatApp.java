@@ -79,6 +79,7 @@ public final class SecureChatApp extends Application {
         AppPrefs.restoreWindow(stage);
 
         Platform.setImplicitExit(false);
+        quitter = this::quit;
         trayAvailable = Tray.get().available();
         if (trayAvailable) {
             Tray.get().install(() -> Platform.runLater(this::bringToFront), () -> Platform.runLater(this::quit));
@@ -122,6 +123,13 @@ public final class SecureChatApp extends Application {
         stage.setIconified(false);
         stage.toFront();
         stage.requestFocus();
+    }
+
+    private static volatile Runnable quitter = Platform::exit;
+
+    /** Quits the whole app as the tray's Quit does (the updater needs the files free). */
+    static void quitApp() {
+        Platform.runLater(quitter);
     }
 
     private void quit() {

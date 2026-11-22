@@ -205,14 +205,62 @@ final class MainView implements AccountSession.View {
         AppLog.info("Update available: " + version);
         Label text = UiKit.label(I18n.t("update.available", version), "row-sub");
         text.setWrapText(true);
-        Button get = new Button(I18n.t("update.download"));
+        Updater.Kind kind = Updater.kind();
+        Button get = new Button(I18n.t(kind == Updater.Kind.MANUAL ? "update.download" : "update.install"));
         get.getStyleClass().addAll("small", "primary");
         get.setId("update-download");
-        get.setOnAction(e -> browse(UpdateCheck.RELEASES));
+        if (kind == Updater.Kind.MANUAL) {
+            get.setOnAction(e -> browse(UpdateCheck.RELEASES));
+        } else {
+            get.setTooltip(new javafx.scene.control.Tooltip(I18n.t("update.installTip")));
+            get.setOnAction(e -> installUpdate(version, kind, text, get));
+        }
         updateBanner.getChildren().setAll(Icons.of(Icons.DOWNLOAD, 16, "accent"), text, UiKit.grow(), get);
         updateBanner.getStyleClass().setAll("update-banner");
         updateBanner.setAlignment(Pos.CENTER_LEFT);
         updateBanner.setVisible(true);
+    }
+
+    /** Downloads, checks the signature and hash, then hands over to the installer and quits. */
+    private void installUpdate(String version, Updater.Kind kind, Label text, Button button) {
+        button.setDisable(true);
+        text.setText(I18n.t("update.downloading", 0));
+        java.nio.file.Path folder = com.emirchat.AppInfo.defaultHome().resolve("updates");
+        session.downloads().execute(() -> {
+            try {
+                Updater.Ready ready = Updater.download(version, kind, folder,
+                        p -> Platform.runLater(() -> text.setText(I18n.t("update.downloading", (int) Math.round(p * 100)))));
+                Platform.runLater(() -> {
+                    text.setText(I18n.t("update.ready", version));
+                    button.setText(I18n.t("update.restart"));
+                    button.setDisable(false);
+                    button.setOnAction(e -> {
+                        button.setDisable(true);
+                        session.downloads().execute(() -> {
+                            try {
+                                Updater.install(ready);
+                                AppLog.info("Installing " + version + "; quitting");
+                                SecureChatApp.quitApp();
+                            } catch (java.io.IOException ex) {
+                                updateFailed(ex, text, button);
+                            }
+                        });
+                    });
+                });
+            } catch (java.io.IOException ex) {
+                updateFailed(ex, text, button);
+            }
+        });
+    }
+
+    private void updateFailed(Exception e, Label text, Button button) {
+        AppLog.warn("Update failed", e);
+        Platform.runLater(() -> {
+            text.setText(I18n.t("update.failed"));
+            button.setText(I18n.t("update.download"));
+            button.setDisable(false);
+            button.setOnAction(ev -> browse(UpdateCheck.RELEASES));
+        });
     }
 
     /** Opens a web page in the default browser (off the UI thread: AWT may need a moment). */
