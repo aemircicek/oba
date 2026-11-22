@@ -32,6 +32,8 @@ final class AddressDiscovery implements AutoCloseable {
 
     private final DatagramSocket socket;
     private final Thread thread;
+    /** Call packets relayed over this same port (3.6), or null. */
+    private final UdpRelay relay;
     /**
      * Answers given this second, counted in a fixed table indexed by a keyed hash of the address
      * (IPv6 by /64). Its size never changes, whatever arrives; addresses that share a slot share
@@ -44,6 +46,11 @@ final class AddressDiscovery implements AutoCloseable {
     private long second;
 
     AddressDiscovery(String bindAddress, int port) throws SocketException {
+        this(bindAddress, port, null);
+    }
+
+    AddressDiscovery(String bindAddress, int port, UdpRelay relay) throws SocketException {
+        this.relay = relay;
         socket = new DatagramSocket(new InetSocketAddress(bindAddress, port));
         thread = Thread.ofPlatform().daemon().name("address-discovery").start(this::serve);
     }
@@ -53,11 +60,19 @@ final class AddressDiscovery implements AutoCloseable {
     }
 
     private void serve() {
-        byte[] buffer = new byte[REQUEST_SIZE + 1]; // one more: a longer datagram is not a request
+        byte[] buffer = new byte[2048]; // relayed call packets are at most 1200 bytes of data
         while (!socket.isClosed()) {
             DatagramPacket in = new DatagramPacket(buffer, buffer.length);
             try {
                 socket.receive(in);
+                if (relay != null && UdpRelay.isRelay(in.getData(), in.getLength())) {
+                    byte k = in.getData()[3];
+                    boolean answerable = k == '?' || k == 'H' || k == 'K'; // data is never answered, only forwarded
+                    UdpRelay.Out out = relay.handle(in.getData(), in.getLength(), (InetSocketAddress) in.getSocketAddress(),
+                            answerable && allowed(in.getAddress()));
+                    if (out != null) socket.send(new DatagramPacket(out.data(), out.data().length, out.to()));
+                    continue;
+                }
                 byte[] answer = answer(in.getData(), in.getLength(), in.getAddress(), in.getPort());
                 if (answer != null && allowed(in.getAddress())) {
                     socket.send(new DatagramPacket(answer, answer.length, in.getSocketAddress()));

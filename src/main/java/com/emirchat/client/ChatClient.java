@@ -500,6 +500,10 @@ public final class ChatClient implements AutoCloseable {
             @Override public java.net.InetSocketAddress directServer() {
                 return connection.remoteAddress();
             }
+
+            @Override public byte[] relayTicket(String peer) throws Exception {
+                return ((Packet.RelayTicket) connection.call(new Packet.OpenRelay(peer))).ticket();
+            }
         }, () -> client.audioDevices.get(), call -> client.listener.call(call));
         // Direct calls show each side's address to the other: by default only with people whose
         // key the user has verified (the app's settings can widen or close this).

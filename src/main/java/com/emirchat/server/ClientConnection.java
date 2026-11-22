@@ -30,7 +30,7 @@ final class ClientConnection {
     /** Everything a connection needs from the server. */
     record Services(Identity identity, AccountService accounts, FriendService friends, MessageService messages,
                     GroupService groups, AttachmentService attachments, Presence presence, VoiceRooms voice,
-                    ServerMetrics metrics) {}
+                    ServerMetrics metrics, UdpRelay relay) {}
 
     private final Socket socket;
     private final Services services;
@@ -91,6 +91,7 @@ final class ClientConnection {
             if (u != null) leaveVoice();
             if (u != null && services.presence().remove(u.id(), this)) {
                 services.friends().onlineChanged(u, false);
+                services.relay().forget(u.id()); // no calls without a connection
             }
         }
     }
@@ -284,6 +285,17 @@ final class ClientConnection {
     private Packet handle(Packet packet) throws ApiException, IOException {
         return switch (packet) {
             case Packet.Ping p -> new Packet.Pong();
+            case Packet.OpenRelay o -> {
+                Database.User u = me();
+                long peer;
+                try {
+                    peer = services.friends().friendId(u, o.peer());
+                } catch (java.sql.SQLException e) {
+                    throw new ApiException(ErrorCode.INTERNAL, "Try again.");
+                }
+                if (peer == 0) throw new ApiException(ErrorCode.NOT_FRIENDS, "You can only call friends.");
+                yield new Packet.RelayTicket(services.relay().open(u.id(), peer));
+            }
             case Packet.VoiceJoin j -> {
                 voiceAware = true;
                 yield joinVoice(j.groupId());

@@ -34,6 +34,7 @@ public final class ChatServer implements AutoCloseable {
 
     private final Identity identity;
     private final ServerMetrics metrics = new ServerMetrics();
+    private final UdpRelay relay = new UdpRelay(metrics);
     private final Database db;
     private final ClientConnection.Services services;
     private final ServerSocket listener;
@@ -79,8 +80,9 @@ public final class ChatServer implements AutoCloseable {
         this.services = new ClientConnection.Services(identity,
                 new AccountService(db, config.pbkdf2Iterations(), clock),
                 new FriendService(db, presence, clock), messages,
-                groups, attachments, presence, voice, metrics);
-        metrics.gauges(open::get, presence::onlineCount, voice::activeRooms, voice::seated, () -> 0);
+                groups, attachments, presence, voice, metrics, relay);
+        metrics.gauges(open::get, presence::onlineCount, voice::activeRooms, voice::seated, relay::sessions);
+        maintenance.scheduleWithFixedDelay(relay::sweep, 30, 30, TimeUnit.SECONDS);
         attachments.cleanUp();
         maintenance.scheduleAtFixedRate(attachments::cleanUp, 1, 1, TimeUnit.HOURS);
         // Plain TCP by design: ClientConnection runs the authenticated handshake on every socket.
@@ -94,7 +96,7 @@ public final class ChatServer implements AutoCloseable {
             throw new IOException("Could not listen on port " + config.port() + ": " + e.getMessage(), e);
         }
         try {
-            discovery = new AddressDiscovery(config.bindAddress(), listener.getLocalPort());
+            discovery = new AddressDiscovery(config.bindAddress(), listener.getLocalPort(), relay);
         } catch (java.net.SocketException e) {
             // calls still work, only through the server
             System.err.println("warning: UDP port " + listener.getLocalPort() + " is not available, so calls cannot"

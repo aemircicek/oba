@@ -35,6 +35,7 @@ public sealed interface Packet {
     /** Attachment upload and download chunk size (well under the 64 KiB frame limit). */
     int MAX_CHUNK_BYTES = 32 * 1024;
     int ATTACHMENT_ID_BYTES = com.emirchat.e2e.Attachments.ID_LENGTH;
+    int RELAY_TICKET_BYTES = 16;
 
     /** A friend as the server describes it. */
     record Friend(String username, boolean online, byte[] identityKey) {
@@ -146,6 +147,23 @@ public sealed interface Packet {
 
     /** Who is in the voice rooms of the groups we are in (rooms with nobody are left out). */
     record ListVoiceRooms() implements Packet {}
+
+    /**
+     * A ticket for relaying a call with a friend over UDP (3.6). Only sent to a server that has
+     * answered the relay's question on UDP: older servers do not know this packet.
+     */
+    record OpenRelay(String peer) implements Packet {}
+
+    /** The ticket for {@link OpenRelay}: 16 random bytes that name this user and that friend. */
+    record RelayTicket(byte[] ticket) implements Packet {
+        public RelayTicket {
+            ticket = ticket.clone();
+        }
+
+        @Override public byte[] ticket() { return ticket.clone(); }
+
+        @Override public String toString() { return "RelayTicket[…]"; } // never print the ticket
+    }
 
     /** A voice room and who is in it, in the order they joined; also pushed whenever it changes. */
     record VoiceRoom(long groupId, List<String> participants) implements Packet {
@@ -473,6 +491,8 @@ public sealed interface Packet {
             case VoiceLeave l -> w.u8(50).i64(requestId).i64(l.groupId());
             case VoiceAudio a -> w.u8(51).i64(requestId).i64(a.groupId()).bytes(a.data());
             case ListVoiceRooms l -> w.u8(52).i64(requestId);
+            case OpenRelay o -> w.u8(53).i64(requestId).string(o.peer());
+            case RelayTicket t -> w.u8(134).i64(requestId).bytes(t.ticket());
             case VoiceRoom v -> {
                 w.u8(131).i64(requestId).i64(v.groupId());
                 writeNames(w, v.participants());
@@ -579,6 +599,8 @@ public sealed interface Packet {
             case 50 -> new VoiceLeave(r.i64());
             case 51 -> new VoiceAudio(r.i64(), r.bytes(MAX_CALL_AUDIO_BYTES));
             case 52 -> new ListVoiceRooms();
+            case 53 -> new OpenRelay(r.string(MAX_USERNAME_BYTES));
+            case 134 -> new RelayTicket(r.exactBytes(RELAY_TICKET_BYTES));
             case 131 -> new VoiceRoom(r.i64(), readNames(r));
             case 133 -> {
                 int n = r.count(MAX_LIST);

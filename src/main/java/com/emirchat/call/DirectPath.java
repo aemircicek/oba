@@ -36,8 +36,13 @@ import java.util.function.Consumer;
  *       keeps trying.
  * </ol>
  *
- * Only a side whose user allows direct calls with this person creates a path at all, so a side
- * that does not never sends its addresses and never probes: its address stays hidden.
+ * Only a side whose user allows direct calls with this person sends its addresses or probes the
+ * other's, so a side that does not keeps its address hidden.
+ *
+ * <p>Next to the direct candidates there is one more path: the server's UDP relay (3.6, see the
+ * server's {@code UdpRelay}). It is asked for only after the server answers that it relays, works
+ * like any candidate (the same authenticated probes and keep-alives, wrapped for the relay), shows
+ * neither side the other's address, and is left as soon as a direct path answers.
  */
 public final class DirectPath implements AutoCloseable {
     // first byte of every datagram on the path
@@ -65,6 +70,18 @@ public final class DirectPath implements AutoCloseable {
     /** After a loss, try the known candidates again this often. */
     static final long RETRY_EVERY_MS = 15_000;
 
+    // the server's UDP relay (see UdpRelay on the server)
+    static final byte[] RELAY_ASK = {'O', 'B', 'R', '?'};
+    static final byte[] RELAY_YES = {'O', 'B', 'R', '!'};
+    static final byte[] RELAY_HELLO = {'O', 'B', 'R', 'H'};
+    static final byte[] RELAY_COOKIE = {'O', 'B', 'R', 'C'};
+    static final byte[] RELAY_CONFIRM = {'O', 'B', 'R', 'K'};
+    static final byte[] RELAY_CONFIRMED = {'O', 'B', 'R', 'O'};
+    static final byte[] RELAY_DATA = {'O', 'B', 'R', 'D'};
+    static final byte[] RELAY_FORWARD = {'O', 'B', 'R', 'F'};
+    /** Stands for "through the server's UDP relay" wherever a path's address goes. */
+    static final InetSocketAddress VIA_RELAY = InetSocketAddress.createUnresolved("udp-relay", 1);
+
     /** Sends a sealed signalling body through the relay (the caller adds the call id). */
     public interface Relay {
         void send(byte[] sealed);
@@ -77,7 +94,14 @@ public final class DirectPath implements AutoCloseable {
     private final Relay relay;
     private final Consumer<byte[]> media;
     private final Consumer<Boolean> changed;
+    private final boolean allowDirect;
+    private final java.util.function.Supplier<byte[]> relayTicket;
     private final SecureRandom random = new SecureRandom();
+    private final byte[] relayQuestion = new byte[16];
+    private volatile boolean relayAnswered;
+    private volatile byte[] ticket;
+    private volatile byte[] cookie;
+    private volatile boolean relayReady;
 
     private DatagramSocket socket;
     private final Set<InetSocketAddress> mine = Collections.synchronizedSet(new LinkedHashSet<>());
@@ -98,6 +122,18 @@ public final class DirectPath implements AutoCloseable {
      */
     DirectPath(byte[] callId, CallCrypto signalling, CallCrypto control, InetSocketAddress server, Relay relay,
                Consumer<byte[]> media, Consumer<Boolean> changed) {
+        this(callId, signalling, control, server, relay, media, changed, true, () -> null);
+    }
+
+    /**
+     * @param allowDirect whether our addresses may be shown to the other side (else only the UDP relay)
+     * @param relayTicket asks the server for a relay ticket over TCP (may block); null if it will not
+     */
+    DirectPath(byte[] callId, CallCrypto signalling, CallCrypto control, InetSocketAddress server, Relay relay,
+               Consumer<byte[]> media, Consumer<Boolean> changed, boolean allowDirect,
+               java.util.function.Supplier<byte[]> relayTicket) {
+        this.allowDirect = allowDirect;
+        this.relayTicket = relayTicket;
         this.callId = callId.clone();
         this.signalling = signalling;
         this.control = control;
@@ -124,6 +160,11 @@ public final class DirectPath implements AutoCloseable {
         return selected != null;
     }
 
+    /** True while the path is the server's UDP relay rather than a direct one. */
+    public boolean viaRelay() {
+        return selected == VIA_RELAY;
+    }
+
     /**
      * Sends a media packet over the path if it is open.
      *
@@ -147,6 +188,7 @@ public final class DirectPath implements AutoCloseable {
     boolean receiveRelayed(byte[] packet) {
         byte[] body = signalling.open(packet);
         if (body == null) return false;
+        if (!allowDirect) return true; // probing them would show them our address
         if (body.length >= 2 && body[0] == CANDIDATES) {
             List<InetSocketAddress> list = decodeCandidates(body, loopbackAllowed());
             synchronized (theirs) {
@@ -164,21 +206,30 @@ public final class DirectPath implements AutoCloseable {
 
     private void work() {
         try {
-            gather();
+            if (allowDirect) gather();
+            Thread.ofPlatform().daemon().name("direct-relay").start(this::setUpRelay);
             long sentCandidates = 0;
             int timesSent = 0;
             long lastAlive = 0;
+            long lastRelayProbe = 0;
             long lastRetry = System.currentTimeMillis();
             while (!closed) {
                 long now = System.currentTimeMillis();
                 // our candidates: at once, then twice more (the relay may drop a packet)
-                if (timesSent < 3 && now - sentCandidates >= (timesSent == 0 ? 0 : 2000L * timesSent)) {
+                if (allowDirect && timesSent < 3 && now - sentCandidates >= (timesSent == 0 ? 0 : 2000L * timesSent)) {
                     sendCandidates();
                     sentCandidates = now;
                     timesSent++;
                 }
                 InetSocketAddress path = selected;
-                if (path == null && now < probeUntil) {
+                // through the UDP relay: probe until it answers, a few times a second
+                if ((path == null) && relayReady && now - lastRelayProbe >= 300 && probesSent < MAX_PROBES) {
+                    sendControl(PROBE, VIA_RELAY);
+                    probesSent++;
+                    lastRelayProbe = now;
+                }
+                // directly: also while on the relay, to move to a direct path when one opens
+                if ((path == null || path == VIA_RELAY) && now < probeUntil) {
                     synchronized (theirs) {
                         for (InetSocketAddress to : theirs) {
                             if (probesSent >= MAX_PROBES) break; // the other side may be steering us: stop
@@ -196,11 +247,46 @@ public final class DirectPath implements AutoCloseable {
                     changed.accept(false);
                     lastRetry = now;
                 }
-                if (path == null && !theirs.isEmpty() && now >= probeUntil && now - lastRetry > RETRY_EVERY_MS) {
+                if ((path == null || path == VIA_RELAY) && !theirs.isEmpty() && now >= probeUntil
+                        && now - lastRetry > RETRY_EVERY_MS) {
                     probeUntil = now + PROBE_FOR_MS; // the network may have changed: try again
                     lastRetry = now;
                 }
                 Thread.sleep(PROBE_EVERY_MS);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Asks the server whether it relays (on UDP: an old server ignores it), then for a ticket (on
+     * TCP), then proves our address with the cookie it sends back. Runs once, in the background.
+     */
+    private void setUpRelay() {
+        if (server == null) return;
+        try {
+            random.nextBytes(relayQuestion);
+            byte[] ask = ByteBuffer.allocate(20).put(RELAY_ASK).put(relayQuestion).array();
+            for (int i = 0; i < 4 && !relayAnswered && !closed; i++) {
+                transmit(ask, server);
+                Thread.sleep(200L * (i + 1));
+            }
+            if (!relayAnswered || closed) return;
+            byte[] t = relayTicket.get();
+            if (t == null || t.length != 16) return;
+            ticket = t;
+            byte[] hello = ByteBuffer.allocate(20).put(RELAY_HELLO).put(t).array();
+            for (int i = 0; i < 5 && cookie == null && !closed; i++) {
+                transmit(hello, server);
+                Thread.sleep(200L * (i + 1));
+            }
+            byte[] c = cookie;
+            if (c == null) return;
+            byte[] confirm = ByteBuffer.allocate(36).put(RELAY_CONFIRM).put(t).put(c).array();
+            for (int i = 0; i < 5 && !relayReady && !closed; i++) {
+                transmit(confirm, server);
+                Thread.sleep(200L * (i + 1));
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -326,6 +412,12 @@ public final class DirectPath implements AutoCloseable {
     }
 
     private boolean transmit(byte[] datagram, InetSocketAddress to) {
+        if (to == VIA_RELAY) {
+            byte[] t = ticket;
+            if (t == null || !relayReady || server == null) return false;
+            datagram = ByteBuffer.allocate(4 + t.length + datagram.length).put(RELAY_DATA).put(t).put(datagram).array();
+            to = server;
+        }
         try {
             socket.send(new DatagramPacket(datagram, datagram.length, to));
             return true;
@@ -359,6 +451,22 @@ public final class DirectPath implements AutoCloseable {
             if (server != null && from.getAddress().equals(server.getAddress())) reflexive = parseDiscovery(d);
             return;
         }
+        if (d.length >= 4 && d[0] == 'O' && d[1] == 'B' && d[2] == 'R') {
+            if (server == null || !from.equals(server)) return; // only the server speaks for the relay
+            byte[] kind = Arrays.copyOf(d, 4);
+            if (Arrays.equals(kind, RELAY_YES) && d.length == 20
+                    && Arrays.equals(Arrays.copyOfRange(d, 4, 20), relayQuestion)) {
+                relayAnswered = true;
+            } else if (Arrays.equals(kind, RELAY_COOKIE) && d.length == 20 && ticket != null) {
+                cookie = Arrays.copyOfRange(d, 4, 20);
+            } else if (Arrays.equals(kind, RELAY_CONFIRMED) && d.length == 20 && ticket != null
+                    && Arrays.equals(Arrays.copyOfRange(d, 4, 20), ticket)) {
+                relayReady = true;
+            } else if (Arrays.equals(kind, RELAY_FORWARD) && relayReady) {
+                handle(Arrays.copyOfRange(d, 4, d.length), VIA_RELAY); // what the other side sent through the relay
+            }
+            return;
+        }
         if (d.length < 1 + callId.length || !Arrays.equals(Arrays.copyOfRange(d, 1, 1 + callId.length), callId)) return;
         byte[] rest = Arrays.copyOfRange(d, 1 + callId.length, d.length);
         if (d[0] == MEDIA) {
@@ -373,14 +481,20 @@ public final class DirectPath implements AutoCloseable {
         heardAt = System.currentTimeMillis();
         switch (body[0]) {
             case PROBE -> {
+                if (from != VIA_RELAY && !allowDirect) return; // answering would show them our address
                 sendControl(PROBE_ACK, from); // the path from them to us works: say so on the way back
+                if (from == VIA_RELAY) return;
                 synchronized (theirs) { // seen from outside: their router's mapping towards us
                     if (theirs.size() < MAX_THEIRS && theirs.add(from)) probeUntil = System.currentTimeMillis() + PROBE_FOR_MS;
                 }
             }
             case PROBE_ACK -> {
-                if (selected == null) {
+                InetSocketAddress was = selected;
+                if (was == null) {
                     selected = from;
+                    changed.accept(true);
+                } else if (was == VIA_RELAY && from != VIA_RELAY && allowDirect) {
+                    selected = from; // a direct path beats the relay
                     changed.accept(true);
                 }
             }

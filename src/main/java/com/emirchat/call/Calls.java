@@ -41,6 +41,14 @@ public final class Calls implements AutoCloseable {
         default java.net.InetSocketAddress directServer() {
             return null;
         }
+
+        /**
+         * A ticket for the server's UDP relay with this friend. Asked only after the server has
+         * said on UDP that it relays (an older one would drop the connection on the request).
+         */
+        default byte[] relayTicket(String peer) throws Exception {
+            return null;
+        }
     }
 
     /** Runs on a calls thread. */
@@ -282,23 +290,36 @@ public final class Calls implements AutoCloseable {
     /** True while the current call's audio and video go directly, not through the server. */
     public boolean direct() {
         DirectPath p = direct;
-        return p != null && p.active();
+        return p != null && p.active() && !p.viaRelay();
+    }
+
+    /** True while the current call goes through the server's UDP relay (better than over TCP). */
+    public boolean udpRelayed() {
+        DirectPath p = direct;
+        return p != null && p.viaRelay();
     }
 
     private final java.util.concurrent.atomic.AtomicLong sentDirect = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong sentRelayed = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong sentUdpRelay = new java.util.concurrent.atomic.AtomicLong();
 
-    /** @return {packets sent directly, packets sent through the relay}, over every call so far */
+    /**
+     * @return {packets sent directly, packets sent through the server over TCP, packets sent
+     *         through the server's UDP relay}, over every call so far
+     */
     public long[] packetsSent() {
-        return new long[] {sentDirect.get(), sentRelayed.get()};
+        return new long[] {sentDirect.get(), sentRelayed.get(), sentUdpRelay.get()};
     }
 
-    /** Sends a call packet over the direct path if it is open, else through the relay. */
+    /** Sends a call packet over the direct path or the UDP relay if one is open, else through the server. */
     private void deliver(String to, byte[] packet) {
         DirectPath p = direct;
-        if (p != null && p.send(packet)) {
-            sentDirect.incrementAndGet();
-            return;
+        if (p != null) {
+            boolean viaRelay = p.viaRelay();
+            if (p.send(packet)) {
+                (viaRelay ? sentUdpRelay : sentDirect).incrementAndGet();
+                return;
+            }
         }
         sentRelayed.incrementAndGet();
         transport.audio(to, packet);
@@ -444,7 +465,10 @@ public final class Calls implements AutoCloseable {
             video.view(videoView);
             link.video = video;
             java.net.InetSocketAddress server = transport.directServer();
-            if (directAllowed.test(peer)) {
+            boolean allowDirect = directAllowed.test(peer);
+            // The UDP relay hides our address from the other side, so it is used even when a
+            // direct path is not allowed; it needs the server's UDP port, so a server to ask.
+            if (allowDirect || server != null) {
                 CallVideo callVideo = video;
                 direct = new DirectPath(callId, CallCrypto.deriveDirectSignal(callId, myKey, theirKey, outgoing),
                         CallCrypto.deriveDirectControl(callId, myKey, theirKey, outgoing), server,
@@ -453,6 +477,12 @@ public final class Calls implements AutoCloseable {
                         on -> {
                             callVideo.direct(on);
                             changed();
+                        }, allowDirect, () -> {
+                            try {
+                                return transport.relayTicket(videoTo);
+                            } catch (Exception e) {
+                                return null; // no relay: the TCP relay it is
+                            }
                         });
                 link.direct = direct;
             }
